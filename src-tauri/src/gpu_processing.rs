@@ -1151,12 +1151,16 @@ impl GpuProcessor {
         let out_width = bounds.width;
         let out_height = bounds.height;
         let mask_layer_count = request.mask_bitmaps.len().clamp(2, MAX_MASKS) as u32;
+        // No masks at all: the shader never reads the array (mask_count == 0), so a 1x1 array
+        // replaces a full-resolution zero upload on every render.
+        let no_masks = request.mask_bitmaps.is_empty() && request.adjustments.mask_count == 0;
+        let (mask_w, mask_h) = if no_masks { (1, 1) } else { (width, height) };
         let full_texture_size = wgpu::Extent3d {
-            width,
-            height,
+            width: mask_w,
+            height: mask_h,
             depth_or_array_layers: mask_layer_count,
         };
-        let buffer_size = (width as usize) * (height as usize) * (mask_layer_count as usize);
+        let buffer_size = (mask_w as usize) * (mask_h as usize) * (mask_layer_count as usize);
         let mut mask_texture_data = Vec::with_capacity(buffer_size);
         if request.mask_bitmaps.is_empty() {
             mask_texture_data.resize(buffer_size, 0);
