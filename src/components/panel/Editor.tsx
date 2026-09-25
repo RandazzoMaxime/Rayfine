@@ -1275,6 +1275,8 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
       if (lastWgpuTransformRef.current !== currentTransform && !isInvoking) {
         lastWgpuTransformRef.current = currentTransform;
         isInvoking = true;
+        // Zoom/pan changed: the dynamic detail preview re-renders the visible area once idle.
+        window.dispatchEvent(new CustomEvent('rustroom:viewport-changed'));
 
         const isZoomedIn = scale >= maxScaleRef.current - 0.5;
 

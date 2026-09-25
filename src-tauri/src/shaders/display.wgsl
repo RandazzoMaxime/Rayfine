@@ -8,11 +8,15 @@ struct Transform {
     _pad: f32,
     bg_primary: vec4<f32>,
     bg_secondary: vec4<f32>,
+    // Full-resolution detail patch of the visible area, in normalized image coords (x, y, w, h).
+    // w == 0 means no patch.
+    detail_rect: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> transform: Transform;
 @group(0) @binding(1) var tex: texture_2d<f32>;
 @group(0) @binding(2) var samp: sampler;
+@group(0) @binding(3) var detail_tex: texture_2d<f32>;
 
 struct VertexOutput {
     @builtin(position) pos: vec4<f32>,
@@ -56,6 +60,14 @@ fn vs_main(@builtin(vertex_index) id: u32) -> VertexOutput {
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if (in.uv.x < 0.0 || in.uv.x > 1.0 || in.uv.y < 0.0 || in.uv.y > 1.0) {
         return transform.bg_secondary;
+    }
+
+    let d = transform.detail_rect;
+    if (d.z > 0.0 && in.uv.x >= d.x && in.uv.y >= d.y && in.uv.x <= d.x + d.z && in.uv.y <= d.y + d.w) {
+        let dsize = vec2<f32>(textureDimensions(detail_tex));
+        let duv = (in.uv - d.xy) / d.zw;
+        let dhalf = vec2<f32>(0.5, 0.5) / dsize;
+        return textureSample(detail_tex, samp, clamp(duv, dhalf, vec2<f32>(1.0) - dhalf));
     }
 
     let adjusted_uv = in.uv * (transform.image_size / transform.texture_size);

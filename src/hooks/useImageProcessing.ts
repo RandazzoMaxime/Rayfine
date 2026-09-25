@@ -120,6 +120,58 @@ export function useImageProcessing(
     return [clampedX, clampedY, clampedW, clampedH] as [number, number, number, number];
   }, [baseRenderSize, transformWrapperRef]);
 
+  // Dynamic zoom preview: once zoom/pan or edits settle, render the visible area at full
+  // resolution (backend composites it over the fit-size preview on the GPU display).
+  const detailTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const detailActiveRef = useRef(false);
+  const scheduleDetailPatch = useCallback(
+    (delay = 150) => {
+      if (detailTimerRef.current) clearTimeout(detailTimerRef.current);
+      detailTimerRef.current = setTimeout(() => {
+        const editor = useEditorStore.getState();
+        if (!editor.selectedImage?.isReady || editor.isSliderDragging) return;
+        if (appSettings?.useWgpuRenderer === false) return;
+        const roi = calculateROI();
+        if (!roi) {
+          if (detailActiveRef.current) {
+            detailActiveRef.current = false;
+            invoke('clear_detail_patch').catch(() => {});
+          }
+          return;
+        }
+        detailActiveRef.current = true;
+        const payload: any = structuredClone(editor.previewOverride ?? editor.adjustments);
+        const sent = editor.patchesSentToBackend;
+        const strip = (subMasks: any[]) =>
+          Array.isArray(subMasks) &&
+          subMasks.forEach((sm: any) => {
+            if (sm?.id && sm.parameters && sent.has(sm.id)) {
+              sm.parameters.mask_data_base64 = null;
+              sm.parameters.maskDataBase64 = null;
+            }
+          });
+        (payload.aiPatches || []).forEach((p: any) => {
+          if (p?.id && sent.has(p.id)) p.patchData = null;
+          strip(p?.subMasks);
+        });
+        (payload.masks || []).forEach((m: any) => strip(m?.subMasks));
+        invoke('render_detail_patch', { jsAdjustments: payload, roi }).catch((err) =>
+          console.error('Detail patch failed:', err),
+        );
+      }, delay);
+    },
+    [appSettings?.useWgpuRenderer, calculateROI],
+  );
+
+  useEffect(() => {
+    const onViewport = () => scheduleDetailPatch(150);
+    window.addEventListener('rustroom:viewport-changed', onViewport);
+    return () => {
+      window.removeEventListener('rustroom:viewport-changed', onViewport);
+      if (detailTimerRef.current) clearTimeout(detailTimerRef.current);
+    };
+  }, [scheduleDetailPatch]);
+
   const executeApplyAdjustments = useCallback(
     async (currentAdjustments: Adjustments, dragging: boolean = false, targetRes?: number) => {
       const currentPath = selectedImage?.path;
@@ -325,7 +377,12 @@ export function useImageProcessing(
     const zoomMultiplier = appSettings?.highResZoomMultiplier || 1.0;
     const effectiveDpr = appSettings?.useFullDpiRendering ? dpr : 1;
 
-    let targetRes = Math.max(displaySize.width, displaySize.height) * effectiveDpr * sharpnessFactor * zoomMultiplier;
+    // With the wgpu renderer, zooming no longer re-renders the whole image at a higher
+    // resolution: the base stays at fit size and the visible area gets a full-res detail patch.
+    const zoomScale = transformWrapperRef.current?.instance?.transformState?.scale ?? 1;
+    const fitDivisor = appSettings?.useWgpuRenderer !== false ? Math.max(zoomScale, 1) : 1;
+    let targetRes =
+      (Math.max(displaySize.width, displaySize.height) / fitDivisor) * effectiveDpr * sharpnessFactor * zoomMultiplier;
     targetRes = Math.max(targetRes, 512);
 
     if (originalSize && originalSize.width > 0 && originalSize.height > 0) {
@@ -346,9 +403,11 @@ export function useImageProcessing(
     appSettings?.editorPreviewResolution,
     appSettings?.highResZoomMultiplier,
     appSettings?.useFullDpiRendering,
+    appSettings?.useWgpuRenderer,
     displaySize.width,
     displaySize.height,
     originalSize,
+    transformWrapperRef,
   ]);
 
   const requestHiFiZoom = useMemo(
@@ -431,6 +490,7 @@ export function useImageProcessing(
         currentResRef.current = targetRes;
 
         applyAdjustments(renderAdjustments, false, targetRes);
+        scheduleDetailPatch(120);
 
         if (previewOverride) return;
 

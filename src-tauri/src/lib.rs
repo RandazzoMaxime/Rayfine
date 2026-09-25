@@ -1553,16 +1553,234 @@ async fn save_collage(base64_data: String, first_path_str: String) -> Result<Str
     Ok(output_path.to_string_lossy().to_string())
 }
 
+
+/// Renders the visible area (normalized `roi`) at full resolution into the display's detail
+/// patch, composited over the fit-size preview (Lightroom-style dynamic zoom preview).
+/// Returns false when nothing was rendered (no wgpu display, stale request, area too large).
+#[tauri::command]
+async fn render_detail_patch(
+    js_adjustments: serde_json::Value,
+    roi: (f32, f32, f32, f32),
+    app_handle: tauri::AppHandle,
+) -> Result<bool, String> {
+    tokio::task::spawn_blocking(move || -> Result<bool, String> {
+        use std::sync::atomic::Ordering as AtomicOrdering;
+        let state = app_handle.state::<AppState>();
+        let request_id = state.detail_request.fetch_add(1, AtomicOrdering::SeqCst) + 1;
+        let is_latest = || state.detail_request.load(AtomicOrdering::SeqCst) == request_id;
+
+        let context = get_or_init_gpu_context(&state, &app_handle)?;
+        if context.display.lock().unwrap().is_none() {
+            return Ok(false);
+        }
+        let mut adjustments = js_adjustments;
+        hydrate_adjustments(&state, &mut adjustments);
+        let loaded_image = state
+            .original_image
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or("No original image loaded")?;
+
+        // Full-resolution transformed image (shared cache with the preview path).
+        let transform_hash = calculate_transform_hash(&adjustments);
+        let (full, crop_offset) = {
+            let mut cache_lock = state.full_transformed_cache.lock().unwrap();
+            match cache_lock.as_ref() {
+                Some((hash, img, offset)) if *hash == transform_hash => (Arc::clone(img), *offset),
+                _ => {
+                    let (img, offset) = compute_full_transformed_res(&loaded_image, &adjustments)?;
+                    *cache_lock = Some((transform_hash, Arc::clone(&img), offset));
+                    (img, offset)
+                }
+            }
+        };
+        let (width, height) = full.dimensions();
+
+        // Pixel ROI, clamped; skip when the visible area is still most of the image (the fit
+        // preview is shown upsampled there; 1:1 detail pays off once zoomed in further).
+        let rx = ((roi.0.clamp(0.0, 1.0) * width as f32).floor() as u32).min(width - 1);
+        let ry = ((roi.1.clamp(0.0, 1.0) * height as f32).floor() as u32).min(height - 1);
+        let rw = ((roi.2 * width as f32).ceil() as u32).clamp(1, width - rx);
+        let rh = ((roi.3 * height as f32).ceil() as u32).clamp(1, height - ry);
+        const MAX_DETAIL_PIXELS: u64 = 12_000_000;
+        if (rw as u64) * (rh as u64) > MAX_DETAIL_PIXELS || !is_latest() {
+            return Ok(false);
+        }
+
+        // Upload the full-res input once per image / geometry / enhanced swap.
+        let key = {
+            use std::hash::{Hash, Hasher};
+            let mut h = DefaultHasher::new();
+            loaded_image.path.hash(&mut h);
+            transform_hash.hash(&mut h);
+            (Arc::as_ptr(&full) as usize).hash(&mut h);
+            h.finish()
+        };
+        let mut input_uploaded = false;
+        {
+            let mut input_lock = state.detail_input.lock().unwrap();
+            if input_lock.as_ref().is_none_or(|d| d.key != key) {
+                *input_lock = None;
+                let data = crate::gpu_processing::to_rgba_f16(&full);
+                let texture = wgpu::util::DeviceExt::create_texture_with_data(
+                    &*context.device,
+                    &context.queue,
+                    &wgpu::TextureDescriptor {
+                        label: Some("Detail Input Texture"),
+                        size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::Rgba16Float,
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                        view_formats: &[],
+                    },
+                    wgpu::util::TextureDataOrder::MipMajor,
+                    bytemuck::cast_slice(&data),
+                );
+                let texture_view = texture.create_view(&Default::default());
+                *input_lock = Some(crate::app_state::DetailInput { texture, texture_view, width, height, key });
+                input_uploaded = true;
+            }
+        }
+        if !is_latest() {
+            return Ok(false);
+        }
+
+        let is_raw = loaded_image.is_raw;
+        let mask_definitions: Vec<MaskDefinition> = adjustments
+            .get("masks")
+            .and_then(|m| serde_json::from_value(m.clone()).ok())
+            .unwrap_or_default();
+        let mask_bitmaps: Vec<ImageBuffer<Luma<u8>, Vec<u8>>> = mask_definitions
+            .iter()
+            .filter_map(|def| {
+                get_cached_or_generate_mask(&state, def, width, height, 1.0, crop_offset, &adjustments)
+            })
+            .collect();
+        let tm_override = resolve_tonemapper_override_from_handle(&app_handle, is_raw);
+        let all_adjustments = get_all_adjustments_from_json(&adjustments, is_raw, tm_override);
+        let adjustments_hash = crate::gpu_processing::hash_adjustments(&all_adjustments);
+        let lut = adjustments["lutPath"]
+            .as_str()
+            .and_then(|p| lut_processing::get_or_load_lut(&state, p).ok());
+
+        let (pixels, out_w, out_h, out_x, out_y) = {
+            let mut proc_lock = state.detail_processor.lock().unwrap();
+            let (pw, ph) = ((width + 255) & !255, (height + 255) & !255);
+            if proc_lock.as_ref().is_none_or(|p| p.width < pw || p.height < ph) {
+                *proc_lock = None;
+                let processor = crate::gpu_processing::GpuProcessor::new(context.clone(), pw, ph, false)?;
+                *proc_lock = Some(crate::GpuProcessorState { processor, width: pw, height: ph });
+            }
+            let processor = &proc_lock.as_ref().unwrap().processor;
+            if input_uploaded {
+                processor
+                    .input_generation
+                    .fetch_add(1, AtomicOrdering::Relaxed);
+            }
+            let input_lock = state.detail_input.lock().unwrap();
+            let input = input_lock.as_ref().ok_or("detail input missing")?;
+            processor.run(
+                &input.texture_view,
+                width,
+                height,
+                RenderRequest {
+                    adjustments: all_adjustments,
+                    mask_bitmaps: &mask_bitmaps,
+                    lut,
+                    roi: Some(crate::gpu_processing::Roi { x: rx, y: ry, width: rw, height: rh }),
+                },
+                false,
+                false,
+            )?
+        };
+        if !is_latest() {
+            return Ok(false);
+        }
+
+        let mut display_lock = context.display.lock().unwrap();
+        let Some(display) = display_lock.as_mut() else { return Ok(false) };
+        let needs_texture = display
+            .detail_texture
+            .as_ref()
+            .is_none_or(|t| t.width() != out_w || t.height() != out_h);
+        if needs_texture {
+            let texture = context.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("Detail Patch Texture"),
+                size: wgpu::Extent3d { width: out_w, height: out_h, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            display.detail_view = texture.create_view(&Default::default());
+            display.detail_texture = Some(texture);
+        }
+        context.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: display.detail_texture.as_ref().unwrap(),
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &pixels,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(out_w * 4), rows_per_image: Some(out_h) },
+            wgpu::Extent3d { width: out_w, height: out_h, depth_or_array_layers: 1 },
+        );
+        display.latest_transform.detail_rect = [
+            out_x as f32 / width as f32,
+            out_y as f32 / height as f32,
+            out_w as f32 / width as f32,
+            out_h as f32 / height as f32,
+        ];
+        display.detail_hash = adjustments_hash;
+        context.queue.write_buffer(
+            &display.transform_buffer,
+            0,
+            bytemuck::bytes_of(&display.latest_transform),
+        );
+        display.rebuild_bind_group(&context.device);
+        display.render(&context.device, &context.queue);
+        Ok(true)
+    })
+    .await
+    .map_err(|e| format!("Detail task failed: {}", e))?
+}
+
+/// Hides the zoom detail patch (zoomed back out, or before an edit).
+#[tauri::command]
+fn clear_detail_patch(state: tauri::State<AppState>) {
+    state.detail_request.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    if let Some(context) = state.gpu_context.lock().unwrap().as_ref()
+        && let Ok(mut display_lock) = context.display.lock()
+        && let Some(display) = display_lock.as_mut()
+    {
+        display.clear_detail(&context.device, &context.queue);
+        display.render(&context.device, &context.queue);
+    }
+}
+
 /// Frees the GPU processing textures and the cached GPU input image (called when leaving the
 /// editor). They are recreated on demand at the size the next render actually needs.
 #[tauri::command]
 fn release_gpu_resources(state: tauri::State<AppState>) {
     *state.gpu_processor.lock().unwrap() = None;
     *state.gpu_image_cache.lock().unwrap() = None;
+    *state.detail_processor.lock().unwrap() = None;
+    *state.detail_input.lock().unwrap() = None;
     if let Some(context) = state.gpu_context.lock().unwrap().as_ref() {
         if let Ok(mut display) = context.display.lock() {
             if let Some(display) = display.as_mut() {
                 display.current_bind_group = None;
+                display.base_view = None;
+                display.detail_texture = None;
+                display.detail_view = display.dummy_detail_view.clone();
+                display.latest_transform.detail_rect = [0.0; 4];
+                display.detail_hash = 0;
             }
         }
         let _ = context.device.poll(wgpu::PollType::Wait {
@@ -2320,6 +2538,9 @@ pub fn run() {
             gpu_context: Mutex::new(None),
             gpu_image_cache: Mutex::new(None),
             gpu_processor: Mutex::new(None),
+            detail_input: Mutex::new(None),
+            detail_processor: Mutex::new(None),
+            detail_request: std::sync::atomic::AtomicU64::new(0),
             ai_state: Mutex::new(None),
             ai_init_lock: TokioMutex::new(()),
             export_task_token: Arc::new(Mutex::new(None)),
@@ -2352,6 +2573,8 @@ pub fn run() {
             apply_adjustments,
             generate_preview_for_path,
             release_gpu_resources,
+            render_detail_patch,
+            clear_detail_patch,
             generate_original_transformed_preview,
             generate_preset_preview,
             generate_uncropped_preview,

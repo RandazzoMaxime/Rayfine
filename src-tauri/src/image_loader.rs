@@ -796,6 +796,15 @@ pub async fn load_image(
         *state.gpu_image_cache.lock().unwrap() = None;
         *state.full_warped_cache.lock().unwrap() = None;
         *state.full_transformed_cache.lock().unwrap() = None;
+        // Zoom detail patch belongs to the previous image.
+        state.detail_request.fetch_add(1, Ordering::SeqCst);
+        *state.detail_input.lock().unwrap() = None;
+        if let Some(context) = state.gpu_context.lock().unwrap().as_ref()
+            && let Ok(mut display_lock) = context.display.lock()
+            && let Some(display) = display_lock.as_mut()
+        {
+            display.clear_detail(&context.device, &context.queue);
+        }
 
         state.mask_cache.lock().unwrap().clear();
         state.patch_cache.lock().unwrap().clear();

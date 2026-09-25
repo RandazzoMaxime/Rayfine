@@ -40,6 +40,8 @@ pub struct DisplayTransform {
     pub _pad: f32,
     pub bg_primary: [f32; 4],
     pub bg_secondary: [f32; 4],
+    /// Normalized image rect of the full-resolution detail patch (w == 0: none).
+    pub detail_rect: [f32; 4],
 }
 
 pub struct WgpuDisplay {
@@ -51,6 +53,49 @@ pub struct WgpuDisplay {
     pub transform_buffer: wgpu::Buffer,
     pub latest_transform: DisplayTransform,
     pub current_bind_group: Option<wgpu::BindGroup>,
+    /// Base preview view (processor output) the current bind group samples.
+    pub base_view: Option<wgpu::TextureView>,
+    /// Detail patch texture (visible area at full resolution) and a 1x1 placeholder.
+    pub detail_texture: Option<wgpu::Texture>,
+    pub detail_view: wgpu::TextureView,
+    pub dummy_detail_view: wgpu::TextureView,
+    /// Hash of the adjustments the detail patch was rendered with.
+    pub detail_hash: u64,
+}
+
+impl WgpuDisplay {
+    /// Rebuilds the bind group from the stored base view and the current detail view.
+    pub fn rebuild_bind_group(&mut self, device: &wgpu::Device) {
+        let Some(base_view) = self.base_view.as_ref() else {
+            return;
+        };
+        let detail_view = if self.latest_transform.detail_rect[2] > 0.0 {
+            &self.detail_view
+        } else {
+            &self.dummy_detail_view
+        };
+        self.current_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.transform_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(base_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(detail_view) },
+            ],
+            label: Some("Display BG"),
+        }));
+    }
+
+    /// Hides the detail patch (e.g. adjustments changed, image switched, zoomed out).
+    pub fn clear_detail(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        if self.latest_transform.detail_rect[2] == 0.0 {
+            return;
+        }
+        self.latest_transform.detail_rect = [0.0; 4];
+        self.detail_hash = 0;
+        queue.write_buffer(&self.transform_buffer, 0, bytemuck::bytes_of(&self.latest_transform));
+        self.rebuild_bind_group(device);
+    }
 }
 
 impl WgpuDisplay {
@@ -321,6 +366,16 @@ pub fn get_or_init_gpu_context(
                     count: None,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    count: None,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                },
             ],
         });
 
@@ -366,6 +421,19 @@ pub fn get_or_init_gpu_context(
             mapped_at_creation: false,
         });
 
+        let dummy_detail_view = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("Dummy Detail Texture"),
+                size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&Default::default());
+
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("Display Sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -391,9 +459,15 @@ pub fn get_or_init_gpu_context(
                 _pad: 0.0,
                 bg_primary: [24.0 / 255.0, 24.0 / 255.0, 24.0 / 255.0, 1.0],
                 bg_secondary: [35.0 / 255.0, 35.0 / 255.0, 35.0 / 255.0, 1.0],
+                detail_rect: [0.0; 4],
             },
             sampler,
             current_bind_group: None,
+            base_view: None,
+            detail_texture: None,
+            detail_view: dummy_detail_view.clone(),
+            dummy_detail_view,
+            detail_hash: 0,
         })
     } else {
         None
@@ -485,7 +559,23 @@ fn read_texture_data_roi(
     }
 }
 
-fn to_rgba_f16(img: &DynamicImage) -> Vec<f16> {
+pub fn to_rgba_f16(img: &DynamicImage) -> Vec<f16> {
+    use rayon::prelude::*;
+    // Parallel conversion straight from the float buffers (no intermediate RGBA32F copy).
+    if let Some(rgb) = img.as_rgb32f() {
+        let src = rgb.as_raw();
+        let mut out = vec![f16::ZERO; src.len() / 3 * 4];
+        out.par_chunks_mut(4).zip(src.par_chunks(3)).for_each(|(d, s)| {
+            d[0] = f16::from_f32(s[0]);
+            d[1] = f16::from_f32(s[1]);
+            d[2] = f16::from_f32(s[2]);
+            d[3] = f16::ONE;
+        });
+        return out;
+    }
+    if let Some(rgba) = img.as_rgba32f() {
+        return rgba.as_raw().par_iter().map(|&v| f16::from_f32(v)).collect();
+    }
     let rgba_f32 = img.to_rgba32f();
     rgba_f32.into_raw().into_iter().map(f16::from_f32).collect()
 }
@@ -567,6 +657,17 @@ const FLARE_MAP_SIZE: u32 = 512;
 /// Test-only hook so the benchmark can compile ablated variants of the main shader.
 #[cfg(test)]
 pub static MAIN_SHADER_OVERRIDE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Stable hash of the render parameters (used to tell whether a detail patch is up to date).
+pub fn hash_adjustments(adjustments: &AllAdjustments) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut normalized = *adjustments;
+    normalized.tile_offset_x = 0;
+    normalized.tile_offset_y = 0;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytemuck::bytes_of(&normalized).hash(&mut hasher);
+    hasher.finish()
+}
 
 fn main_shader_source() -> std::borrow::Cow<'static, str> {
     #[cfg(test)]
@@ -1731,6 +1832,7 @@ fn process_and_get_dynamic_image_inner(
     analytics_config: Option<crate::AnalyticsConfig>,
 ) -> Result<DynamicImage, String> {
     let start_time = Instant::now();
+    let adjustments_hash = hash_adjustments(&request.adjustments);
     let (width, height) = base_image.dimensions();
     let device = &context.device;
     let queue = &context.queue;
@@ -2034,25 +2136,17 @@ fn process_and_get_dynamic_image_inner(
             bytemuck::bytes_of(&display.latest_transform),
         );
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &display.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: display.transform_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&processor.output_texture_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&display.sampler),
-                },
-            ],
-            label: None,
-        });
-        display.current_bind_group = Some(bind_group);
+        // A detail patch rendered with other adjustments is stale: hide it until re-rendered.
+        if display.detail_hash != adjustments_hash {
+            display.latest_transform.detail_rect = [0.0; 4];
+            queue.write_buffer(
+                &display.transform_buffer,
+                0,
+                bytemuck::bytes_of(&display.latest_transform),
+            );
+        }
+        display.base_view = Some(processor.output_texture_view.clone());
+        display.rebuild_bind_group(device);
         display.render(device, queue);
     }
 

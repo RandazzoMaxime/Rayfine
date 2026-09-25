@@ -55,6 +55,15 @@ pub struct GpuImageCache {
     pub transform_hash: u64,
 }
 
+/// Full-resolution transformed image uploaded to the GPU for zoomed detail patches.
+pub struct DetailInput {
+    pub texture: Texture,
+    pub texture_view: TextureView,
+    pub width: u32,
+    pub height: u32,
+    pub key: u64,
+}
+
 pub struct GpuProcessorState {
     pub processor: GpuProcessor,
     pub width: u32,
@@ -142,6 +151,11 @@ pub struct AppState {
     pub gpu_context: Mutex<Option<GpuContext>>,
     pub gpu_image_cache: Mutex<Option<GpuImageCache>>,
     pub gpu_processor: Mutex<Option<GpuProcessorState>>,
+    /// Zoom detail patches: full-res input on the GPU, a dedicated processor (so the editor's
+    /// preview processor isn't resized), and a request counter to drop stale requests.
+    pub detail_input: Mutex<Option<DetailInput>>,
+    pub detail_processor: Mutex<Option<GpuProcessorState>>,
+    pub detail_request: std::sync::atomic::AtomicU64,
     pub ai_state: Mutex<Option<AiState>>,
     pub ai_init_lock: TokioMutex<()>,
     pub export_task_token: Arc<Mutex<Option<Arc<AtomicBool>>>>,
