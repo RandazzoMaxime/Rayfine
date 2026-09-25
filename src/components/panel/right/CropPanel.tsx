@@ -16,8 +16,6 @@ import { useTranslation } from 'react-i18next';
 import { Adjustments, INITIAL_ADJUSTMENTS } from '../../../utils/adjustments';
 import clsx from 'clsx';
 import { Orientation } from '../../ui/AppProperties';
-import TransformModal from '../../modals/TransformModal';
-import LensCorrectionModal from '../../modals/LensCorrectionModal';
 import { motion } from 'framer-motion';
 import Text from '../../ui/Text';
 import Slider from '../../ui/Slider';
@@ -55,8 +53,6 @@ export default function CropPanel() {
   const { setAdjustments } = useEditorActions();
   const [customW, setCustomW] = useState('');
   const [customH, setCustomH] = useState('');
-  const [isTransformModalOpen, setIsTransformModalOpen] = useState(false);
-  const [isLensModalOpen, setIsLensModalOpen] = useState(false);
   const [isRotationActive, setIsRotationActive] = useState(false);
   const [preferPortrait, setPreferPortrait] = useState(false);
   const [isEditingCustom, setIsEditingCustom] = useState(false);
@@ -788,33 +784,6 @@ export default function CropPanel() {
               </div>
             </div>
 
-            <div className="space-y-2">
-              <Text variant={TextVariants.heading} className="mb-2">
-                {t('editor.crop.geometryHeading')}
-              </Text>
-              <div className="grid grid-cols-2 gap-1.5">
-                <motion.div
-                  className="flex flex-col items-center justify-center p-3 cursor-pointer rounded-lg transition-colors bg-surface text-text-secondary hover:bg-card-active hover:text-text-primary group"
-                  onClick={() => setIsTransformModalOpen(true)}
-                  data-tooltip={t('editor.crop.tooltips.transform')}
-                  whileTap={{ scale: 0.98 }}
-                  transition={{ type: 'spring', stiffness: 400, damping: 17 }}
-                >
-                  <Scan size={20} className="transition-none" />
-                  <span className="text-xs mt-2 transition-none">{t('editor.crop.labels.transform')}</span>
-                </motion.div>
-                <motion.div
-                  className="flex flex-col items-center justify-center p-3  cursor-pointer rounded-lg transition-colors bg-surface text-text-secondary hover:bg-card-active hover:text-text-primary group"
-                  onClick={() => setIsLensModalOpen(true)}
-                  data-tooltip={t('editor.crop.tooltips.lens')}
-                  whileTap={{ scale: 0.98 }}
-                  transition={{ type: 'spring', stiffness: 400, damping: 17 }}
-                >
-                  <Aperture size={20} className="transition-none" />
-                  <span className="text-xs mt-2 transition-none">{t('editor.crop.labels.lens')}</span>
-                </motion.div>
-              </div>
-            </div>
           </>
         ) : (
           <Text
@@ -828,37 +797,6 @@ export default function CropPanel() {
         )}
       </div>
 
-      <TransformModal
-        isOpen={isTransformModalOpen}
-        onClose={() => setIsTransformModalOpen(false)}
-        onApply={(newParams) => {
-          setAdjustments((prev: Adjustments) => ({
-            ...prev,
-            transformDistortion: newParams.distortion,
-            transformVertical: newParams.vertical,
-            transformHorizontal: newParams.horizontal,
-            transformRotate: newParams.rotate,
-            transformAspect: newParams.aspect,
-            transformScale: newParams.scale,
-            transformXOffset: newParams.x_offset,
-            transformYOffset: newParams.y_offset,
-          }));
-        }}
-        currentAdjustments={adjustments}
-      />
-
-      <LensCorrectionModal
-        isOpen={isLensModalOpen}
-        onClose={() => setIsLensModalOpen(false)}
-        onApply={(newParams) => {
-          setAdjustments((prev: Adjustments) => ({
-            ...prev,
-            ...newParams,
-          }));
-        }}
-        currentAdjustments={adjustments}
-        selectedImage={selectedImage}
-      />
     </div>
   );
 }

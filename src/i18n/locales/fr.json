@@ -17,7 +17,7 @@
       "toneMapper": "Mappeur de tons",
       "whites": "Blancs",
       "presence": "Présence",
-      "blackAndWhite": "Noir et blanc",
+      "blackAndWhite": "B&W",
       "tone": "Ton"
     },
     "color": {
@@ -410,7 +410,7 @@
         "curves": "Courbes",
         "details": "Détails",
         "effects": "Effets",
-        "optics": "Optique",
+        "optics": "Corrections de l’objectif",
         "geometry": "Transformation",
         "calibration": "Étalonnage"
       },

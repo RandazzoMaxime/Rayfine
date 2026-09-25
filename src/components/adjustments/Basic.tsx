@@ -116,7 +116,6 @@ export default function BasicAdjustments({
   const currentWb = String((adjustments as any).whiteBalance || 'As Shot');
   const wbValue = Object.keys(WB_PRESETS).find((k) => k.toLowerCase() === currentWb.toLowerCase()) || 'Custom';
   const currentProfile = String((adjustments as any).cameraProfile || 'Adobe Standard');
-  const hdrOn = Number((adjustments as any).hdrEditMode ?? 0) !== 0;
 
   return (
     <div>
@@ -147,21 +146,6 @@ export default function BasicAdjustments({
                 </button>
               ))}
             </div>
-            <button
-              type="button"
-              onClick={() => setAdjustments((prev: Partial<Adjustments>) => ({ ...prev, hdrEditMode: hdrOn ? 0 : 1 }))}
-              className={clsx(
-                'h-7 px-1.5 rounded text-[10px] font-semibold border transition-colors',
-                hdrOn
-                  ? 'bg-amber-500/25 text-amber-100 border-amber-400/40'
-                  : 'text-text-secondary border-border-color/40 hover:text-text-primary',
-              )}
-              data-tooltip={t('adjustments.color.hdrTip' as any, {
-                defaultValue: 'crs:HdrEditMode interop flag (display / export)',
-              })}
-            >
-              HDR
-            </button>
           </div>
 
           <RowSelect
