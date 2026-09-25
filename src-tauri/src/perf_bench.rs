@@ -193,7 +193,7 @@ fn bench<T>(reps: usize, mut f: impl FnMut() -> T) -> (Vec<f64>, T) {
     let mut last = Some(f());
     let mut samples = Vec::with_capacity(reps);
     for _ in 0..reps {
-        last = None;
+        drop(last.take());
         let t = Instant::now();
         let r = f();
         samples.push(ms(t.elapsed()));
@@ -685,9 +685,66 @@ fn production_developer(fast: bool) -> RawDevelop {
     d
 }
 
-/// Copy of develop_internal's post-develop loop (rescale + highlight compression + clamp)
-/// for the ThreeColor case. Serial `iter_mut` exactly as in production.
+#[inline]
+fn bench_srgb_to_linear(value: f32) -> f32 {
+    if value <= 0.04045 {
+        value / 12.92
+    } else {
+        ((value + 0.055) / 1.055).powf(3.0)
+    }
+}
+
+/// Verbatim copy of develop_internal's ThreeColor post-develop loop (raw_processing.rs),
+/// including the runtime `is_linear_format && apply_ungamma` branch (false for Bayer ARW,
+/// passed through black_box so it stays a runtime check exactly as in production).
 fn post_rescale_highlight(inter: &mut Intermediate, rescale_factor: f32, hc: f32, fast: bool) {
+    let is_linear_format = std::hint::black_box(false);
+    let apply_ungamma = std::hint::black_box(false);
+    let safe_highlight_compression = hc.max(1.01);
+    let clamp_limit = if fast { 1.0 } else { safe_highlight_compression };
+    if let Intermediate::ThreeColor(pixels) = inter {
+        pixels.data.iter_mut().for_each(|p| {
+            let mut r = (p[0] * rescale_factor).max(0.0);
+            let mut g = (p[1] * rescale_factor).max(0.0);
+            let mut b = (p[2] * rescale_factor).max(0.0);
+            if is_linear_format && apply_ungamma {
+                r = bench_srgb_to_linear(r.clamp(0.0, 1.0));
+                g = bench_srgb_to_linear(g.clamp(0.0, 1.0));
+                b = bench_srgb_to_linear(b.clamp(0.0, 1.0));
+            }
+            let max_c = r.max(g).max(b);
+            let (final_r, final_g, final_b) = if max_c > 1.0 {
+                let min_c = r.min(g).min(b);
+                let compression_factor =
+                    (1.0 - (max_c - 1.0) / (safe_highlight_compression - 1.0)).clamp(0.0, 1.0);
+                let compressed_r = min_c + (r - min_c) * compression_factor;
+                let compressed_g = min_c + (g - min_c) * compression_factor;
+                let compressed_b = min_c + (b - min_c) * compression_factor;
+                let compressed_max = compressed_r.max(compressed_g).max(compressed_b);
+                if compressed_max > 1e-6 {
+                    let rescale = max_c / compressed_max;
+                    (compressed_r * rescale, compressed_g * rescale, compressed_b * rescale)
+                } else {
+                    (max_c, max_c, max_c)
+                }
+            } else {
+                (r, g, b)
+            };
+            p[0] = final_r.clamp(0.0, clamp_limit);
+            p[1] = final_g.clamp(0.0, clamp_limit);
+            p[2] = final_b.clamp(0.0, clamp_limit);
+        });
+    }
+}
+
+/// Same math with the (never-taken for Bayer) linear/ungamma branch removed from the
+/// per-pixel loop. Measurement-only reference for what hoisting that branch would give.
+fn post_rescale_highlight_no_linear_branch(
+    inter: &mut Intermediate,
+    rescale_factor: f32,
+    hc: f32,
+    fast: bool,
+) {
     let safe_hc = hc.max(1.01);
     let clamp_limit = if fast { 1.0 } else { safe_hc };
     if let Intermediate::ThreeColor(pixels) = inter {
@@ -1279,8 +1336,13 @@ fn perf_bench() {
 
         // Post-develop passes in develop_internal (copied code)
         let mut post_samples = Vec::new();
+        let mut post_nb_samples = Vec::new();
         let mut conv_samples = Vec::new();
         for _ in 0..=reps {
+            let mut i = inter.clone();
+            let t = Instant::now();
+            post_rescale_highlight_no_linear_branch(&mut i, rescale_factor, hc, false);
+            post_nb_samples.push(ms(t.elapsed()));
             let mut i = inter.clone();
             let t = Instant::now();
             post_rescale_highlight(&mut i, rescale_factor, hc, false);
@@ -1291,11 +1353,17 @@ fn perf_bench() {
             drop(img);
         }
         post_samples.remove(0);
+        post_nb_samples.remove(0);
         conv_samples.remove(0);
         rep.acc(
             "  - post: rescale + highlight compression loop",
             post_samples,
             "serial iter_mut in raw_processing.rs develop_internal",
+        );
+        rep.acc(
+            "  - post loop, same math w/o per-pixel linear branch (reference)",
+            post_nb_samples,
+            "measurement-only variant: shows cost of the untaken powf branch inside the loop",
         );
         rep.acc(
             "  - post: Intermediate -> Rgba32F (ImageBuffer::from_fn)",
@@ -1465,8 +1533,9 @@ fn perf_bench() {
             let mmap = read_file_mapped(p).unwrap();
             let d_read = ms(t.elapsed());
             let t = Instant::now();
-            let img = crate::image_loader::load_base_image_from_bytes(
-                &mmap, &spath, false, &settings, None,
+            // Production load_image path: quality develop, NR + sharpening deferred to background.
+            let (img, _needs_enhance) = crate::image_loader::load_base_image_inner(
+                &mmap, &spath, false, &settings, None, true,
             )
             .unwrap();
             let d_load = ms(t.elapsed());
@@ -1535,9 +1604,9 @@ fn perf_bench() {
         }
         rep.acc("open: read_file_mapped", s_read, "");
         rep.acc(
-            "open: load_base_image_from_bytes(quality)",
+            "open: load_image develop (quality, enhance deferred)",
             s_load,
-            "load_image (quality PPG + enhance)",
+            "NR + sharpening now runs in the background after the photo is shown",
         );
         rep.acc("open: read_exif_data", s_exif, "sidecar hit");
         rep.acc(
@@ -1932,4 +2001,97 @@ fn finish(rep: &Report, out_dir: &Path) {
         Ok(_) => println!("\nWrote {}", path.display()),
         Err(e) => println!("\nFailed to write {}: {}", path.display(), e),
     }
+}
+
+
+// ---------------------------------------------------------------------------
+// Main-shader profiling by ablation: compile variants of shader.wgsl with one section
+// removed and measure the display-path render at editor preview size (1920x1280).
+// Run: cargo test --lib perf_shader_profile -- --ignored --nocapture --test-threads=1
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn perf_shader_profile() {
+    let Some((ctx, gpu_name)) = make_headless_gpu_context() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let (w, h) = (1920u32, 1280u32);
+    // Deterministic synthetic image (smooth gradients + noise) — shader cost doesn't depend on content much.
+    let img = DynamicImage::ImageRgba32F(ImageBuffer::from_fn(w, h, |x, y| {
+        let n = ((x.wrapping_mul(73856093) ^ y.wrapping_mul(19349663)) % 1000) as f32 / 1000.0;
+        Rgba([x as f32 / w as f32 * 0.8 + n * 0.1, y as f32 / h as f32 * 0.7 + n * 0.1, 0.4 + n * 0.2, 1.0])
+    }));
+    let data = to_rgba_f16(&img);
+    let (_tex, view) = create_input_texture(&ctx, &data, w, h);
+    let base_src = include_str!("shaders/shader.wgsl").to_string();
+    let reps = env_usize("RUSTROOM_BENCH_REPS", 15);
+
+    // (label, adjustments, patches applied to the shader source)
+    let default_edit = serde_json::json!({ "exposure": 0.3, "contrast": 12.0, "highlights": -25.0, "shadows": 20.0 });
+    let zero_edit = serde_json::json!({});
+    let ablations: Vec<(&str, Vec<(&str, &str)>)> = vec![
+        ("full shader", vec![]),
+        ("- noise reduction", vec![(
+            "initial_linear_rgb = apply_noise_reduction(\n        initial_linear_rgb, absolute_coord_i,\n        t_luma_nr, t_color_nr, scale, is_raw\n    );",
+            "",
+        )]),
+        ("- white balance", vec![("composite_rgb_linear = apply_white_balance(composite_rgb_linear, t_temperature, t_tint);", "")]),
+        ("- filmic exposure", vec![("composite_rgb_linear = apply_filmic_exposure(composite_rgb_linear, t_brightness);", "")]),
+        ("- tonal + highlights", vec![
+            ("composite_rgb_linear = apply_tonal_adjustments(composite_rgb_linear, tonal_blurred, is_raw, t_contrast, t_shadows, t_whites, t_blacks);", ""),
+            ("composite_rgb_linear = apply_highlights_adjustment(composite_rgb_linear, tonal_blurred, is_raw, t_highlights);", ""),
+        ]),
+        ("- color calibration", vec![("composite_rgb_linear = apply_color_calibration(composite_rgb_linear, adjustments.global.color_calibration);", "")]),
+        ("- HSL panel", vec![("if (hsl_magnitude > 0.0001) {", "if (false) {")]),
+        ("- hue shift", vec![("composite_rgb_linear = apply_hue_shift(composite_rgb_linear, t_hue);", "")]),
+        ("- creative color (sat/vib)", vec![("composite_rgb_linear = apply_creative_color(composite_rgb_linear, t_saturation, t_vibrance);", "")]),
+        ("- centre tonal/color", vec![("composite_rgb_linear = apply_centre_tonal_and_color(composite_rgb_linear, adjustments.global.centre, absolute_coord_i);", "")]),
+        ("- color grading", vec![(
+            "    composite_rgb_linear = apply_color_grading(\n        composite_rgb_linear,\n        adjustments.global.color_grading_shadows,\n        adjustments.global.color_grading_midtones,\n        adjustments.global.color_grading_highlights,\n        adjustments.global.color_grading_global,\n        adjustments.global.color_grading_blending,\n        adjustments.global.color_grading_balance\n    );",
+            "",
+        )]),
+        ("- curves", vec![(
+            "if (!curves_identity) {",
+            "if (false) {",
+        )]),
+        ("- dither", vec![("final_rgb += dither(id.xy) * dither_amount;", "")]),
+    ];
+
+    println!("\n=== Main shader ablation @ {}x{} on {} ({} reps, median ms, display path) ===", w, h, gpu_name, reps);
+    let mut baseline_default = 0.0;
+    for (label, patches) in &ablations {
+        let mut src = base_src.clone();
+        let mut ok = true;
+        for (find, repl) in patches {
+            if !src.contains(find) {
+                println!("{:<32} PATCH NOT FOUND: {:.60}", label, find);
+                ok = false;
+                break;
+            }
+            src = src.replacen(find, repl, 1);
+        }
+        if !ok {
+            continue;
+        }
+        *crate::gpu_processing::MAIN_SHADER_OVERRIDE.lock().unwrap() = Some(src);
+        let p = GpuProcessor::new(ctx.clone(), padded(w), padded(h), true).expect("processor");
+        let mut row = Vec::new();
+        for adj in [&zero_edit, &default_edit] {
+            render_display(&ctx, &p, &view, w, h, adj, None, None); // warmup / pipeline compile
+            let (samples, _) = bench(reps, || render_display(&ctx, &p, &view, w, h, adj, None, None));
+            row.push(stats(&samples).0);
+        }
+        if label == &"full shader" {
+            baseline_default = row[1];
+        }
+        println!(
+            "{:<32} zero-edit {:>7.2}   default-edit {:>7.2}   saving vs full {:>6.2}",
+            label, row[0], row[1], baseline_default - row[1]
+        );
+        drop(p);
+        gpu_wait(&ctx);
+    }
+    *crate::gpu_processing::MAIN_SHADER_OVERRIDE.lock().unwrap() = None;
 }

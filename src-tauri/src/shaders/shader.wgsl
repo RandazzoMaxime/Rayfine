@@ -1196,6 +1196,14 @@ fn no_tonemap(c: vec3<f32>) -> vec3<f32> {
     return c;
 }
 
+// True when a curve is empty or the 2-point diagonal (0,0)-(255,255).
+fn curve_is_identity(count: u32, p0: Point, p1: Point) -> bool {
+    if (count < 2u) { return true; }
+    return count == 2u
+        && abs(p0.x) < 0.1 && abs(p0.y) < 0.1
+        && abs(p1.x - 255.0) < 0.1 && abs(p1.y - 255.0) < 0.1;
+}
+
 fn is_default_curve(points: array<Point, 16>, count: u32) -> bool {
     if (count < 2u) {
         return false;
@@ -1618,7 +1626,15 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     composite_rgb_linear = apply_tonal_adjustments(composite_rgb_linear, tonal_blurred, is_raw, t_contrast, t_shadows, t_whites, t_blacks);
     composite_rgb_linear = apply_highlights_adjustment(composite_rgb_linear, tonal_blurred, is_raw, t_highlights);
     composite_rgb_linear = apply_color_calibration(composite_rgb_linear, adjustments.global.color_calibration);
-    composite_rgb_linear = apply_hsl_panel(composite_rgb_linear, final_hsl, absolute_coord_i);
+    // HSL panel is costly per pixel; skip it when every hue/sat/lum slider is at zero.
+    let hsl_magnitude =
+        abs(h0_h) + abs(h0_s) + abs(h0_l) + abs(h1_h) + abs(h1_s) + abs(h1_l) +
+        abs(h2_h) + abs(h2_s) + abs(h2_l) + abs(h3_h) + abs(h3_s) + abs(h3_l) +
+        abs(h4_h) + abs(h4_s) + abs(h4_l) + abs(h5_h) + abs(h5_s) + abs(h5_l) +
+        abs(h6_h) + abs(h6_s) + abs(h6_l) + abs(h7_h) + abs(h7_s) + abs(h7_l);
+    if (hsl_magnitude > 0.0001) {
+        composite_rgb_linear = apply_hsl_panel(composite_rgb_linear, final_hsl, absolute_coord_i);
+    }
     composite_rgb_linear = apply_hue_shift(composite_rgb_linear, t_hue);
     composite_rgb_linear = apply_creative_color(composite_rgb_linear, t_saturation, t_vibrance);
 
@@ -1677,12 +1693,22 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         base_srgb = linear_to_srgb(composite_rgb_linear);
     }
 
-    var final_rgb = apply_all_curves(base_srgb,
-        adjustments.global.luma_curve, adjustments.global.luma_curve_count,
-        adjustments.global.red_curve, adjustments.global.red_curve_count,
-        adjustments.global.green_curve, adjustments.global.green_curve_count,
-        adjustments.global.blue_curve, adjustments.global.blue_curve_count
-    );
+    // Curves are expensive (4 x 16-point arrays copied per pixel): skip them entirely when all
+    // four are the default identity, which is the common case. Checked on the uniform directly.
+    var final_rgb = base_srgb;
+    let curves_identity =
+        curve_is_identity(adjustments.global.luma_curve_count, adjustments.global.luma_curve[0], adjustments.global.luma_curve[1]) &&
+        curve_is_identity(adjustments.global.red_curve_count, adjustments.global.red_curve[0], adjustments.global.red_curve[1]) &&
+        curve_is_identity(adjustments.global.green_curve_count, adjustments.global.green_curve[0], adjustments.global.green_curve[1]) &&
+        curve_is_identity(adjustments.global.blue_curve_count, adjustments.global.blue_curve[0], adjustments.global.blue_curve[1]);
+    if (!curves_identity) {
+        final_rgb = apply_all_curves(base_srgb,
+            adjustments.global.luma_curve, adjustments.global.luma_curve_count,
+            adjustments.global.red_curve, adjustments.global.red_curve_count,
+            adjustments.global.green_curve, adjustments.global.green_curve_count,
+            adjustments.global.blue_curve, adjustments.global.blue_curve_count
+        );
+    }
 
     for (var i = 0u; i < adjustments.mask_count; i = i + 1u) {
         let influence = get_mask_influence(i, absolute_coord);

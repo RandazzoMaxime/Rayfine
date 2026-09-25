@@ -556,10 +556,24 @@ pub struct GpuProcessor {
 }
 
 const FLARE_MAP_SIZE: u32 = 512;
+
+/// Test-only hook so the benchmark can compile ablated variants of the main shader.
+#[cfg(test)]
+pub static MAIN_SHADER_OVERRIDE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+fn main_shader_source() -> std::borrow::Cow<'static, str> {
+    #[cfg(test)]
+    if let Some(src) = MAIN_SHADER_OVERRIDE.lock().unwrap().clone() {
+        return src.into();
+    }
+    include_str!("shaders/shader.wgsl").into()
+}
 /// Images are processed in tiles; tile-scoped GPU textures never need to exceed one tile plus overlap.
 const TILE_SIZE: u32 = 2048;
 const TILE_OVERLAP: u32 = 128;
 const MAX_TILE_INPUT: u32 = TILE_SIZE + 2 * TILE_OVERLAP;
+/// Upper bound for blur kernels (px). Keeps full-res renders cheap; preview-size radii are unaffected.
+const MAX_BLUR_RADIUS: u32 = 48;
 
 impl GpuProcessor {
     pub fn new(
@@ -789,7 +803,7 @@ impl GpuProcessor {
 
         let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Image Processing Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/shader.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(main_shader_source()),
         });
 
         let mut bind_group_layout_entries = vec![
@@ -1209,6 +1223,32 @@ impl GpuProcessor {
         };
 
         let adjustments = request.adjustments;
+
+        // Performance first: each blur pass is only run when an adjustment that reads it is
+        // active (globally or in a mask). Default edits skip the expensive large-radius blurs.
+        let active_masks =
+            &adjustments.mask_adjustments[..(adjustments.mask_count as usize).min(adjustments.mask_adjustments.len())];
+        let nz = |v: f32| v.abs() > 1e-4;
+        let g = &adjustments.global;
+        let need_sharpness_blur = nz(g.sharpness) || active_masks.iter().any(|m| nz(m.sharpness));
+        let need_clarity_blur = nz(g.clarity)
+            || nz(g.centré)
+            || g.halation_amount > 0.0
+            || active_masks.iter().any(|m| nz(m.clarity) || m.halation_amount > 0.0);
+        let need_structure_blur = nz(g.structure)
+            || nz(g.dehaze)
+            || g.glow_amount > 0.0
+            || active_masks
+                .iter()
+                .any(|m| nz(m.structure) || nz(m.dehaze) || m.glow_amount > 0.0);
+        let need_tonal_blur = nz(g.contrast)
+            || nz(g.shadows)
+            || nz(g.whites)
+            || nz(g.blacks)
+            || nz(g.highlights)
+            || active_masks.iter().any(|m| {
+                nz(m.contrast) || nz(m.shadows) || nz(m.whites) || nz(m.blacks) || nz(m.highlights)
+            });
         if adjustments.global.flare_amount > 0.0 {
             let mut encoder = device.create_command_encoder(&Default::default());
 
@@ -1353,7 +1393,8 @@ impl GpuProcessor {
                 };
 
                 let run_blur = |base_radius: f32, output_view: &wgpu::TextureView| -> bool {
-                    let radius = (base_radius * scale).ceil().max(1.0) as u32;
+                    // Radius is capped: full-resolution renders no longer pay for 150+ px kernels.
+                    let radius = ((base_radius * scale).ceil().max(1.0) as u32).min(MAX_BLUR_RADIUS);
                     if radius == 0 {
                         return false;
                     }
@@ -1428,10 +1469,13 @@ impl GpuProcessor {
                     true
                 };
 
-                let did_create_sharpness_blur = run_blur(1.0, &self.sharpness_blur_view);
-                let did_create_tonal_blur = run_blur(3.5, &self.tonal_blur_view);
-                let did_create_clarity_blur = run_blur(8.0, &self.clarity_blur_view);
-                let did_create_structure_blur = run_blur(40.0, &self.structure_blur_view);
+                let did_create_sharpness_blur =
+                    need_sharpness_blur && run_blur(1.0, &self.sharpness_blur_view);
+                let did_create_tonal_blur = need_tonal_blur && run_blur(3.5, &self.tonal_blur_view);
+                let did_create_clarity_blur =
+                    need_clarity_blur && run_blur(8.0, &self.clarity_blur_view);
+                let did_create_structure_blur =
+                    need_structure_blur && run_blur(40.0, &self.structure_blur_view);
 
                 let mut main_encoder = device.create_command_encoder(&Default::default());
 

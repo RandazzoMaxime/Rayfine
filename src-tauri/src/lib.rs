@@ -738,7 +738,31 @@ fn generate_uncropped_preview(
             .get("aiPatches")
             .and_then(|v| v.as_array())
             .is_some_and(|a| !a.is_empty());
-        let patched_image = if has_patches {
+        let settings = load_settings(app_handle.clone()).unwrap_or_default();
+        let preview_dim = settings.editor_preview_resolution.unwrap_or(1920);
+
+        // Fast path (no AI patches / geometry warp / lens blur): shrink to preview size FIRST, then
+        // rotate & flip the small image. Avoids full-resolution copies when entering crop mode.
+        let lens_blur_on = adjustments_clone["lensBlurEnabled"].as_bool().unwrap_or(false);
+        let geometry_identity = crate::image_processing::is_geometry_identity(
+            &crate::image_processing::get_geometry_params_from_json(&adjustments_clone),
+        );
+        let (full_w, full_h) = loaded_image.image.dimensions();
+        let (pre_scaled, pre_scale) = if !has_patches
+            && geometry_identity
+            && !lens_blur_on
+            && (full_w > preview_dim || full_h > preview_dim)
+        {
+            let small = downscale_f32_image(&loaded_image.image, preview_dim, preview_dim);
+            let scale = small.width() as f32 / full_w.max(1) as f32;
+            (Some(small), scale)
+        } else {
+            (None, 1.0)
+        };
+
+        let patched_image = if let Some(small) = pre_scaled {
+            Cow::Owned(small)
+        } else if has_patches {
             Cow::Owned(
                 composite_patches_on_image(&loaded_image.image, &adjustments_clone).unwrap_or_else(
                     |e| {
@@ -764,9 +788,6 @@ fn generate_uncropped_preview(
         let flipped_image =
             apply_flip(coarse_rotated_image, flip_horizontal, flip_vertical).into_owned();
 
-        let settings = load_settings(app_handle.clone()).unwrap_or_default();
-        let preview_dim = settings.editor_preview_resolution.unwrap_or(1920);
-
         let (rotated_w, rotated_h) = flipped_image.dimensions();
 
         let (processing_base, scale_for_gpu) = if rotated_w > preview_dim || rotated_h > preview_dim
@@ -777,9 +798,9 @@ fn generate_uncropped_preview(
             } else {
                 1.0
             };
-            (base, scale)
+            (base, scale * pre_scale)
         } else {
-            (flipped_image.clone(), 1.0)
+            (flipped_image, pre_scale)
         };
 
         let (preview_width, preview_height) = processing_base.dimensions();

@@ -59,6 +59,8 @@ interface EditorState {
   isWaveformVisible: boolean;
   activeWaveformChannel: string;
   waveformHeight: number;
+  /** Bumped when the backend swaps in the final (NR/sharpened) RAW develop; triggers a re-render. */
+  imageRevision: number;
 
   // Interaction State
   isSliderDragging: boolean;
@@ -135,6 +137,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   isWaveformVisible: false,
   activeWaveformChannel: 'luma',
   waveformHeight: 150,
+  imageRevision: 0,
 
   isSliderDragging: false,
   interactivePatch: null,

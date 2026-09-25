@@ -607,51 +607,40 @@ export default function CropPanel() {
                   </button>
                 </div>
               </Text>
-              <div className="grid grid-cols-3 gap-1">
-                {PRESETS.map((preset: CropPreset) => (
-                  <motion.div
-                    className={clsx(
-                      'px-1.5 py-1 rounded-md transition-colors text-center cursor-pointer text-[11px]',
-                      isPresetActive(preset) ? 'bg-accent' : 'bg-surface hover:bg-card-active',
-                    )}
-                    key={preset.name}
-                    onClick={() => handlePresetClick(preset)}
-                    data-tooltip={preset.tooltip}
-                    whileTap={{ scale: 0.98 }}
-                    transition={{ type: 'spring', stiffness: 400, damping: 17 }}
-                  >
-                    <Text color={isPresetActive(preset) ? TextColors.button : TextColors.secondary}>{preset.name}</Text>
-                  </motion.div>
-                ))}
+              <div>
+                {/* Aspect ratio as a single select (instead of a button grid) */}
+                <select
+                  className="w-full h-8 px-2 rounded-md bg-surface border border-border-color/40 text-xs text-text-primary outline-none focus:border-white/30"
+                  value={
+                    isCustomActive
+                      ? 'custom'
+                      : String(Math.max(0, PRESETS.findIndex((p: CropPreset) => isPresetActive(p))))
+                  }
+                  onChange={(e) => {
+                    if (e.target.value === 'custom') {
+                      const imageRatio = getEffectiveOriginalRatio();
+                      let newAspectRatio = BASE_RATIO;
+                      if (preferPortrait || (imageRatio && imageRatio < 1)) {
+                        newAspectRatio = 1 / BASE_RATIO;
+                      }
+                      applyAspectRatio(newAspectRatio);
+                      return;
+                    }
+                    const preset = PRESETS[Number(e.target.value)];
+                    if (preset) handlePresetClick(preset);
+                  }}
+                  data-tooltip={t('editor.crop.aspectRatio' as any, { defaultValue: 'Aspect ratio' })}
+                >
+                  {PRESETS.map((preset: CropPreset, index: number) => (
+                    <option key={preset.name} value={String(index)}>
+                      {preset.name}
+                    </option>
+                  ))}
+                  <option value="custom">{t('editor.crop.presets.custom.name')}</option>
+                </select>
               </div>
               <div>
-                <motion.div
-                  className={clsx(
-                    'w-full px-1.5 py-1 rounded-md transition-colors cursor-pointer text-center text-[11px]',
-                    isCustomActive ? 'bg-accent' : 'bg-surface hover:bg-card-active',
-                  )}
-                  onClick={() => {
-                    const imageRatio = getEffectiveOriginalRatio();
-                    let newAspectRatio = BASE_RATIO;
-                    if (preferPortrait || (imageRatio && imageRatio < 1)) {
-                      newAspectRatio = 1 / BASE_RATIO;
-                    }
-                    applyAspectRatio(newAspectRatio);
-                  }}
-                  data-tooltip={t('editor.crop.presets.custom.tooltip')}
-                  whileTap={{ scale: 0.98 }}
-                  transition={{ type: 'spring', stiffness: 400, damping: 17 }}
-                >
-                  <Text color={isCustomActive ? TextColors.button : TextColors.secondary}>
-                    {t('editor.crop.presets.custom.name')}
-                  </Text>
-                </motion.div>
-                <div
-                  className={clsx(
-                    'mt-2 bg-surface p-2 rounded-md transition-opacity',
-                    isCustomActive ? 'opacity-100' : 'opacity-50 pointer-events-none',
-                  )}
-                >
+                <div className={clsx('mt-2 bg-surface p-2 rounded-md', !isCustomActive && 'hidden')}>
                   <div className="flex items-center justify-center gap-2">
                     <input
                       className="w-full bg-bg-primary text-center rounded-md p-1 border border-surface focus:border-accent focus:ring-accent text-text-secondary focus:text-text-primary"

@@ -82,6 +82,12 @@ export function useTauriListeners({
           useEditorStore.getState().setEditor(update);
         }
       }),
+      listen('image-enhanced', (event: any) => {
+        const editor = useEditorStore.getState();
+        if (isEffectActive && event.payload?.path === editor.selectedImage?.path) {
+          editor.setEditor((state) => ({ imageRevision: state.imageRevision + 1 }));
+        }
+      }),
       listen('open-with-file', (event: any) => {
         if (isEffectActive) useProcessStore.getState().setProcess({ initialFileToOpen: event.payload as string });
       }),

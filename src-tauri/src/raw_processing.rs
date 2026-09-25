@@ -1,3 +1,4 @@
+use rayon::prelude::*;
 use crate::image_processing::apply_orientation;
 use anyhow::{Result, anyhow};
 use image::{DynamicImage, ImageBuffer, Rgba};
@@ -138,63 +139,29 @@ fn develop_internal(
 
     check_cancel()?;
 
+    // Hot loop over every pixel: the (rarely true) linear-DNG ungamma test is hoisted out as a
+    // const generic so the common path is branch-free, and the work is spread over all cores.
+    let ungamma = is_linear_format && apply_ungamma;
     match &mut developed_intermediate {
         Intermediate::Monochrome(pixels) => {
-            pixels.data.iter_mut().for_each(|p| {
-                let mut linear_val = *p * rescale_factor;
-                if is_linear_format && apply_ungamma {
-                    linear_val = srgb_to_linear(linear_val.clamp(0.0, 1.0));
-                }
-                *p = linear_val.clamp(0.0, clamp_limit);
-            });
+            if ungamma {
+                rescale_mono::<true>(&mut pixels.data, rescale_factor, clamp_limit);
+            } else {
+                rescale_mono::<false>(&mut pixels.data, rescale_factor, clamp_limit);
+            }
         }
         Intermediate::ThreeColor(pixels) => {
-            pixels.data.iter_mut().for_each(|p| {
-                let mut r = (p[0] * rescale_factor).max(0.0);
-                let mut g = (p[1] * rescale_factor).max(0.0);
-                let mut b = (p[2] * rescale_factor).max(0.0);
-
-                if is_linear_format && apply_ungamma {
-                    r = srgb_to_linear(r.clamp(0.0, 1.0));
-                    g = srgb_to_linear(g.clamp(0.0, 1.0));
-                    b = srgb_to_linear(b.clamp(0.0, 1.0));
-                }
-
-                let max_c = r.max(g).max(b);
-
-                let (final_r, final_g, final_b) = if max_c > 1.0 {
-                    let min_c = r.min(g).min(b);
-                    let compression_factor =
-                        (1.0 - (max_c - 1.0) / (safe_highlight_compression - 1.0)).clamp(0.0, 1.0);
-                    let compressed_r = min_c + (r - min_c) * compression_factor;
-                    let compressed_g = min_c + (g - min_c) * compression_factor;
-                    let compressed_b = min_c + (b - min_c) * compression_factor;
-                    let compressed_max = compressed_r.max(compressed_g).max(compressed_b);
-
-                    if compressed_max > 1e-6 {
-                        let rescale = max_c / compressed_max;
-                        (
-                            compressed_r * rescale,
-                            compressed_g * rescale,
-                            compressed_b * rescale,
-                        )
-                    } else {
-                        (max_c, max_c, max_c)
-                    }
-                } else {
-                    (r, g, b)
-                };
-
-                p[0] = final_r.clamp(0.0, clamp_limit);
-                p[1] = final_g.clamp(0.0, clamp_limit);
-                p[2] = final_b.clamp(0.0, clamp_limit);
-            });
+            if ungamma {
+                rescale_rgb::<true>(&mut pixels.data, rescale_factor, safe_highlight_compression, clamp_limit);
+            } else {
+                rescale_rgb::<false>(&mut pixels.data, rescale_factor, safe_highlight_compression, clamp_limit);
+            }
         }
         Intermediate::FourColor(pixels) => {
-            pixels.data.iter_mut().for_each(|p| {
+            pixels.data.par_iter_mut().for_each(|p| {
                 p.iter_mut().for_each(|c| {
                     let mut linear_val = *c * rescale_factor;
-                    if is_linear_format && apply_ungamma {
+                    if ungamma {
                         linear_val = srgb_to_linear(linear_val.clamp(0.0, 1.0));
                     }
                     *c = linear_val.clamp(0.0, clamp_limit);
@@ -212,17 +179,21 @@ fn develop_internal(
 
     let dynamic_image = match developed_intermediate {
         Intermediate::ThreeColor(pixels) => {
-            let buffer = ImageBuffer::<Rgba<f32>, _>::from_fn(width, height, |x, y| {
-                let p = pixels.data[(y * width + x) as usize];
-                Rgba([p[0], p[1], p[2], 1.0])
-            });
+            let mut raw = vec![0f32; pixels.data.len() * 4];
+            raw.par_chunks_mut(4)
+                .zip(pixels.data.par_iter())
+                .for_each(|(dst, p)| dst.copy_from_slice(&[p[0], p[1], p[2], 1.0]));
+            let buffer = ImageBuffer::<Rgba<f32>, _>::from_raw(width, height, raw)
+                .ok_or_else(|| anyhow!("Failed to build RGBA buffer"))?;
             DynamicImage::ImageRgba32F(buffer)
         }
         Intermediate::Monochrome(pixels) => {
-            let buffer = ImageBuffer::<Rgba<f32>, _>::from_fn(width, height, |x, y| {
-                let p = pixels.data[(y * width + x) as usize];
-                Rgba([p, p, p, 1.0])
-            });
+            let mut raw = vec![0f32; pixels.data.len() * 4];
+            raw.par_chunks_mut(4)
+                .zip(pixels.data.par_iter())
+                .for_each(|(dst, &p)| dst.copy_from_slice(&[p, p, p, 1.0]));
+            let buffer = ImageBuffer::<Rgba<f32>, _>::from_raw(width, height, raw)
+                .ok_or_else(|| anyhow!("Failed to build RGBA buffer"))?;
             DynamicImage::ImageRgba32F(buffer)
         }
         _ => {
@@ -254,4 +225,58 @@ pub fn get_fast_demosaic_scale_factor(
         }
     }
     1.0
+}
+
+fn rescale_mono<const UNGAMMA: bool>(data: &mut [f32], rescale_factor: f32, clamp_limit: f32) {
+    data.par_iter_mut().for_each(|p| {
+        let mut linear_val = *p * rescale_factor;
+        if UNGAMMA {
+            linear_val = srgb_to_linear(linear_val.clamp(0.0, 1.0));
+        }
+        *p = linear_val.clamp(0.0, clamp_limit);
+    });
+}
+
+fn rescale_rgb<const UNGAMMA: bool>(
+    data: &mut [[f32; 3]],
+    rescale_factor: f32,
+    safe_highlight_compression: f32,
+    clamp_limit: f32,
+) {
+    data.par_iter_mut().for_each(|p| {
+        let mut r = (p[0] * rescale_factor).max(0.0);
+        let mut g = (p[1] * rescale_factor).max(0.0);
+        let mut b = (p[2] * rescale_factor).max(0.0);
+
+        if UNGAMMA {
+            r = srgb_to_linear(r.clamp(0.0, 1.0));
+            g = srgb_to_linear(g.clamp(0.0, 1.0));
+            b = srgb_to_linear(b.clamp(0.0, 1.0));
+        }
+
+        let max_c = r.max(g).max(b);
+
+        let (final_r, final_g, final_b) = if max_c > 1.0 {
+            let min_c = r.min(g).min(b);
+            let compression_factor =
+                (1.0 - (max_c - 1.0) / (safe_highlight_compression - 1.0)).clamp(0.0, 1.0);
+            let compressed_r = min_c + (r - min_c) * compression_factor;
+            let compressed_g = min_c + (g - min_c) * compression_factor;
+            let compressed_b = min_c + (b - min_c) * compression_factor;
+            let compressed_max = compressed_r.max(compressed_g).max(compressed_b);
+
+            if compressed_max > 1e-6 {
+                let rescale = max_c / compressed_max;
+                (compressed_r * rescale, compressed_g * rescale, compressed_b * rescale)
+            } else {
+                (max_c, max_c, max_c)
+            }
+        } else {
+            (r, g, b)
+        };
+
+        p[0] = final_r.clamp(0.0, clamp_limit);
+        p[1] = final_g.clamp(0.0, clamp_limit);
+        p[2] = final_b.clamp(0.0, clamp_limit);
+    });
 }

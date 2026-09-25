@@ -5,6 +5,7 @@ use crate::exif_processing;
 use crate::file_management::{parse_virtual_path, read_file_mapped};
 use crate::formats::is_raw_file;
 use crate::image_processing::ImageMetadata;
+use tauri::{Emitter, Manager};
 use crate::image_processing::{
     apply_orientation, apply_srgb_to_linear, remove_raw_artifacts_and_enhance,
 };
@@ -84,8 +85,19 @@ pub fn load_base_image_from_bytes(
     settings: &AppSettings,
     cancel_token: Option<(Arc<AtomicUsize>, usize)>,
 ) -> Result<DynamicImage> {
-    let highlight_compression = settings.raw_highlight_compression.unwrap_or(2.5);
-    let linear_mode = settings.linear_raw_mode.clone();
+    load_base_image_inner(
+        bytes,
+        path_for_ext_check,
+        use_fast_raw_dev,
+        settings,
+        cancel_token,
+        false,
+    )
+    .map(|(image, _)| image)
+}
+
+/// Color-NR / sharpening strengths applied after RAW develop (from settings).
+pub fn raw_enhance_params(settings: &AppSettings) -> (f32, f32) {
     let color_nr_setting = settings.raw_preprocessing_color_nr.unwrap_or(0.5);
     let color_nr_amount = if color_nr_setting <= 0.0 {
         0.0
@@ -94,6 +106,22 @@ pub fn load_base_image_from_bytes(
         (12.0 / x - 10.0).max(0.1)
     };
     let sharpening_amount = settings.raw_preprocessing_sharpening.unwrap_or(0.35);
+    (color_nr_amount, sharpening_amount)
+}
+
+/// Like `load_base_image_from_bytes`, but with `defer_enhance` the (slow) NR + sharpening pass is
+/// skipped and reported via the returned flag so the caller can run it in the background.
+pub(crate) fn load_base_image_inner(
+    bytes: &[u8],
+    path_for_ext_check: &str,
+    use_fast_raw_dev: bool,
+    settings: &AppSettings,
+    cancel_token: Option<(Arc<AtomicUsize>, usize)>,
+    defer_enhance: bool,
+) -> Result<(DynamicImage, bool)> {
+    let highlight_compression = settings.raw_highlight_compression.unwrap_or(2.5);
+    let linear_mode = settings.linear_raw_mode.clone();
+    let (color_nr_amount, sharpening_amount) = raw_enhance_params(settings);
     let apply_to_non_raws = settings.apply_preprocessing_to_non_raws.unwrap_or(false);
 
     crate::exif_processing::persist_exif_if_missing(
@@ -113,7 +141,12 @@ pub fn load_base_image_from_bytes(
             )
         }) {
             Ok(Ok(mut image)) => {
-                if !use_fast_raw_dev && (color_nr_amount > 0.0 || sharpening_amount > 0.0) {
+                let wants_enhance =
+                    !use_fast_raw_dev && (color_nr_amount > 0.0 || sharpening_amount > 0.0);
+                if wants_enhance && defer_enhance {
+                    return Ok((image, true));
+                }
+                if wants_enhance {
                     let start = Instant::now();
                     remove_raw_artifacts_and_enhance(
                         &mut image,
@@ -127,7 +160,7 @@ pub fn load_base_image_from_bytes(
                         duration
                     );
                 }
-                Ok(image)
+                Ok((image, false))
             }
             Ok(Err(e)) => {
                 let classified = classify_raw_develop_error(path_for_ext_check, e);
@@ -149,7 +182,7 @@ pub fn load_base_image_from_bytes(
                         preview.height()
                     );
 
-                    return Ok(linearize_embedded_preview(preview));
+                    return Ok((linearize_embedded_preview(preview), false));
                 }
                 Err(classified)
             }
@@ -163,7 +196,7 @@ pub fn load_base_image_from_bytes(
                         preview.height()
                     );
 
-                    return Ok(linearize_embedded_preview(preview));
+                    return Ok((linearize_embedded_preview(preview), false));
                 }
                 Err(anyhow!(
                     "Failed to process RAW file: {}",
@@ -174,10 +207,13 @@ pub fn load_base_image_from_bytes(
     } else {
         let mut image = load_image_with_orientation(bytes, cancel_token)?;
 
-        if apply_to_non_raws
+        let wants_enhance = apply_to_non_raws
             && !use_fast_raw_dev
-            && (color_nr_amount > 0.0 || sharpening_amount > 0.0)
-        {
+            && (color_nr_amount > 0.0 || sharpening_amount > 0.0);
+        if wants_enhance && defer_enhance {
+            return Ok((image, true));
+        }
+        if wants_enhance {
             let start = Instant::now();
             remove_raw_artifacts_and_enhance(&mut image, color_nr_amount, sharpening_amount);
             let duration = start.elapsed();
@@ -188,7 +224,7 @@ pub fn load_base_image_from_bytes(
             );
         }
 
-        Ok(image)
+        Ok((image, false))
     }
 }
 
@@ -776,6 +812,7 @@ pub async fn load_image(
     let metadata: ImageMetadata = crate::exif_processing::load_sidecar(&sidecar_path);
 
     let settings = load_settings(app_handle.clone()).unwrap_or_default();
+    let enhance_params = raw_enhance_params(&settings);
 
     let path_clone = source_path_str.clone();
 
@@ -785,8 +822,8 @@ pub async fn load_image(
         .unwrap()
         .get(&source_path_str);
 
-    let (pristine_arc, exif_data) = if let Some((cached_img, cached_exif)) = cached_data {
-        (cached_img, cached_exif)
+    let (pristine_arc, exif_data, needs_enhance) = if let Some((cached_img, cached_exif)) = cached_data {
+        (cached_img, cached_exif, false)
     } else {
         if crate::file_management::is_cloud_placeholder(&source_path) {
             return Err(format!(
@@ -795,28 +832,29 @@ pub async fn load_image(
             ));
         }
 
-        let (pristine_img, exif_data_loaded) = tokio::task::spawn_blocking(move || {
+        let (pristine_img, exif_data_loaded, needs_enhance) = tokio::task::spawn_blocking(move || {
             if generation_tracker.load(Ordering::SeqCst) != my_generation {
                 return Err("Load cancelled".to_string());
             }
 
-            let result: Result<(DynamicImage, HashMap<String, String>), String> =
+            let result: Result<(DynamicImage, HashMap<String, String>, bool), String> =
                 (|| match read_file_mapped(Path::new(&path_clone)) {
                     Ok(mmap) => {
                         if generation_tracker.load(Ordering::SeqCst) != my_generation {
                             return Err("Load cancelled".to_string());
                         }
 
-                        let img = load_base_image_from_bytes(
+                        let (img, needs_enhance) = load_base_image_inner(
                             &mmap,
                             &path_clone,
                             false,
                             &settings,
                             cancel_token.clone(),
+                            true,
                         )
                         .map_err(|e| e.to_string())?;
                         let exif = exif_processing::read_exif_data(&path_clone, &mmap);
-                        Ok((img, exif))
+                        Ok((img, exif, needs_enhance))
                     }
                     Err(e) => {
                         log::warn!(
@@ -832,16 +870,17 @@ pub async fn load_image(
                             return Err("Load cancelled".to_string());
                         }
 
-                        let img = load_base_image_from_bytes(
+                        let (img, needs_enhance) = load_base_image_inner(
                             &bytes,
                             &path_clone,
                             false,
                             &settings,
                             cancel_token.clone(),
+                            true,
                         )
                         .map_err(|e| e.to_string())?;
                         let exif = exif_processing::read_exif_data(&path_clone, &bytes);
-                        Ok((img, exif))
+                        Ok((img, exif, needs_enhance))
                     }
                 })();
             result
@@ -851,13 +890,16 @@ pub async fn load_image(
 
         let arc_img = Arc::new(pristine_img);
 
-        state.decoded_image_cache.lock().unwrap().insert(
-            source_path_str.clone(),
-            arc_img.clone(),
-            exif_data_loaded.clone(),
-        );
+        // A draft (not yet NR/sharpened) is not cached: only the final image is.
+        if !needs_enhance {
+            state.decoded_image_cache.lock().unwrap().insert(
+                source_path_str.clone(),
+                arc_img.clone(),
+                exif_data_loaded.clone(),
+            );
+        }
 
-        (arc_img, exif_data_loaded)
+        (arc_img, exif_data_loaded, needs_enhance)
     };
 
     if state.load_image_generation.load(Ordering::SeqCst) != my_generation {
@@ -873,10 +915,51 @@ pub async fn load_image(
     let (orig_width, orig_height) = pristine_arc.dimensions();
 
     *state.original_image.lock().unwrap() = Some(LoadedImage {
-        path,
-        image: pristine_arc,
+        path: path.clone(),
+        image: pristine_arc.clone(),
         is_raw,
     });
+
+    // Progressive open: the photo is shown right away from the draft develop; the RAW NR +
+    // sharpening pass (~0.5 s at 33 MP) runs in the background and then swaps the image in.
+    if needs_enhance {
+        let app = app_handle.clone();
+        let generation = state.load_image_generation.clone();
+        let exif_for_cache = exif_data.clone();
+        let cache_key = source_path_str.clone();
+        let (nr, sharpening) = enhance_params;
+        tauri::async_runtime::spawn_blocking(move || {
+            if generation.load(Ordering::SeqCst) != my_generation {
+                return;
+            }
+            let start = Instant::now();
+            let mut enhanced = (*pristine_arc).clone();
+            remove_raw_artifacts_and_enhance(&mut enhanced, nr, sharpening);
+            let enhanced = Arc::new(enhanced);
+            let state = app.state::<AppState>();
+            state
+                .decoded_image_cache
+                .lock()
+                .unwrap()
+                .insert(cache_key, enhanced.clone(), exif_for_cache);
+            if generation.load(Ordering::SeqCst) != my_generation {
+                return;
+            }
+            {
+                let mut original = state.original_image.lock().unwrap();
+                match original.as_mut() {
+                    Some(loaded) if loaded.path == path => loaded.image = enhanced,
+                    _ => return,
+                }
+            }
+            *state.cached_preview.lock().unwrap() = None;
+            *state.gpu_image_cache.lock().unwrap() = None;
+            *state.full_warped_cache.lock().unwrap() = None;
+            *state.full_transformed_cache.lock().unwrap() = None;
+            log::info!("Background RAW enhance for '{}' took {:?}", path, start.elapsed());
+            let _ = app.emit("image-enhanced", serde_json::json!({ "path": path }));
+        });
+    }
 
     Ok(LoadImageResult {
         width: orig_width,
