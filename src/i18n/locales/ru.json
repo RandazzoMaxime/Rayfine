@@ -401,12 +401,15 @@
       },
       "sections": {
         "basic": "Основные",
-        "color": "Цвет",
+        "color": "Микшер цветов",
+        "colorGrading": "Цветокоррекция",
         "curves": "Кривые",
         "details": "Детали",
         "effects": "Эффекты",
-        "optics": "Optics",
-        "geometry": "Transform"
+        "optics": "Коррекция объектива",
+        "geometry": "Трансформация",
+        "lensBlur": "Размытие объектива",
+        "calibration": "Калибровка"
       },
       "title": "Настройки",
       "tooltips": {
@@ -1144,7 +1147,7 @@
     },
     "splash": {
       "addFolder": "Добавить папку",
-      "brand": "RapidRAW",
+      "brand": "Rayfine",
       "continueSession": "Продолжить сеанс",
       "contribute": "Участвовать на GitHub",
       "descriptionAndroid": "Невероятно быстрый редактор RAW-файлов с GPU-ускорением. Откройте библиотеку, чтобы начать.",

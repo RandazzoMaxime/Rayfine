@@ -23,6 +23,13 @@ interface SliderProps {
   trackClassName?: string;
   fillOrigin?: 'min' | 'default';
   suffix?: string;
+  emphasized?: boolean;
+  formatValue?(value: number): string;
+  parseValue?(text: string): number | null;
+  /** Stacked: label + value on one row, full-width track below. */
+  layout?: 'inline' | 'stacked';
+  /** Dark = white text (Develop). Light = dark text on a white panel. Theme = CSS vars. */
+  tone?: 'dark' | 'light' | 'theme';
 }
 
 const DOUBLE_CLICK_THRESHOLD_MS = 300;
@@ -46,6 +53,11 @@ const Slider = ({
   trackClassName,
   fillOrigin = 'default',
   suffix = '',
+  emphasized = false,
+  formatValue,
+  parseValue,
+  layout = 'inline',
+  tone = 'theme',
 }: SliderProps) => {
   const { t } = useTranslation();
   const [displayValue, setDisplayValue] = useState<number>(value);
@@ -290,11 +302,26 @@ const Slider = ({
     };
   }, [value, isDragging]);
 
+  const formatNumber = useCallback(
+    (n: number) => {
+      if (formatValue) {
+        return formatValue(n);
+      }
+      const rounded = decimalPlaces > 0 && n === 0 ? 0 : parseFloat(n.toFixed(decimalPlaces));
+      const text = decimalPlaces > 0 && n === 0 ? '0' : rounded.toFixed(decimalPlaces);
+      if (min < 0 && rounded > 0) {
+        return `+${text}`;
+      }
+      return text;
+    },
+    [formatValue, decimalPlaces, min],
+  );
+
   useEffect(() => {
     if (!isEditing) {
-      setInputValue(String(value));
+      setInputValue(formatNumber(value));
     }
-  }, [value, isEditing]);
+  }, [value, isEditing, formatNumber]);
 
   useEffect(() => {
     if (isEditing && inputRef.current) {
@@ -432,13 +459,14 @@ const Slider = ({
     if (disabled) return;
 
     const textVal = e.target.value;
-    if (!/^[0-9.,-]*$/.test(textVal)) {
+    if (!/^[0-9.,+\-]*$/.test(textVal)) {
       return;
     }
     setInputValue(textVal);
-    const parseableText = textVal.replace(',', '.');
-    const parsedValue = parseFloat(parseableText);
-    if (!isNaN(parsedValue)) {
+    const parsedValue = parseValue
+      ? parseValue(textVal)
+      : parseFloat(textVal.replace(',', '.').replace('+', ''));
+    if (parsedValue != null && !isNaN(parsedValue)) {
       const clampedValue = Math.max(min, Math.min(max, parsedValue));
       onChange({
         target: {
@@ -450,17 +478,16 @@ const Slider = ({
 
   const handleInputCommit = () => {
     if (disabled) {
-      setInputValue(String(value));
+      setInputValue(formatNumber(value));
       setIsEditing(false);
       return;
     }
 
-    let newValue = parseFloat(inputValue.replace(',', '.'));
-    if (isNaN(newValue)) {
-      newValue = value;
-    } else {
-      newValue = Math.max(min, Math.min(max, newValue));
-    }
+    const parsed = parseValue
+      ? parseValue(inputValue)
+      : parseFloat(inputValue.replace(',', '.').replace('+', ''));
+    const newValue =
+      parsed == null || isNaN(parsed) ? value : Math.max(min, Math.min(max, parsed));
     const syntheticEvent = {
       target: {
         value: newValue,
@@ -477,13 +504,15 @@ const Slider = ({
       handleInputCommit();
       e.currentTarget.blur();
     } else if (e.key === 'Escape') {
-      setInputValue(String(value));
+      setInputValue(formatNumber(value));
       setIsEditing(false);
       e.currentTarget.blur();
     } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
       e.preventDefault();
-      let currentNum = parseFloat(inputValue.replace(',', '.'));
-      if (isNaN(currentNum)) {
+      let currentNum = parseValue
+        ? parseValue(inputValue)
+        : parseFloat(inputValue.replace(',', '.').replace('+', ''));
+      if (currentNum == null || isNaN(currentNum)) {
         currentNum = value;
       }
       const direction = e.key === 'ArrowUp' ? 1 : -1;
@@ -509,73 +538,63 @@ const Slider = ({
   };
 
   const numericValue = isNaN(Number(value)) ? 0 : Number(value);
+  const shownValue = formatNumber(isDragging ? displayValue : numericValue);
+  const stacked = layout === 'stacked';
+  const textCls =
+    tone === 'light' ? 'text-neutral-800' : tone === 'theme' ? 'text-text-primary' : 'text-white';
+  const inputCls =
+    tone === 'light'
+      ? 'text-neutral-800 bg-neutral-100 border-neutral-300'
+      : tone === 'theme'
+        ? 'text-text-primary bg-surface border-border-color'
+        : 'text-white bg-card-active border-gray-500';
+  const defaultTrack =
+    tone === 'light' ? 'bg-neutral-200' : tone === 'theme' ? 'bg-card-active' : 'bg-card-active';
 
   return (
-    <div className={`mb-1 group ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`} ref={containerRef}>
-      <div className="flex justify-between items-center mb-0.5">
-        <div
-          className={`grid ${typeof label === 'string' && !disabled ? 'cursor-pointer' : ''}`}
-          onClick={typeof label === 'string' && !disabled ? handleReset : undefined}
-          onDoubleClick={typeof label === 'string' && !disabled ? handleReset : undefined}
-          onMouseEnter={typeof label === 'string' && !disabled ? () => setIsLabelHovered(true) : undefined}
-          onMouseLeave={typeof label === 'string' && !disabled ? () => setIsLabelHovered(false) : undefined}
+    <div
+      className={
+        stacked
+          ? `mb-px group grid grid-cols-[minmax(0,1fr)_auto] grid-rows-[auto_auto] items-center gap-x-2 gap-y-2 ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${emphasized ? 'rounded bg-neutral-100' : ''}`
+          : `mb-px group grid grid-cols-[7rem_minmax(0,1fr)_2.75rem] items-center gap-x-1 min-h-[18px] ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${emphasized ? 'rounded bg-white/10' : ''}`
+      }
+      ref={containerRef}
+    >
+      <div
+        className={`min-w-0 grid ${stacked ? 'text-left' : 'text-right'} ${typeof label === 'string' && !disabled ? 'cursor-pointer' : ''}`}
+        onClick={typeof label === 'string' && !disabled ? handleReset : undefined}
+        onDoubleClick={typeof label === 'string' && !disabled ? handleReset : undefined}
+        onMouseEnter={typeof label === 'string' && !disabled ? () => setIsLabelHovered(true) : undefined}
+        onMouseLeave={typeof label === 'string' && !disabled ? () => setIsLabelHovered(false) : undefined}
+      >
+        <span
+          aria-hidden={isLabelHovered && typeof label === 'string'}
+          className={`col-start-1 row-start-1 text-[11px] font-medium ${textCls} leading-none truncate select-none transition-opacity duration-200 ease-in-out ${
+            isLabelHovered && typeof label === 'string' ? 'opacity-0' : 'opacity-100'
+          }`}
         >
+          {label}
+        </span>
+        {typeof label === 'string' && (
           <span
-            aria-hidden={isLabelHovered && typeof label === 'string'}
-            className={`col-start-1 row-start-1 text-xs font-medium text-text-secondary select-none transition-opacity duration-200 ease-in-out ${
-              isLabelHovered && typeof label === 'string' ? 'opacity-0' : 'opacity-100'
+            aria-hidden={!isLabelHovered}
+            className={`col-start-1 row-start-1 text-[11px] font-medium ${textCls} leading-none truncate select-none transition-opacity duration-200 ease-in-out pointer-events-none ${
+              isLabelHovered ? 'opacity-100' : 'opacity-0'
             }`}
           >
-            {label}
+            {t('ui.slider.reset')}
           </span>
-          {typeof label === 'string' && (
-            <span
-              aria-hidden={!isLabelHovered}
-              className={`col-start-1 row-start-1 text-xs font-medium text-text-primary select-none transition-opacity duration-200 ease-in-out pointer-events-none ${
-                isLabelHovered ? 'opacity-100' : 'opacity-0'
-              }`}
-            >
-              {t('ui.slider.reset')}
-            </span>
-          )}
-        </div>
-        <div className="w-11 text-right">
-          {isEditing ? (
-            <input
-              className="w-full text-xs text-right bg-card-active border border-gray-500 rounded-sm px-1 py-0 outline-none focus:ring-1 focus:ring-blue-500 text-text-primary"
-              disabled={disabled}
-              max={max}
-              min={min}
-              onBlur={handleInputCommit}
-              onChange={handleInputChange}
-              onKeyDown={handleInputKeyDown}
-              ref={inputRef}
-              step={step}
-              type="text"
-              value={inputValue}
-            />
-          ) : (
-            <span
-              className={`text-xs text-text-primary w-full text-right select-none ${disabled ? '' : 'cursor-text'}`}
-              onClick={disabled ? undefined : handleValueClick}
-              onDoubleClick={disabled ? undefined : handleReset}
-              data-tooltip={disabled ? undefined : t('ui.slider.clickToEdit')}
-            >
-              {decimalPlaces > 0 && numericValue === 0 ? '0' : numericValue.toFixed(decimalPlaces)}
-              {suffix && <span className="text-[10px] align-top inline-block mt-0.5 ml-0.5">{suffix}</span>}
-            </span>
-          )}
-        </div>
+        )}
       </div>
 
-      <div className="relative w-full h-4">
+      <div className={stacked ? 'relative w-full h-4 col-span-2 row-start-2' : 'relative w-full h-3'}>
         <div
-          className={`absolute top-1/2 left-0 w-full h-1.5 -translate-y-1/4 rounded-full pointer-events-none ${
-            trackClassName || 'bg-card-active'
+          className={`absolute top-1/2 left-0 w-full ${stacked ? 'h-1.5' : 'h-1'} -translate-y-1/2 rounded-full pointer-events-none ${
+            trackClassName || defaultTrack
           }`}
         />
         <div
-          className="absolute top-1/2 h-1.5 -translate-y-1/4 rounded-full pointer-events-none bg-accent/25"
+          className={`absolute top-1/2 ${stacked ? 'h-1.5' : 'h-1'} -translate-y-1/2 rounded-full pointer-events-none bg-accent/25`}
           style={{
             left: `${Math.min(fillPercentage, originPercentage)}%`,
             width: `${Math.abs(fillPercentage - originPercentage)}%`,
@@ -583,7 +602,7 @@ const Slider = ({
         />
         <input
           ref={rangeInputRef}
-          className={`absolute top-1/2 left-0 w-full h-1.5 appearance-none bg-transparent cursor-pointer m-0 p-0 slider-input z-10 ${
+          className={`absolute top-1/2 left-0 w-full ${stacked ? 'h-1.5' : 'h-1'} appearance-none bg-transparent cursor-pointer m-0 p-0 slider-input z-10 ${
             isDragging ? 'slider-thumb-active' : ''
           } ${disabled ? 'cursor-not-allowed' : ''}`}
           disabled={disabled}
@@ -602,6 +621,34 @@ const Slider = ({
           type="range"
           value={displayValue}
         />
+      </div>
+
+      <div className={`min-w-0 text-right tabular-nums whitespace-nowrap ${stacked ? 'col-start-2 row-start-1' : ''}`}>
+        {isEditing ? (
+          <input
+            className={`w-full text-[11px] text-right ${inputCls} border rounded-sm px-0.5 py-0 outline-none focus:ring-1 focus:ring-blue-500`}
+            disabled={disabled}
+            max={max}
+            min={min}
+            onBlur={handleInputCommit}
+            onChange={handleInputChange}
+            onKeyDown={handleInputKeyDown}
+            ref={inputRef}
+            step={step}
+            type="text"
+            value={inputValue}
+          />
+        ) : (
+          <span
+            className={`inline-flex items-center justify-end gap-px text-[11px] leading-none ${textCls} select-none ${disabled ? '' : 'cursor-text'}`}
+            onClick={disabled ? undefined : handleValueClick}
+            onDoubleClick={disabled ? undefined : handleReset}
+            data-tooltip={disabled ? undefined : t('ui.slider.clickToEdit')}
+          >
+            <span className="tabular-nums leading-none">{shownValue}</span>
+            {suffix ? <span className="text-[11px] leading-none">{suffix}</span> : null}
+          </span>
+        )}
       </div>
     </div>
   );

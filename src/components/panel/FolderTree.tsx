@@ -47,6 +47,11 @@ import { useLibraryStore } from '../../store/useLibraryStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { AlbumItem, AlbumGroup, Album, Invokes, FolderTreeSort, SortDirection, FlagStatus, EditedStatus, RawStatus } from '../ui/AppProperties';
 import { COLOR_LABELS } from '../../utils/adjustments';
+import {
+  UNCATEGORIZED_ALBUM_ID,
+  albumDisplayName,
+  ensureUncategorizedAlbum,
+} from '../../utils/catalogMembership';
 
 export interface FolderTree {
   children: FolderTree[];
@@ -385,7 +390,7 @@ function AlbumTreeNode({
 
         <span onDoubleClick={() => isGroup && onToggle(item.id)} className="truncate flex-1 select-none">
           <span className="truncate">
-            {item.name}
+            {item.type === 'album' ? albumDisplayName(item) : item.name}
             {!isGroup && isTarget && (
               <span className="ml-1 text-[9px] text-amber-300" title="Target Collection">
                 ●
@@ -696,8 +701,8 @@ export default function FolderTree({
   );
 
   const [searchQuery, setSearchQuery] = useState('');
-  const [isHovering, setIsHovering] = useState(false);
   const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
+  const [smartOpen, setSmartOpen] = useState(false);
   const pinnedFolders = appSettings?.pinnedFolders || [];
   const folderHistory = useLibraryStore((s) => s.folderHistory) || [];
   const folderHistoryIndex = useLibraryStore((s) => s.folderHistoryIndex) ?? -1;
@@ -751,10 +756,16 @@ export default function FolderTree({
   const showImageCounts = appSettings?.enableFolderImageCounts ?? false;
   const folderIcons = appSettings?.folderIcons || {};
   const folderTreeSort: FolderTreeSort = appSettings?.folderTreeSort || { key: 'name', order: SortDirection.Ascending };
-  const showHeaderButtons = isHovering || isSortMenuOpen;
 
   useEffect(() => {
-    invoke(Invokes.GetAlbums).then((res: any) => useLibraryStore.getState().setLibrary({ albumTree: res }));
+    invoke(Invokes.GetAlbums).then(async (res: any) => {
+      try {
+        const tree = await ensureUncategorizedAlbum(res || []);
+        useLibraryStore.getState().setLibrary({ albumTree: tree });
+      } catch {
+        useLibraryStore.getState().setLibrary({ albumTree: res || [] });
+      }
+    });
   }, []);
 
   const toggleSection = (section: string) => {
@@ -882,8 +893,6 @@ export default function FolderTree({
         !isResizing && 'transition-[width] duration-300 ease-in-out',
       )}
       style={style}
-      onMouseEnter={() => setIsHovering(true)}
-      onMouseLeave={() => setIsHovering(false)}
     >
       {!isVisible && (
         <button
@@ -899,25 +908,15 @@ export default function FolderTree({
         <div className="p-2 flex flex-col h-full">
           <div className="pt-1 pb-2">
             <div className="flex items-center">
-              <AnimatePresence>
-                {showHeaderButtons && (
-                  <motion.div
-                    initial={{ width: 0, opacity: 0, marginRight: 0 }}
-                    animate={{ width: 'auto', opacity: 1, marginRight: 4 }}
-                    exit={{ width: 0, opacity: 0, marginRight: 0 }}
-                    transition={{ duration: 0.2, ease: 'easeInOut' }}
-                    className="flex items-center shrink-0 overflow-hidden"
-                  >
-                    <button
-                      className="bg-surface rounded-md hover:bg-card-active flex items-center justify-center shrink-0 transition-colors w-9 h-9"
-                      onClick={() => setIsVisible(false)}
-                      data-tooltip={t('library.folders.tooltips.collapse')}
-                    >
-                      <ChevronLeft size={17.5} className="text-text-secondary" />
-                    </button>
-                  </motion.div>
-                )}
-              </AnimatePresence>
+              <div className="flex items-center shrink-0 mr-1">
+                <button
+                  className="bg-surface rounded-md hover:bg-card-active flex items-center justify-center shrink-0 w-9 h-9"
+                  onClick={() => setIsVisible(false)}
+                  data-tooltip={t('library.folders.tooltips.collapse')}
+                >
+                  <ChevronLeft size={17.5} className="text-text-secondary" />
+                </button>
+              </div>
 
               <div className="relative flex-1 min-w-0">
                 <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-secondary" />
@@ -939,34 +938,21 @@ export default function FolderTree({
                 )}
               </div>
 
-              <AnimatePresence>
-                {showHeaderButtons && (
-                  <motion.div
-                    initial={{ width: 0, opacity: 0, marginLeft: 0 }}
-                    animate={{ width: 'auto', opacity: 1, marginLeft: 4 }}
-                    exit={{ width: 0, opacity: 0, marginLeft: 0 }}
-                    transition={{ duration: 0.2, ease: 'easeInOut' }}
-                    className={clsx(
-                      'flex items-center shrink-0',
-                      isSortMenuOpen ? 'overflow-visible' : 'overflow-hidden',
-                    )}
-                  >
-                    <FolderSortMenu
-                      sort={folderTreeSort}
-                      onChange={(newSort) => {
-                        if (appSettings) handleSettingsChange({ ...appSettings, folderTreeSort: newSort });
-                      }}
-                      isOpen={isSortMenuOpen}
-                      setIsOpen={setIsSortMenuOpen}
-                    />
-                  </motion.div>
-                )}
-              </AnimatePresence>
+              <div className="flex items-center shrink-0 ml-1">
+                <FolderSortMenu
+                  sort={folderTreeSort}
+                  onChange={(newSort) => {
+                    if (appSettings) handleSettingsChange({ ...appSettings, folderTreeSort: newSort });
+                  }}
+                  isOpen={isSortMenuOpen}
+                  setIsOpen={setIsSortMenuOpen}
+                />
+              </div>
             </div>
           </div>
 
           <LayoutGroup id="folder-tree">
-          <div className="flex-1 overflow-y-auto" onContextMenu={handleEmptyAreaContextMenu}>
+          <div className="flex-1 overflow-y-auto flex flex-col" onContextMenu={handleEmptyAreaContextMenu}>
             <div className="px-2 pt-1 flex items-center gap-1">
               <button
                 type="button"
@@ -1164,50 +1150,6 @@ export default function FolderTree({
                   {multiSelectedPaths?.length || (libraryActivePath ? 1 : 0)}
                 </span>
               </button>
-
-              {([
-                {
-                  id: FlagStatus.Pick,
-                  label: t('library.folders.catalogPicks' as any, { defaultValue: 'Picks' }),
-                  icon: Flag,
-                  count: imageList.filter((img) => (img.tags || []).some((tag) => tag === 'flag:pick')).length,
-                },
-                {
-                  id: FlagStatus.Reject,
-                  label: t('library.folders.catalogRejects' as any, { defaultValue: 'Rejects' }),
-                  icon: FlagOff,
-                  count: imageList.filter((img) => (img.tags || []).some((tag) => tag === 'flag:reject')).length,
-                },
-              ] as const).map((item) => {
-                const active = !showPreviousImportOnly && !showQuickCollectionOnly && (filterCriteria?.flagStatus || FlagStatus.All) === item.id;
-                const Icon = item.icon;
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => {
-                      useLibraryStore.getState().setLibrary({ showPreviousImportOnly: false, showQuickCollectionOnly: false, showSelectedOnly: false });
-                      setFilterCriteria((prev) => ({
-                        ...prev,
-                        flagStatus: item.id,
-                        editedStatus: EditedStatus.All,
-                        hasGps: 'all',
-                        rating: 0,
-                      }));
-                    }}
-                    className={clsx(
-                      'w-full flex items-center gap-2 px-2 py-1 rounded text-left text-[11px]',
-                      active
-                        ? 'bg-card-active text-text-primary'
-                        : 'text-text-secondary hover:bg-surface/70 hover:text-text-primary',
-                    )}
-                  >
-                    <Icon size={12} strokeWidth={active ? 2.2 : 1.7} className="shrink-0 opacity-80" />
-                    <span className="truncate flex-1">{item.label}</span>
-                    <span className="text-[10px] tabular-nums opacity-50">{item.count}</span>
-                  </button>
-                );
-              })}
             </div>
             {/* Folders — above Smart collections */}
             {filteredTrees && filteredTrees.length > 0 && (
@@ -1257,7 +1199,7 @@ export default function FolderTree({
                                 onToggle={onToggleFolder}
                                 selectedPath={selectedPath}
                                 pinnedFolders={pinnedFolders}
-                                showImageCounts={showImageCounts && isHovering}
+                                showImageCounts={showImageCounts}
                                 isInstantTransition={isInstantTransition}
                                 folderIcons={folderIcons}
                               />
@@ -1265,43 +1207,42 @@ export default function FolderTree({
                           ))}
                         </AnimatePresence>
 
-                        <AnimatePresence initial={false}>
-                          {isHovering && !isSearching && (
-                            <motion.div
-                              layout="position"
-                              initial={{ opacity: 0, height: 0, overflow: 'hidden' }}
-                              animate={{ opacity: 1, height: 'auto', overflow: 'hidden' }}
-                              exit={{ opacity: 0, height: 0, overflow: 'hidden' }}
-                              transition={{ duration: 0.2 }}
-                            >
-                              <Text
-                                as="div"
-                                weight={TextWeights.medium}
-                                className="flex items-center gap-2 p-2 mt-1 rounded-md transition-colors transition-opacity opacity-70 hover:opacity-100 hover:bg-card-active cursor-pointer hover:text-text-primary"
-                                onClick={(e: React.MouseEvent) => {
-                                  e.stopPropagation();
-                                  onOpenFolder();
-                                }}
-                              >
-                                <div className="relative w-4 h-4 ml-1 shrink-0 flex items-center justify-center">
-                                  <Plus size={16} />
-                                </div>
-                                <span className="select-none">{t('library.folders.addFolder')}</span>
-                              </Text>
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
+                        {!isSearching && (
+                          <Text
+                            as="div"
+                            weight={TextWeights.medium}
+                            className="flex items-center gap-2 p-2 mt-1 rounded-md cursor-pointer hover:bg-card-active hover:text-text-primary"
+                            onClick={(e: React.MouseEvent) => {
+                              e.stopPropagation();
+                              onOpenFolder();
+                            }}
+                          >
+                            <div className="relative w-4 h-4 ml-1 shrink-0 flex items-center justify-center">
+                              <Plus size={16} />
+                            </div>
+                            <span className="select-none">{t('library.folders.addFolder')}</span>
+                          </Text>
+                        )}
                       </div>
                     </motion.div>
                   )}
                 </AnimatePresence>
               </>
             )}
-            <div className="px-1.5 pb-2 space-y-0.5">
-              <div className="pt-1.5 mt-1 border-t border-border-color/30">
-                <div className="px-2 pb-1 text-[9px] uppercase tracking-wider text-text-secondary/50">
+            <div className="order-last mt-auto pt-1 border-t border-border-color/30">
+              <button
+                type="button"
+                className="w-full px-2 py-1.5 text-[9px] uppercase tracking-wider text-text-secondary/70 flex items-center gap-1 hover:text-text-secondary"
+                onClick={() => setSmartOpen((v) => !v)}
+              >
+                {smartOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                <span className="flex-1 text-left">
                   {t('library.folders.smartCollections' as any, { defaultValue: 'Smart' })}
-                </div>
+                </span>
+              </button>
+              {smartOpen && (
+              <div className="px-1.5 pb-2 space-y-0.5">
+              <div>
                 <button
                   type="button"
                   onClick={() => {
@@ -4698,8 +4639,6 @@ export default function FolderTree({
                 </button>
 
               </div>
-            </div>
-            
 
             {/* LR Keyword List — hierarchical keywords from current library */}
             {keywordList.length > 0 && (
@@ -4839,6 +4778,9 @@ export default function FolderTree({
                 )}
               </div>
             )}
+              </div>
+              )}
+            </div>
 
             {recentFolders.length > 0 && (
               <div className="mt-2 pt-1 border-t border-border-color/20">
@@ -4934,7 +4876,7 @@ export default function FolderTree({
                                 onToggle={onToggleFolder}
                                 selectedPath={selectedPath}
                                 pinnedFolders={pinnedFolders}
-                                showImageCounts={showImageCounts && isHovering}
+                                showImageCounts={showImageCounts}
                                 isInstantTransition={isInstantTransition}
                                 folderIcons={folderIcons}
                               />
@@ -4988,7 +4930,7 @@ export default function FolderTree({
                                 onSelectAlbum={onSelectAlbum}
                                 onContextMenu={onAlbumContextMenu}
                                 selectedAlbumId={activeAlbumId}
-                                showImageCounts={showImageCounts && isHovering}
+                                showImageCounts={showImageCounts}
                               />
                             </motion.div>
                           ))}

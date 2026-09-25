@@ -14,15 +14,10 @@ import {
   Search,
   Users,
   LayoutGrid,
-  Columns,
-  Columns2,
-  GalleryHorizontalEnd,
   Expand,
   SlidersHorizontal,
   Rows3,
   Star,
-  ChevronRight,
-  ChevronUp,
 } from 'lucide-react';
 import CullingView from './library/CullingView';
 import CompareView from './library/CompareView';
@@ -143,21 +138,6 @@ function DisplayModeSwitch({ displayMode, setDisplayMode, t }: DisplayModeSwitch
         tooltip: t('library.viewMode.list', { defaultValue: 'List View' }),
       },
       {
-        id: LibraryDisplayMode.Cull,
-        Icon: Columns,
-        tooltip: t('library.viewMode.culling', { defaultValue: 'Culling View' }),
-      },
-      {
-        id: LibraryDisplayMode.Compare,
-        Icon: Columns2,
-        tooltip: t('library.viewMode.compare', { defaultValue: 'Compare View' }),
-      },
-      {
-        id: LibraryDisplayMode.Survey,
-        Icon: GalleryHorizontalEnd,
-        tooltip: t('library.viewMode.survey', { defaultValue: 'Survey View' }),
-      },
-      {
         id: LibraryDisplayMode.Loupe,
         Icon: Expand,
         tooltip: t('library.viewMode.loupe', { defaultValue: 'Loupe View' }),
@@ -170,7 +150,7 @@ function DisplayModeSwitch({ displayMode, setDisplayMode, t }: DisplayModeSwitch
   const safeIndex = selectedIndex >= 0 ? selectedIndex : 0;
 
   return (
-    <div className="flex items-center bg-surface/80 p-0.5 rounded-md border border-border-color/25 h-9 w-60 select-none">
+    <div className="flex items-center bg-surface/80 p-0.5 rounded-md border border-border-color/25 h-9 w-32 select-none">
       <div className="relative flex w-full h-full">
         <motion.div
           className="absolute top-0 bottom-0 z-0 bg-bg-primary rounded-md shadow-sm"
@@ -214,7 +194,11 @@ export default function MainLibrary(props: MainLibraryProps) {
   const [isProgressHovered, setIsProgressHovered] = useState(false);
   const isSettingsOpen = useUIStore((state) => state.isSettingsOpen);
 
-  const libraryDisplayMode = props.appSettings?.libraryDisplayMode || LibraryDisplayMode.Grid;
+  const rawDisplayMode = props.appSettings?.libraryDisplayMode || LibraryDisplayMode.Grid;
+  const libraryDisplayMode =
+    rawDisplayMode === LibraryDisplayMode.List || rawDisplayMode === LibraryDisplayMode.Loupe
+      ? rawDisplayMode
+      : LibraryDisplayMode.Grid;
 
   const setLibraryDisplayMode = (mode: LibraryDisplayMode) => {
     if (props.appSettings) {
@@ -375,7 +359,7 @@ export default function MainLibrary(props: MainLibraryProps) {
           <div className="text-center space-y-3">
             <Text as="div" className="text-text-secondary">
               {t('library.empty.noFolder' as any, {
-                defaultValue: 'Aucun dossier dans le catalogue. Utilisez « Import » (panneau de droite) pour ajouter vos photos.',
+                defaultValue: 'Ajoutez un dossier pour parcourir vos photos. Cochez celles à garder, puis Importer.',
               })}
             </Text>
             <button
@@ -403,141 +387,29 @@ export default function MainLibrary(props: MainLibraryProps) {
             {t('library.header.title')}
           </Text>
           {!props.isAndroid && (
-            <div className="flex items-center gap-2">
-              {props.currentFolderPath ? (
-                <nav
-                  className="flex items-center gap-0.5 min-w-0 max-w-full text-sm text-text-secondary overflow-hidden"
-                  aria-label={t('library.header.breadcrumb' as any, { defaultValue: 'Folder path' })}
-                >
-                  {(() => {
-                    const full = String(props.currentFolderPath);
-                    if (full.startsWith('Album: ')) {
-                      return (
-                        <span className="truncate text-text-primary font-medium" title={full}>
-                          {full}
-                        </span>
-                      );
-                    }
-                    const usesBackslash = full.includes('\\');
-                    const norm = full.replace(/\\/g, '/');
-                    const parts = norm.split('/').filter(Boolean);
-                    const crumbs: { label: string; path: string }[] = [];
-                    for (let i = 0; i < parts.length; i++) {
-                      let path: string;
-                      if (full.startsWith('/')) {
-                        path = '/' + parts.slice(0, i + 1).join('/');
-                      } else if (parts[0].endsWith(':')) {
-                        path =
-                          i === 0
-                            ? parts[0] + '/'
-                            : parts[0] + '/' + parts.slice(1, i + 1).join('/');
-                      } else {
-                        path = parts.slice(0, i + 1).join('/');
-                      }
-                      const nativePath = usesBackslash ? path.replace(/\//g, '\\') : path;
-                      crumbs.push({ label: parts[i], path: nativePath });
-                    }
-                    const visible = crumbs.length > 5 ? crumbs.slice(-4) : crumbs;
-                    const hidden = crumbs.length > 5;
-                    return (
-                      <>
-                        {hidden && (
-                          <>
-                            <span className="text-text-secondary/50 px-0.5">…</span>
-                            <ChevronRight size={12} className="shrink-0 opacity-40" />
-                          </>
-                        )}
-                        {visible.map((c, i) => {
-                          const isLast = i === visible.length - 1;
-                          return (
-                            <span key={c.path + '-' + i} className="flex items-center gap-0.5 min-w-0">
-                              {i > 0 && <ChevronRight size={12} className="shrink-0 opacity-40" />}
-                              {isLast ? (
-                                <span className="truncate text-text-primary font-medium" title={c.path}>
-                                  {c.label}
-                                </span>
-                              ) : (
-                                <button
-                                  type="button"
-                                  className="truncate hover:text-text-primary hover:underline max-w-[8rem]"
-                                  title={c.path}
-                                  onClick={() => {
-                                    window.dispatchEvent(
-                                      new CustomEvent('rustroom:navigate-folder', {
-                                        detail: { path: c.path, fromHistory: false },
-                                      }),
-                                    );
-                                  }}
-                                >
-                                  {c.label}
-                                </button>
-                              )}
-                            </span>
-                          );
-                        })}
-                      </>
-                    );
-                  })()}
-                </nav>
-              ) : (
-                <p className="text-sm invisible select-none pointer-events-none h-5 overflow-hidden"></p>
-              )}
-              {props.currentFolderPath && !String(props.currentFolderPath).startsWith('Album: ') && (
-                <button
-                  type="button"
-                  className="shrink-0 h-5 w-5 flex items-center justify-center rounded text-text-secondary hover:text-text-primary hover:bg-surface"
-                  data-tooltip={t('library.header.goParent' as any, {
-                    defaultValue: 'Parent folder (Alt+↑)',
-                  })}
-                  onClick={() => {
-                    const path = String(props.currentFolderPath || '');
-                    const usesBackslash = path.includes('\\');
-                    const norm = path.replace(/\\/g, '/').replace(/\/+$/, '');
-                    const parts = norm.split('/').filter(Boolean);
-                    if (parts.length <= 1) return;
-                    let parent: string;
-                    if (path.startsWith('/')) parent = '/' + parts.slice(0, -1).join('/');
-                    else if (parts[0].endsWith(':'))
-                      parent =
-                        parts.length === 2
-                          ? parts[0] + '/'
-                          : parts[0] + '/' + parts.slice(1, -1).join('/');
-                    else parent = parts.slice(0, -1).join('/');
-                    if (usesBackslash) parent = parent.replace(/\//g, '\\');
-                    window.dispatchEvent(
-                      new CustomEvent('rustroom:navigate-folder', {
-                        detail: { path: parent, fromHistory: false },
-                      }),
-                    );
-                  }}
-                >
-                  <ChevronUp size={14} />
-                </button>
+            <div
+              className={`flex items-center gap-2 overflow-hidden transition-all duration-300 whitespace-nowrap ${
+                isBusyDelayed ? 'max-w-xs opacity-100' : 'max-w-0 opacity-0'
+              }`}
+              onTransitionEnd={(e) => {
+                if (e.propertyName === 'opacity' && !isBusyDelayed) {
+                  setIsBusyLoaderMounted(false);
+                }
+              }}
+            >
+              {isBusyLoaderMounted && (
+                <Loader2 size={14} className="animate-spin text-text-secondary shrink-0" />
               )}
               <div
-                className={`flex items-center gap-2 overflow-hidden transition-all duration-300 whitespace-nowrap ${
-                  isBusyDelayed ? 'max-w-xs opacity-100' : 'max-w-0 opacity-0'
+                className={`flex items-center transition-all duration-300 ease-out overflow-hidden ${
+                  isProgressHovered && isBusyDelayed && (props.thumbnailProgress?.total ?? 0) > 0
+                    ? 'max-w-xs opacity-100'
+                    : 'max-w-0 opacity-0'
                 }`}
-                onTransitionEnd={(e) => {
-                  if (e.propertyName === 'opacity' && !isBusyDelayed) {
-                    setIsBusyLoaderMounted(false);
-                  }
-                }}
               >
-                {isBusyLoaderMounted && (
-                  <Loader2 size={14} className="animate-spin text-text-secondary shrink-0" />
-                )}
-                <div
-                  className={`flex items-center transition-all duration-300 ease-out overflow-hidden ${
-                    isProgressHovered && isBusyDelayed && (props.thumbnailProgress?.total ?? 0) > 0
-                      ? 'max-w-xs opacity-100'
-                      : 'max-w-0 opacity-0'
-                  }`}
-                >
-                  <Text variant={TextVariants.small} color={TextColors.secondary} className="whitespace-nowrap">
-                    ({props.thumbnailProgress?.current ?? 0}/{props.thumbnailProgress?.total ?? 0})
-                  </Text>
-                </div>
+                <Text variant={TextVariants.small} color={TextColors.secondary} className="whitespace-nowrap">
+                  ({props.thumbnailProgress?.current ?? 0}/{props.thumbnailProgress?.total ?? 0})
+                </Text>
               </div>
             </div>
           )}

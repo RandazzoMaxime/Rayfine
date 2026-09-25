@@ -21,6 +21,7 @@ import {
   FileUp,
   FolderInput,
   FolderPlus,
+  LayoutGrid,
   Plus,
   RefreshCw,
   Star,
@@ -89,7 +90,7 @@ interface PromptState {
 
 interface DevelopPresetListProps {
   /** Renders the collapsible section chrome (header action + body) of the Develop left panel. */
-  renderSection(action: ReactNode, body: ReactNode): ReactNode;
+  renderSection(action: ReactNode, body: ReactNode, titleAction?: ReactNode): ReactNode;
 }
 
 // ---------------------------------------------------------------------------
@@ -666,45 +667,6 @@ export default function DevelopPresetList({ renderSection }: DevelopPresetListPr
     ]);
   };
 
-  const onImportMenu = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    showContextMenu(rect.left, rect.bottom + 2, [
-      {
-        icon: FileUp,
-        label: t('ui.developLeft.importLr' as any, { defaultValue: 'Import Lightroom Presets (.xmp, .lrtemplate)' }),
-        submenu: [
-          {
-            label: t('ui.developLeft.importKeepGroups' as any, { defaultValue: 'Keep Lightroom groups' }),
-            onClick: () => importLightroom(null),
-          },
-          { type: OPTION_SEPARATOR },
-          ...groups.map((g) => ({
-            label: t('ui.developLeft.importInto' as any, { defaultValue: 'Into “{{name}}”', name: g.name }),
-            onClick: () => importLightroom(g.id),
-          })),
-          {
-            icon: FolderPlus,
-            label: t('ui.developLeft.importIntoNew' as any, { defaultValue: 'Into a new group…' }),
-            onClick: () => newGroupPrompt((gid) => importLightroom(gid)),
-          },
-        ],
-      },
-      {
-        icon: FileUp,
-        label: t('ui.developLeft.importRr' as any, { defaultValue: 'Import RapidRAW Presets (.rrpreset)…' }),
-        onClick: importRrPreset,
-      },
-      { type: OPTION_SEPARATOR },
-      {
-        icon: FolderPlus,
-        label: t('ui.developLeft.newGroupTitle' as any, { defaultValue: 'New Preset Group' }),
-        onClick: () => newGroupPrompt(),
-      },
-    ]);
-  };
-
   // ---------------------------------------------------------------- DnD
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
@@ -789,28 +751,78 @@ export default function DevelopPresetList({ renderSection }: DevelopPresetListPr
     onToggleFavorite: toggleFavorite,
   };
 
+  const onPlusMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    showContextMenu(rect.left, rect.bottom + 2, [
+      {
+        icon: FileUp,
+        label: t('ui.developLeft.importPresets' as any, { defaultValue: 'Importer preset' }),
+        submenu: [
+          {
+            icon: FileUp,
+            label: t('ui.developLeft.importLr' as any, {
+              defaultValue: 'Import Lightroom Presets (.xmp, .lrtemplate)',
+            }),
+            submenu: [
+              {
+                label: t('ui.developLeft.importKeepGroups' as any, { defaultValue: 'Keep Lightroom groups' }),
+                onClick: () => importLightroom(null),
+              },
+              { type: OPTION_SEPARATOR },
+              ...groups.map((g) => ({
+                label: t('ui.developLeft.importInto' as any, { defaultValue: 'Into “{{name}}”', name: g.name }),
+                onClick: () => importLightroom(g.id),
+              })),
+              {
+                icon: FolderPlus,
+                label: t('ui.developLeft.importIntoNew' as any, { defaultValue: 'Into a new group…' }),
+                onClick: () => newGroupPrompt((gid) => importLightroom(gid)),
+              },
+            ],
+          },
+          {
+            icon: FileUp,
+            label: t('ui.developLeft.importRr' as any, { defaultValue: 'Import RapidRAW Presets (.rrpreset)…' }),
+            onClick: importRrPreset,
+          },
+        ],
+      },
+      {
+        icon: Plus,
+        label: t('ui.developLeft.newPresetFromCurrent' as any, {
+          defaultValue: 'Create from current settings',
+        }),
+        disabled: !selectedImage,
+        onClick: () => setCreateState({ open: true, groupId: null }),
+      },
+    ]);
+  };
+
+  const titleAction = (
+    <button
+      type="button"
+      className="p-0.5 rounded text-text-secondary hover:text-text-primary hover:bg-card-active"
+      data-tooltip={t('ui.developLeft.presetBrowser' as any, { defaultValue: 'Preset Browser' })}
+      onClick={(e) => {
+        e.stopPropagation();
+        setUI({ isPresetBrowserOpen: true });
+      }}
+    >
+      <LayoutGrid size={13} />
+    </button>
+  );
+
   const action = (
-    <div className="flex items-center gap-0.5 pr-1">
-      <button
-        type="button"
-        className="p-1 rounded text-text-secondary hover:text-text-primary hover:bg-card-active"
-        data-tooltip={t('ui.developLeft.importPresets' as any, { defaultValue: 'Import presets…' })}
-        onClick={onImportMenu}
-      >
-        <FileUp size={13} />
-      </button>
-      <button
-        type="button"
-        className="p-1 rounded text-text-secondary hover:text-text-primary hover:bg-card-active disabled:opacity-40"
-        data-tooltip={t('ui.developLeft.newPresetFromCurrent' as any, {
-          defaultValue: 'Create preset from current settings',
-        })}
-        disabled={!selectedImage}
-        onClick={() => setCreateState({ open: true, groupId: null })}
-      >
-        <Plus size={14} />
-      </button>
-    </div>
+    <button
+      type="button"
+      className="p-1 rounded text-text-secondary hover:text-text-primary hover:bg-card-active"
+      data-tooltip={t('ui.developLeft.addPreset' as any, { defaultValue: 'Add preset' })}
+      onClick={onPlusMenu}
+    >
+      <Plus size={14} />
+    </button>
   );
 
   const body = (
@@ -826,11 +838,8 @@ export default function DevelopPresetList({ renderSection }: DevelopPresetListPr
       )}
       {isLoading && presets.length === 0 && <div className="text-[11px] text-text-secondary py-2">…</div>}
       {!isLoading && loaded && allFlat.length === 0 && groups.length === 0 && (
-        <div className="text-[11px] text-text-secondary py-2 space-y-1.5">
+        <div className="text-[11px] text-text-secondary py-2">
           <p>{t('ui.developLeft.noPresets' as any, { defaultValue: 'No presets yet.' })}</p>
-          <button type="button" className="text-accent underline text-[11px]" onClick={() => setUI({ isPresetBrowserOpen: true })}>
-            {t('ui.developLeft.browsePresets' as any, { defaultValue: 'Browse presets…' })}
-          </button>
         </div>
       )}
       {q && visibleGroups.length === 0 && favorites.length === 0 && (
@@ -932,5 +941,5 @@ export default function DevelopPresetList({ renderSection }: DevelopPresetListPr
     </>
   );
 
-  return <>{renderSection(action, body)}</>;
+  return <>{renderSection(action, body, titleAction)}</>;
 }

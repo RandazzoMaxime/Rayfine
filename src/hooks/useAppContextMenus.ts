@@ -9,7 +9,6 @@ import {
   Edit,
   FileEdit,
   FileInput,
-  FileOutput,
   Folder,
   FolderInput,
   FolderPlus,
@@ -57,8 +56,14 @@ import TaggingSubMenu from '../context/TaggingSubMenu';
 import { useEditorActions } from './useEditorActions';
 import { useLibraryActions } from './useLibraryActions';
 import { globalImageCache } from '../utils/ImageLRUCache';
-import { reimportDevelopFromXmpPath, reimportDevelopFromXmpPaths, exportDevelopToXmpPath, exportDevelopToXmpPaths } from '../utils/reimportXmp';
 import { findVirtualCopyStack, newStackId, stackTag, stackIdFromTags, STACK_TAG_PREFIX, findManualStack, captureTimeKey, groupPathsByCaptureTime, effectiveGroupId } from '../utils/imageGrouping';
+import {
+  UNCATEGORIZED_ALBUM_ID,
+  albumsContainingPath,
+  albumDisplayName,
+  persistRemovedFromCatalog,
+  removePathsFromAlbumTree,
+} from '../utils/catalogMembership';
 
 
 export interface UseAppContextMenusProps {
@@ -79,14 +84,21 @@ export interface UseAppContextMenusProps {
     expandParents?: boolean,
     preserveEditor?: boolean,
   ) => Promise<void> | void;
+  handleSelectAlbum?: (albumId: string, albumName: string, imagePaths: string[], preserveEditor?: boolean) => Promise<void> | void;
 }
 
 export function useAppContextMenus(props: UseAppContextMenusProps) {
   const { t } = useTranslation();
   const { showContextMenu } = useContextMenu();
 
-  const { handleAutoAdjustments, handleResetAdjustments, handleCopyAdjustments, handlePasteAdjustments } =
-    useEditorActions();
+  const {
+    handleAutoAdjustments,
+    handleResetAdjustments,
+    handleCopyAdjustments,
+    handlePasteAdjustments,
+    handleSyncSettings,
+    handleRotate,
+  } = useEditorActions();
   const { handleRate, handleSetColorLabel, handleTagsChanged } = useLibraryActions();
 
   const albumIcons = useMemo(
@@ -188,7 +200,7 @@ export function useAppContextMenus(props: UseAppContextMenusProps) {
         {
           label: t('contextMenus.editor.exportImage'),
           icon: FileInput,
-          onClick: () => setRightPanel(Panel.Export),
+          onClick: () => setUI({ isExportModalOpen: true }),
         },
         { type: OPTION_SEPARATOR },
         { label: t('contextMenus.editor.undo'), icon: Undo, onClick: undo, disabled: !canUndo },
@@ -197,7 +209,7 @@ export function useAppContextMenus(props: UseAppContextMenusProps) {
         {
           label: t('contextMenus.editor.copyAdjustments'),
           icon: Copy,
-          onClick: () => handleCopyAdjustments(),
+          onClick: () => setUI({ isCopyPasteSettingsModalOpen: true }),
         },
         {
           label: t('contextMenus.editor.pasteAdjustments'),
@@ -293,42 +305,6 @@ export function useAppContextMenus(props: UseAppContextMenusProps) {
           ],
         },
         { type: OPTION_SEPARATOR },
-        {
-          label: t('contextMenus.editor.reimportXmp'),
-          icon: FileInput,
-          onClick: async () => {
-            if (!selectedImage?.path) return;
-            try {
-              await reimportDevelopFromXmpPath(selectedImage.path);
-              toast.success(t('contextMenus.toasts.reimportedXmp'));
-            } catch (err) {
-              toast.error(String(err));
-            }
-          },
-        },
-        {
-          label: t('contextMenus.editor.exportDevelopXmp'),
-          icon: FileOutput,
-          onClick: async () => {
-            if (!selectedImage?.path) return;
-            try {
-              await exportDevelopToXmpPath(selectedImage.path);
-              toast.success(t('contextMenus.toasts.exportedDevelopXmp'));
-            } catch (err) {
-              toast.error(String(err));
-            }
-          },
-        },
-        {
-          label: t('contextMenus.editor.showXmp'),
-          icon: Folder,
-          onClick: () => {
-            if (!selectedImage?.path) return;
-            invoke(Invokes.ShowXmpSidecar, { path: selectedImage.path }).catch(() =>
-              toast.error(t('contextMenus.toasts.xmpNotFound')),
-            );
-          },
-        },
         {
           label: t('contextMenus.editor.resetAdjustments'),
           icon: RotateCcw,
@@ -556,10 +532,10 @@ export function useAppContextMenus(props: UseAppContextMenusProps) {
             props.handleImageSelect(path);
           }
           setLibrary({ multiSelectedPaths: finalSelection });
-          setRightPanel(Panel.Export);
+          setUI({ isExportModalOpen: true });
         } else {
           setLibrary({ multiSelectedPaths: finalSelection });
-          setUI({ isLibraryExportPanelVisible: true });
+          setUI({ isExportModalOpen: true });
         }
       };
 
@@ -604,83 +580,160 @@ export function useAppContextMenus(props: UseAppContextMenusProps) {
         }
       };
 
-      const options = [
-        ...(!isEditingThisImage
-          ? [
-              {
-                disabled: !isSingleSelection,
-                icon: Edit,
-                label: t('contextMenus.editor.editImage'),
-                onClick: () => props.handleImageSelect(finalSelection[0]),
-              },
-              { icon: FileInput, label: exportLabel, onClick: onExportClick },
-              { type: OPTION_SEPARATOR },
-            ]
-          : [{ icon: FileInput, label: exportLabel, onClick: onExportClick }, { type: OPTION_SEPARATOR }]),
+      const physicalPath = (p: string) => String(p || '').split('?vc=')[0];
+      const containingAlbums = isSingleSelection
+        ? albumsContainingPath(albumTree, finalSelection[0])
+        : [];
+
+      const rotateSelection = (clockwise: boolean) => {
+        const deg = clockwise ? 90 : -90;
+        const delta = clockwise ? 1 : 3;
+        if (selectedImage && finalSelection.includes(selectedImage.path)) {
+          handleRotate(deg);
+        }
+        const others = finalSelection.filter((p) => p !== selectedImage?.path);
+        if (others.length) {
+          invoke(Invokes.ApplyRelativeAdjustmentsToPaths, {
+            paths: others,
+            deltas: { orientationSteps: delta },
+          }).catch((err: any) => toast.error(String(err)));
+        }
+      };
+
+      const removeFromCatalog = async () => {
+        persistRemovedFromCatalog(finalSelection);
+        try {
+          const nextTree = removePathsFromAlbumTree(
+            JSON.parse(JSON.stringify(albumTree)),
+            finalSelection,
+          );
+          await invoke(Invokes.SaveAlbums, { tree: nextTree });
+          const sortedTree = await invoke<AlbumItem[]>(Invokes.GetAlbums);
+          const drop = new Set(finalSelection);
+          setLibrary({
+            albumTree: sortedTree,
+            imageList: imageList.filter((i) => !drop.has(i.path)),
+            multiSelectedPaths: (useLibraryStore.getState().multiSelectedPaths || []).filter(
+              (p) => !drop.has(p),
+            ),
+            libraryActivePath: drop.has(useLibraryStore.getState().libraryActivePath || '')
+              ? null
+              : useLibraryStore.getState().libraryActivePath,
+          });
+          if (selectedImage && drop.has(selectedImage.path)) {
+            props.handleBackToLibrary();
+          }
+        } catch (e) {
+          toast.error(t('contextMenus.toasts.failedRemoveImages', { err: e }));
+        }
+      };
+
+      const options: any[] = [
         {
           disabled: !isSingleSelection,
-          icon: Copy,
-          label: t('contextMenus.editor.copyAdjustments'),
-          onClick: () => handleCopyAdjustments(finalSelection[0]),
+          icon: Folder,
+          label: t('contextMenus.thumbnail.showExplorer'),
+          onClick: () => {
+            invoke(Invokes.ShowInFinder, { path: finalSelection[0] }).catch((err) =>
+              toast.error(t('contextMenus.toasts.couldNotShowExplorer', { err })),
+            );
+          },
         },
         {
-          disabled: copiedAdjustments === null,
-          icon: ClipboardPaste,
-          label: pasteLabel,
-          onClick: () => handlePasteAdjustments(finalSelection),
+          disabled: !isSingleSelection,
+          icon: Folder,
+          label: t('contextMenus.thumbnail.goToLibraryFolder' as any, {
+            defaultValue: 'Go to Folder in Library',
+          }),
+          onClick: () => {
+            const filePath = finalSelection[0];
+            const physical = physicalPath(filePath);
+            const sep = physical.includes('/') ? '/' : '\\';
+            const last = physical.lastIndexOf(sep);
+            if (last <= 0) return;
+            const folder = physical.substring(0, last);
+            useLibraryStore.getState().setLibrary({
+              showPreviousImportOnly: false,
+              showQuickCollectionOnly: false,
+              showSelectedOnly: false,
+              activeAlbumId: null,
+            });
+            if (props.handleSelectSubfolder) {
+              Promise.resolve(props.handleSelectSubfolder(folder, false, undefined, true, false)).catch(
+                (err) => toast.error(String(err)),
+              );
+            } else {
+              useLibraryStore.getState().setLibrary({ currentFolderPath: folder });
+            }
+            props.handleBackToLibrary();
+          },
         },
         {
-          label: t('contextMenus.editor.productivity'),
-          icon: Gauge,
+          disabled: !isSingleSelection || containingAlbums.length === 0,
+          icon: Folder,
+          label: t('contextMenus.thumbnail.goToCollection' as any, {
+            defaultValue: 'Go to Collection',
+          }),
+          submenu:
+            containingAlbums.length > 0
+              ? containingAlbums.map((album) => ({
+                  label: albumDisplayName(album),
+                  onClick: () => {
+                    if (props.handleSelectAlbum) {
+                      void props.handleSelectAlbum(album.id, album.name, album.images || []);
+                    }
+                  },
+                }))
+              : [{ label: t('contextMenus.thumbnail.noAlbums'), disabled: true }],
+        },
+        { type: OPTION_SEPARATOR },
+        {
+          disabled: !isSingleSelection,
+          icon: Edit,
+          label: t('contextMenus.thumbnail.editIn' as any, { defaultValue: 'Edit In' }),
           submenu: [
-            { label: autoAdjustLabel, icon: Aperture, onClick: handleApplyAutoAdjustmentsToSelection },
             {
-              label: denoiseLabel,
-              icon: Grip,
-              disabled: finalSelection.length === 0,
-              onClick: () => {
-                setUI({
-                  denoiseModalState: {
-                    isOpen: true,
-                    isProcessing: false,
-                    previewBase64: null,
-                    error: null,
-                    targetPaths: finalSelection,
-                    progressMessage: null,
-                    isRaw: selectedImage?.isRaw || false,
-                  },
-                });
+              label: t('contextMenus.thumbnail.editInDefault' as any, {
+                defaultValue: 'Default application',
+              }),
+              onClick: async () => {
+                try {
+                  const { open } = await import('@tauri-apps/plugin-shell');
+                  await open(physicalPath(finalSelection[0]));
+                } catch (err) {
+                  toast.error(String(err));
+                }
               },
             },
             {
-              label: conversionLabel,
-              icon: Film,
-              disabled: selectionCount === 0,
-              onClick: () => {
-                setUI({ negativeModalState: { isOpen: true, targetPaths: finalSelection } });
+              label: t('contextMenus.thumbnail.editInChoose' as any, {
+                defaultValue: 'Choose application…',
+              }),
+              onClick: async () => {
+                try {
+                  const { open: openDialog } = await import('@tauri-apps/plugin-dialog');
+                  const appPath = await openDialog({
+                    multiple: false,
+                    filters: [{ name: 'Applications', extensions: ['exe', 'app'] }],
+                  });
+                  if (!appPath || typeof appPath !== 'string') return;
+                  const { Command } = await import('@tauri-apps/plugin-shell');
+                  await Command.create(appPath, [physicalPath(finalSelection[0])]).spawn();
+                } catch (err) {
+                  toast.error(String(err));
+                }
               },
             },
-            {
-              disabled: selectionCount < 2 || selectionCount > 30,
-              icon: SquaresUnite,
-              label: stitchLabel,
-              onClick: () => {
-                setUI({
-                  panoramaModalState: {
-                    error: null,
-                    finalImageBase64: null,
-                    isOpen: true,
-                    isProcessing: false,
-                    progressMessage: null,
-                    stitchingSourcePaths: finalSelection,
-                  },
-                });
-              },
-            },
+          ],
+        },
+        {
+          icon: Images,
+          label: t('contextMenus.thumbnail.photoMerge' as any, { defaultValue: 'Photo Merge' }),
+          submenu: [
             {
               disabled: selectionCount < 2 || selectionCount > 9,
               icon: Images,
-              label: mergeLabel,
+              label: t('contextMenus.editor.mergeHdr'),
               onClick: () => {
                 setUI({
                   hdrModalState: {
@@ -695,805 +748,39 @@ export function useAppContextMenus(props: UseAppContextMenusProps) {
               },
             },
             {
-              icon: LayoutTemplate,
-              label: collageLabel,
+              disabled: selectionCount < 2 || selectionCount > 30,
+              icon: SquaresUnite,
+              label: t('contextMenus.editor.stitchPanorama'),
               onClick: () => {
-                const imagesForCollage = imageList.filter((img) => finalSelection.includes(img.path));
-                setUI({ collageModalState: { isOpen: true, sourceImages: imagesForCollage } });
-              },
-              disabled: selectionCount === 0 || selectionCount > 9,
-            },
-            {
-              label: cullLabel,
-              icon: Users,
-              onClick: () =>
                 setUI({
-                  cullingModalState: {
-                    isOpen: true,
-                    progress: null,
-                    suggestions: null,
+                  panoramaModalState: {
                     error: null,
-                    pathsToCull: finalSelection,
+                    finalImageBase64: null,
+                    isOpen: true,
+                    isProcessing: false,
+                    progressMessage: null,
+                    stitchingSourcePaths: finalSelection,
                   },
-                }),
-              disabled: selectionCount < 2,
+                });
+              },
             },
           ],
         },
         { type: OPTION_SEPARATOR },
-        {
-          label: copyLabel,
-          icon: Copy,
-          onClick: () => {
-            setProcess({ copiedFilePaths: finalSelection, isCopied: true });
-          },
-        },
         {
           icon: CopyPlus,
-          label: t('contextMenus.thumbnail.duplicateImage'),
-          disabled: !isSingleSelection,
+          label: t('contextMenus.thumbnail.stacking' as any, { defaultValue: 'Stacking' }),
           submenu: [
             {
-              label: t('contextMenus.thumbnail.physicalCopy'),
-              icon: Copy,
+              disabled: finalSelection.length < 2,
+              label: t('contextMenus.thumbnail.stackPhotos' as any, { defaultValue: 'Group into Stack' }),
               onClick: async () => {
-                try {
-                  await invoke(Invokes.DuplicateFile, {
-                    path: finalSelection[0],
-                    targetAlbumId: activeAlbumId || null,
-                  });
-                  if (activeAlbumId) {
-                    const sortedTree = await invoke<AlbumItem[]>(Invokes.GetAlbums);
-                    setLibrary({ albumTree: sortedTree });
-                  }
-                  await props.refreshImageList();
-                } catch (err) {
-                  console.error('Failed to duplicate file:', err);
-                  toast.error(t('contextMenus.toasts.failedDuplicate', { err }));
-                }
-              },
-            },
-            {
-              label: t('contextMenus.thumbnail.virtualCopy' as any, {
-                defaultValue:
-                  finalSelection.length > 1
-                    ? `Create ${finalSelection.length} virtual copies`
-                    : 'Create virtual copy',
-              }),
-              icon: CopyPlus,
-              disabled: finalSelection.length === 0,
-              onClick: () => handleCreateVirtualCopy(finalSelection),
-            },
-            {
-              disabled: !isSingleSelection || findVirtualCopyStack(imageList, finalSelection[0]).length < 2,
-              label: t('contextMenus.thumbnail.nextVirtualCopy' as any, {
-                defaultValue: 'Next virtual copy',
-              }),
-              onClick: () => {
-                const stack = findVirtualCopyStack(imageList, finalSelection[0]);
-                if (stack.length < 2) return;
-                const idx = stack.findIndex((img: any) => img.path === finalSelection[0]);
-                const next = stack[(idx < 0 ? 0 : idx + 1) % stack.length];
-                setLibrary({
-                  multiSelectedPaths: [next.path],
-                  libraryActivePath: next.path,
-                  selectionAnchorPath: next.path,
-                });
-                // Develop: open path
-                try {
-                  window.dispatchEvent(
-                    new CustomEvent('rustroom:open-image', { detail: { path: next.path } }),
-                  );
-                } catch {
-                  /* ignore */
-                }
-              },
-            },
-            {
-              disabled: !isSingleSelection || findVirtualCopyStack(imageList, finalSelection[0]).length < 2,
-              label: t('contextMenus.thumbnail.prevVirtualCopy' as any, {
-                defaultValue: 'Previous virtual copy',
-              }),
-              onClick: () => {
-                const stack = findVirtualCopyStack(imageList, finalSelection[0]);
-                if (stack.length < 2) return;
-                const idx = stack.findIndex((img: any) => img.path === finalSelection[0]);
-                const prev = stack[(idx < 0 ? 0 : idx - 1 + stack.length) % stack.length];
-                setLibrary({
-                  multiSelectedPaths: [prev.path],
-                  libraryActivePath: prev.path,
-                  selectionAnchorPath: prev.path,
-                });
-                try {
-                  window.dispatchEvent(
-                    new CustomEvent('rustroom:open-image', { detail: { path: prev.path } }),
-                  );
-                } catch {
-                  /* ignore */
-                }
-              },
-            },
-          ],
-        },
-        { icon: FileEdit, label: renameLabel, onClick: () => props.handleRenameFiles(finalSelection) },
-        { type: OPTION_SEPARATOR },
-        {
-          icon: Star,
-          label: t('contextMenus.editor.rating'),
-          submenu: [0, 1, 2, 3, 4, 5].map((rating: number) => ({
-            label:
-              rating === 0
-                ? t('contextMenus.editor.noRating')
-                : t('contextMenus.editor.ratingLabel', { count: rating }),
-            onClick: () => handleRate(rating, finalSelection),
-          })),
-        },
-        {
-          label: t('contextMenus.editor.colorLabel'),
-          icon: Palette,
-          submenu: [
-            { label: t('contextMenus.editor.noLabel'), onClick: () => handleSetColorLabel(null, finalSelection) },
-            ...COLOR_LABELS.map((label: Color) => ({
-              label: t(`contextMenus.colors.${label.name}`),
-              color: label.color,
-              onClick: () => handleSetColorLabel(label.name, finalSelection),
-            })),
-          ],
-        },
-        {
-          label: t('contextMenus.editor.tagging'),
-          icon: Tag,
-          submenu: [
-            {
-              customComponent: TaggingSubMenu,
-              customProps: {
-                paths: finalSelection,
-                initialTags: commonTags,
-                onTagsChanged: handleTagsChanged,
-                appSettings,
-              },
-            },
-          ],
-        },
-        { type: OPTION_SEPARATOR },
-        {
-          label: t('contextMenus.thumbnail.quickCollection' as any, {
-            defaultValue: 'Quick Collection',
-          }),
-          icon: Star,
-          submenu: [
-            {
-              label: t('contextMenus.thumbnail.addToQuickCollection' as any, {
-                defaultValue: 'Add to Quick Collection',
-              }),
-              onClick: () => {
-                const lib = useLibraryStore.getState();
-                const set = new Set(lib.quickCollectionPaths || []);
-                finalSelection.forEach((p) => set.add(p));
-                lib.setLibrary({ quickCollectionPaths: Array.from(set) });
-              },
-            },
-            {
-              label: t('contextMenus.thumbnail.removeFromQuickCollection' as any, {
-                defaultValue: 'Remove from Quick Collection',
-              }),
-              onClick: () => {
-                const lib = useLibraryStore.getState();
-                const set = new Set(lib.quickCollectionPaths || []);
-                finalSelection.forEach((p) => set.delete(p));
-                lib.setLibrary({
-                  quickCollectionPaths: Array.from(set),
-                  showQuickCollectionOnly:
-                    lib.showQuickCollectionOnly && set.size > 0 ? lib.showQuickCollectionOnly : false,
-                });
-              },
-            },
-            {
-              label: t('contextMenus.thumbnail.showQuickCollection' as any, {
-                defaultValue: 'Show Quick Collection',
-              }),
-              onClick: () => {
-                useLibraryStore.getState().setLibrary({
-                  showQuickCollectionOnly: true,
-                  showPreviousImportOnly: false,
-                  activeAlbumId: null,
-                });
-              },
-            },
-            {
-              label: t('contextMenus.thumbnail.clearQuickCollection' as any, {
-                defaultValue: 'Clear Quick Collection',
-              }),
-              onClick: () => {
-                useLibraryStore.getState().setLibrary({
-                  quickCollectionPaths: [],
-                  showQuickCollectionOnly: false,
-                });
-              },
-            },
-          ],
-        },
-        {
-          label: t('contextMenus.thumbnail.addAllPicksToTarget' as any, {
-            defaultValue: 'Add all picks to target collection',
-          }),
-          onClick: async () => {
-            const lib = useLibraryStore.getState();
-            const picks = (lib.imageList || [])
-              .filter((img: any) =>
-                (img.tags || []).some(
-                  (tg: string) => tg === 'flag:pick' || String(tg).endsWith(':pick'),
-                ),
-              )
-              .map((img: any) => img.path);
-            if (!picks.length) {
-              toast.info(
-                t('contextMenus.toasts.noPicks' as any, { defaultValue: 'No picks in current view' }),
-              );
-              return;
-            }
-            const targetId = lib.targetCollectionId;
-            if (!targetId) {
-              const current = new Set(lib.quickCollectionPaths || []);
-              picks.forEach((p: string) => current.add(p));
-              lib.setLibrary({ quickCollectionPaths: Array.from(current) });
-              toast.success(
-                t('contextMenus.toasts.picksAddedQc' as any, {
-                  defaultValue: 'Added {{count}} pick(s) to Quick Collection',
-                  count: picks.length,
-                }),
-              );
-              return;
-            }
-            try {
-              const tree = structuredClone(lib.albumTree || []);
-              const find = (nodes: any[]): any => {
-                for (const n of nodes) {
-                  if (n.id === targetId && n.type === 'album') return n;
-                  if (n.type === 'group') {
-                    const f = find(n.children || []);
-                    if (f) return f;
-                  }
-                }
-                return null;
-              };
-              const album = find(tree);
-              if (!album) {
-                toast.error('Target collection not found');
-                return;
-              }
-              const set = new Set(album.images || []);
-              picks.forEach((p: string) => set.add(p));
-              album.images = Array.from(set);
-              await invoke(Invokes.SaveAlbums, { tree });
-              const sorted = await invoke(Invokes.GetAlbums);
-              lib.setLibrary({ albumTree: sorted as any });
-              toast.success(
-                t('contextMenus.toasts.picksAddedTarget' as any, {
-                  defaultValue: 'Added {{count}} pick(s) to target collection',
-                  count: picks.length,
-                }),
-              );
-            } catch (err) {
-              toast.error(`Failed: ${err}`);
-            }
-          },
-        },
-
-        {
-          label: t('contextMenus.thumbnail.addToAlbum'),
-          icon: FolderPlus,
-          submenu:
-            albumTree.length > 0
-              ? buildAddToAlbumMenu(albumTree, finalSelection)
-              : [{ label: t('contextMenus.thumbnail.noAlbums'), disabled: true }],
-        },
-        {
-          disabled: finalSelection.length === 0,
-          label: t('contextMenus.thumbnail.createCollectionFromSelection' as any, {
-            defaultValue: 'Create Collection from Selection…',
-          }),
-          icon: FolderPlus,
-          onClick: () => {
-            setUI({
-              albumActionTarget: null,
-              pendingAlbumSeedPaths: [...finalSelection],
-              isCreateAlbumModalOpen: true,
-            });
-          },
-        },
-        ...(activeAlbumId
-          ? [
-              {
-                label: t('contextMenus.thumbnail.removeFromAlbum', { count: selectionCount }),
-                icon: Trash2,
-                isDestructive: true,
-                onClick: handleRemoveFromAlbum,
-              },
-            ]
-          : []),
-        { type: OPTION_SEPARATOR },
-        {
-          disabled: !isSingleSelection,
-          label: t('contextMenus.thumbnail.selectSameCamera' as any, {
-            defaultValue: 'Select same camera',
-          }),
-          onClick: () => {
-            const active = imageList.find((i: any) => i.path === finalSelection[0]);
-            if (!active?.exif) return;
-            const key = `${active.exif.Make || ''} ${active.exif.Model || ''}`.toLowerCase().trim();
-            if (!key) return;
-            const paths = imageList
-              .filter((img: any) => {
-                const cam = `${img.exif?.Make || ''} ${img.exif?.Model || ''}`.toLowerCase().trim();
-                return cam && cam === key;
-              })
-              .map((img: any) => img.path);
-            setLibrary({
-              multiSelectedPaths: paths,
-              libraryActivePath: paths.length ? paths[paths.length - 1] : finalSelection[0],
-              selectionAnchorPath: paths.length ? paths[0] : null,
-              showSelectedOnly: false,
-            });
-          },
-        },
-        {
-          disabled: !isSingleSelection,
-          label: t('contextMenus.thumbnail.selectSameLens' as any, {
-            defaultValue: 'Select same lens',
-          }),
-          onClick: () => {
-            const active = imageList.find((i: any) => i.path === finalSelection[0]);
-            if (!active?.exif) return;
-            const key = `${active.exif.LensModel || active.exif.Lens || ''}`.toLowerCase().trim();
-            if (!key) return;
-            const paths = imageList
-              .filter((img: any) => {
-                const lens = `${img.exif?.LensModel || img.exif?.Lens || ''}`.toLowerCase().trim();
-                return lens && lens === key;
-              })
-              .map((img: any) => img.path);
-            setLibrary({
-              multiSelectedPaths: paths,
-              libraryActivePath: paths.length ? paths[paths.length - 1] : finalSelection[0],
-              selectionAnchorPath: paths.length ? paths[0] : null,
-              showSelectedOnly: false,
-            });
-          },
-        },
-
-        {
-          disabled: !isSingleSelection,
-          label: t('contextMenus.thumbnail.selectSameColor' as any, {
-            defaultValue: 'Select same color label',
-          }),
-          onClick: () => {
-            const active = imageList.find((i: any) => i.path === finalSelection[0]);
-            if (!active) return;
-            const color =
-              (active.tags || []).find((tag: string) => tag.startsWith('color:'))?.substring(6) || '';
-            const paths = imageList
-              .filter((img: any) => {
-                const c =
-                  (img.tags || []).find((tag: string) => tag.startsWith('color:'))?.substring(6) || '';
-                return color ? c === color : !c;
-              })
-              .map((img: any) => img.path);
-            setLibrary({
-              multiSelectedPaths: paths,
-              libraryActivePath: paths.length ? paths[paths.length - 1] : finalSelection[0],
-              selectionAnchorPath: paths.length ? paths[0] : null,
-              showSelectedOnly: false,
-            });
-          },
-        },
-        {
-          disabled: !isSingleSelection,
-          label: t('contextMenus.thumbnail.selectSameDay' as any, {
-            defaultValue: 'Select same capture day',
-          }),
-          onClick: () => {
-            const active = imageList.find((i: any) => i.path === finalSelection[0]);
-            if (!active) return;
-            const dayOf = (img: any) => {
-              const raw = String(img.exif?.DateTimeOriginal || img.exif?.DateTime || '').trim();
-              const m = raw.match(/(\d{4})[:\-](\d{2})[:\-](\d{2})/);
-              if (m) return `${m[1]}-${m[2]}-${m[3]}`;
-              if (img.modified) {
-                const d = new Date(img.modified * (img.modified < 1e12 ? 1000 : 1));
-                if (!Number.isNaN(d.getTime())) {
-                  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-                }
-              }
-              return '';
-            };
-            const key = dayOf(active);
-            if (!key) return;
-            const paths = imageList.filter((img: any) => dayOf(img) === key).map((img: any) => img.path);
-            setLibrary({
-              multiSelectedPaths: paths,
-              libraryActivePath: paths.length ? paths[paths.length - 1] : finalSelection[0],
-              selectionAnchorPath: paths.length ? paths[0] : null,
-              showSelectedOnly: false,
-            });
-          },
-        },
-        {
-          disabled: !isSingleSelection,
-          label: t('contextMenus.thumbnail.selectSameKeyword' as any, {
-            defaultValue: 'Select same keyword',
-          }),
-          onClick: () => {
-            const active = imageList.find((i: any) => i.path === finalSelection[0]);
-            if (!active) return;
-            const userTags = (active.tags || [])
-              .filter((tg: string) => tg.startsWith('user:'))
-              .map((tg: string) => tg.slice(5).toLowerCase())
-              .filter(Boolean);
-            if (!userTags.length) return;
-            const pick = userTags[0];
-            const paths = imageList
-              .filter((img: any) =>
-                (img.tags || []).some(
-                  (tg: string) =>
-                    tg.toLowerCase() === `user:${pick}` ||
-                    tg.toLowerCase().replace(/^user:/, '') === pick,
-                ),
-              )
-              .map((img: any) => img.path);
-            useLibraryStore.getState().setFilterCriteria((prev: any) => ({ ...prev, keyword: pick }));
-            setLibrary({
-              multiSelectedPaths: paths,
-              libraryActivePath: paths.length ? paths[paths.length - 1] : finalSelection[0],
-              selectionAnchorPath: paths.length ? paths[0] : null,
-              showSelectedOnly: false,
-            });
-          },
-        },
-        {
-          disabled: !isSingleSelection,
-          label: t('contextMenus.thumbnail.selectSameIso' as any, {
-            defaultValue: 'Select same ISO',
-          }),
-          onClick: () => {
-            const active = imageList.find((i: any) => i.path === finalSelection[0]);
-            if (!active?.exif) return;
-            const isoOf = (img: any) => {
-              const raw = String(
-                img.exif?.PhotographicSensitivity || img.exif?.ISOSpeedRatings || img.exif?.ISO || '',
-              ).trim();
-              const n = parseInt(raw, 10);
-              return Number.isFinite(n) && n > 0 ? n : 0;
-            };
-            const key = isoOf(active);
-            if (!key) return;
-            const paths = imageList.filter((img: any) => isoOf(img) === key).map((img: any) => img.path);
-            setLibrary({
-              multiSelectedPaths: paths,
-              libraryActivePath: paths.length ? paths[paths.length - 1] : finalSelection[0],
-              selectionAnchorPath: paths.length ? paths[0] : null,
-              showSelectedOnly: false,
-            });
-          },
-        },
-        {
-          disabled: !isSingleSelection,
-          label: t('contextMenus.thumbnail.selectSameAperture' as any, {
-            defaultValue: 'Select same aperture',
-          }),
-          onClick: () => {
-            const active = imageList.find((i: any) => i.path === finalSelection[0]);
-            if (!active?.exif) return;
-            const aperOf = (img: any) => {
-              const raw = String(img.exif?.FNumber || '')
-                .trim()
-                .toLowerCase()
-                .replace(/^f\/?/, '');
-              const n = parseFloat(raw);
-              return Number.isFinite(n) && n > 0 ? Math.round(n * 10) / 10 : 0;
-            };
-            const key = aperOf(active);
-            if (!key) return;
-            const paths = imageList.filter((img: any) => aperOf(img) === key).map((img: any) => img.path);
-            setLibrary({
-              multiSelectedPaths: paths,
-              libraryActivePath: paths.length ? paths[paths.length - 1] : finalSelection[0],
-              selectionAnchorPath: paths.length ? paths[0] : null,
-              showSelectedOnly: false,
-            });
-          },
-        },
-        {
-          disabled: !isSingleSelection,
-          label: t('contextMenus.thumbnail.selectSameFocal' as any, {
-            defaultValue: 'Select same focal length',
-          }),
-          onClick: () => {
-            const active = imageList.find((i: any) => i.path === finalSelection[0]);
-            if (!active?.exif) return;
-            const focalOf = (img: any) => {
-              const raw = String(img.exif?.FocalLengthIn35mmFilm || img.exif?.FocalLength || '')
-                .trim()
-                .toLowerCase()
-                .replace(/\s*mm$/, '');
-              const n = parseFloat(raw);
-              return Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
-            };
-            const key = focalOf(active);
-            if (!key) return;
-            const paths = imageList.filter((img: any) => focalOf(img) === key).map((img: any) => img.path);
-            setLibrary({
-              multiSelectedPaths: paths,
-              libraryActivePath: paths.length ? paths[paths.length - 1] : finalSelection[0],
-              selectionAnchorPath: paths.length ? paths[0] : null,
-              showSelectedOnly: false,
-            });
-          },
-        },
-        {
-          disabled: !isSingleSelection,
-          label: t('contextMenus.thumbnail.selectSameShutter' as any, {
-            defaultValue: 'Select same shutter speed',
-          }),
-          onClick: () => {
-            const active = imageList.find((i: any) => i.path === finalSelection[0]);
-            if (!active?.exif) return;
-            const shutterOf = (img: any) => {
-              const raw = String(img.exif?.ExposureTime || '')
-                .trim()
-                .toLowerCase()
-                .replace(/\s*s$/, '')
-                .replace(/\s+/g, '');
-              return raw;
-            };
-            const key = shutterOf(active);
-            if (!key) return;
-            const paths = imageList.filter((img: any) => shutterOf(img) === key).map((img: any) => img.path);
-            setLibrary({
-              multiSelectedPaths: paths,
-              libraryActivePath: paths.length ? paths[paths.length - 1] : finalSelection[0],
-              selectionAnchorPath: paths.length ? paths[0] : null,
-              showSelectedOnly: false,
-            });
-          },
-        },
-        {
-          disabled: !isSingleSelection,
-          label: t('contextMenus.thumbnail.selectSameCity' as any, {
-            defaultValue: 'Select same city',
-          }),
-          onClick: () => {
-            const active = imageList.find((i: any) => i.path === finalSelection[0]);
-            if (!active?.exif) return;
-            const city = String(active.exif.City || '').trim();
-            if (!city) return;
-            const key = city.toLowerCase();
-            const paths = imageList
-              .filter((img: any) => String(img.exif?.City || '').trim().toLowerCase() === key)
-              .map((img: any) => img.path);
-            useLibraryStore.getState().setFilterCriteria((prev: any) => ({ ...prev, city }));
-            setLibrary({
-              multiSelectedPaths: paths,
-              libraryActivePath: paths.length ? paths[paths.length - 1] : finalSelection[0],
-              selectionAnchorPath: paths.length ? paths[0] : null,
-              showSelectedOnly: false,
-            });
-          },
-        },
-        {
-          disabled: !isSingleSelection,
-          label: t('contextMenus.thumbnail.selectSameCountry' as any, {
-            defaultValue: 'Select same country',
-          }),
-          onClick: () => {
-            const active = imageList.find((i: any) => i.path === finalSelection[0]);
-            if (!active?.exif) return;
-            const country = String(active.exif.Country || '').trim();
-            if (!country) return;
-            const key = country.toLowerCase();
-            const paths = imageList
-              .filter((img: any) => String(img.exif?.Country || '').trim().toLowerCase() === key)
-              .map((img: any) => img.path);
-            useLibraryStore.getState().setFilterCriteria((prev: any) => ({ ...prev, country }));
-            setLibrary({
-              multiSelectedPaths: paths,
-              libraryActivePath: paths.length ? paths[paths.length - 1] : finalSelection[0],
-              selectionAnchorPath: paths.length ? paths[0] : null,
-              showSelectedOnly: false,
-            });
-          },
-        },
-        {
-          disabled: !isSingleSelection,
-          label: t('contextMenus.thumbnail.selectSameLocation' as any, {
-            defaultValue: 'Select same location',
-          }),
-          onClick: () => {
-            const active = imageList.find((i: any) => i.path === finalSelection[0]);
-            if (!active?.exif) return;
-            const locOf = (img: any) =>
-              String(img.exif?.Location || img.exif?.SubLocation || '')
-                .trim()
-                .toLowerCase();
-            const key = locOf(active);
-            if (!key) return;
-            const paths = imageList.filter((img: any) => locOf(img) === key).map((img: any) => img.path);
-            setLibrary({
-              multiSelectedPaths: paths,
-              libraryActivePath: paths.length ? paths[paths.length - 1] : finalSelection[0],
-              selectionAnchorPath: paths.length ? paths[0] : null,
-              showSelectedOnly: false,
-            });
-          },
-        },
-        {
-          disabled: finalSelection.length < 2,
-          label: t('contextMenus.thumbnail.stackPhotos' as any, {
-            defaultValue: 'Stack photos',
-          }),
-          onClick: async () => {
-            const paths = finalSelection.slice();
-            if (paths.length < 2) return;
-            const list = imageList || [];
-            let sid: string | null = null;
-            for (const p of paths) {
-              const img = list.find((i: any) => i.path === p);
-              const existing = stackIdFromTags(img?.tags);
-              if (existing) {
-                sid = existing;
-                break;
-              }
-            }
-            if (!sid) sid = newStackId();
-            const tag = stackTag(sid);
-            try {
-              for (const p of paths) {
-                const img = list.find((i: any) => i.path === p);
-                const old = stackIdFromTags(img?.tags);
-                if (old && old !== sid) {
-                  await invoke(Invokes.RemoveTagForPaths, { paths: [p], tag: stackTag(old) });
-                }
-              }
-              await invoke(Invokes.AddTagForPaths, { paths, tag });
-              setLibrary({
-                imageList: list.map((img: any) => {
-                  if (!paths.includes(img.path)) return img;
-                  const tags = (img.tags || []).filter((tg: string) => !String(tg).startsWith(STACK_TAG_PREFIX));
-                  tags.push(tag);
-                  return { ...img, tags };
-                }),
-              });
-            } catch (err) {
-              console.error('stack failed', err);
-            }
-          },
-        },
-        {
-          disabled: !finalSelection.some((p: string) => {
-            const img = imageList.find((i: any) => i.path === p);
-            return !!stackIdFromTags(img?.tags);
-          }),
-          label: t('contextMenus.thumbnail.unstackPhotos' as any, {
-            defaultValue: 'Unstack photos',
-          }),
-          onClick: async () => {
-            const list = imageList || [];
-            const toUnstack = new Set<string>();
-            const tagsToRemove = new Set<string>();
-            for (const p of finalSelection) {
-              const stack = findManualStack(list, p);
-              for (const img of stack) {
-                toUnstack.add(img.path);
-                const sid = stackIdFromTags(img.tags);
-                if (sid) tagsToRemove.add(stackTag(sid));
-              }
-            }
-            if (!toUnstack.size) return;
-            try {
-              for (const tag of tagsToRemove) {
-                await invoke(Invokes.RemoveTagForPaths, { paths: Array.from(toUnstack), tag });
-              }
-              setLibrary({
-                imageList: list.map((img: any) => {
-                  if (!toUnstack.has(img.path)) return img;
-                  return {
-                    ...img,
-                    tags: (img.tags || []).filter((tg: string) => !String(tg).startsWith(STACK_TAG_PREFIX)),
-                  };
-                }),
-              });
-            } catch (err) {
-              console.error('unstack failed', err);
-            }
-          },
-        },
-        {
-          disabled: !finalSelection.some((p: string) => {
-            const img = imageList.find((i: any) => i.path === p);
-            return !!(img && effectiveGroupId(img));
-          }),
-          label: t('contextMenus.thumbnail.toggleExpandStack' as any, {
-            defaultValue: 'Expand/collapse stack',
-          }),
-          onClick: () => {
-            const path = finalSelection[0];
-            const img = imageList.find((i: any) => i.path === path);
-            if (!img) return;
-            const gid = effectiveGroupId(img);
-            if (!gid) return;
-            const cur = new Set(useLibraryStore.getState().expandedStackIds || []);
-            if (cur.has(gid)) cur.delete(gid);
-            else cur.add(gid);
-            setLibrary({ expandedStackIds: Array.from(cur) });
-          },
-        },
-        {
-          label: t('contextMenus.thumbnail.toggleHideRejected' as any, {
-            defaultValue: useSettingsStore.getState().appSettings?.hideRejectedPhotos
-              ? 'Show rejected photos'
-              : 'Hide rejected photos',
-          } as any),
-          onClick: async () => {
-            const settings = useSettingsStore.getState().appSettings;
-            if (!settings) return;
-            const next = !settings.hideRejectedPhotos;
-            await useSettingsStore.getState().handleSettingsChange({
-              ...settings,
-              hideRejectedPhotos: next,
-            });
-          },
-        },
-        {
-          disabled: !(imageList || []).some((img: any) =>
-            (img.tags || []).some((tg: string) => tg === 'flag:reject' || String(tg).endsWith(':reject')),
-          ),
-          label: t('contextMenus.thumbnail.deleteAllRejected' as any, {
-            defaultValue: 'Delete all rejected…',
-          }),
-          onClick: () => {
-            const rejected = (imageList || [])
-              .filter((img: any) =>
-                (img.tags || []).some(
-                  (tg: string) => tg === 'flag:reject' || String(tg).endsWith(':reject'),
-                ),
-              )
-              .map((img: any) => img.path);
-            if (!rejected.length) return;
-            useUIStore.getState().setUI({
-              confirmModalState: {
-                confirmText: `Delete ${rejected.length} Rejected`,
-                confirmVariant: 'destructive',
-                isOpen: true,
-                message: `Permanently delete ${rejected.length} rejected photo(s)? This cannot be undone.`,
-                title: 'Delete Rejected Photos',
-                onConfirm: () => {
-                  window.dispatchEvent(
-                    new CustomEvent('rustroom:delete-paths', { detail: { paths: rejected } }),
-                  );
-                },
-              },
-            });
-          },
-        },
-
-
-        {
-          disabled: finalSelection.length < 2,
-          label: t('contextMenus.thumbnail.autoStackByTime' as any, {
-            defaultValue: 'Auto-stack by capture time',
-          }),
-          onClick: async () => {
-            const paths = finalSelection.slice();
-            const list = imageList || [];
-            const groups = groupPathsByCaptureTime(list, paths);
-            let stackedGroups = 0;
-            const nextList = list.map((img: any) => ({ ...img, tags: [...(img.tags || [])] }));
-            try {
-              for (const [, groupPaths] of groups) {
-                if (groupPaths.length < 2) continue;
+                const paths = finalSelection.slice();
+                if (paths.length < 2) return;
+                const list = imageList || [];
                 let sid: string | null = null;
-                for (const p of groupPaths) {
-                  const img = nextList.find((i: any) => i.path === p);
+                for (const p of paths) {
+                  const img = list.find((i: any) => i.path === p);
                   const existing = stackIdFromTags(img?.tags);
                   if (existing) {
                     sid = existing;
@@ -1502,455 +789,166 @@ export function useAppContextMenus(props: UseAppContextMenusProps) {
                 }
                 if (!sid) sid = newStackId();
                 const tag = stackTag(sid);
-                for (const p of groupPaths) {
-                  const img = nextList.find((i: any) => i.path === p);
-                  const old = stackIdFromTags(img?.tags);
-                  if (old && old !== sid) {
-                    await invoke(Invokes.RemoveTagForPaths, { paths: [p], tag: stackTag(old) });
-                  }
-                }
-                await invoke(Invokes.AddTagForPaths, { paths: groupPaths, tag });
-                stackedGroups += 1;
-                for (const p of groupPaths) {
-                  const img = nextList.find((i: any) => i.path === p);
-                  if (!img) continue;
-                  img.tags = (img.tags || []).filter((tg: string) => !String(tg).startsWith(STACK_TAG_PREFIX));
-                  img.tags.push(tag);
-                }
-              }
-              setLibrary({ imageList: nextList });
-            } catch (err) {
-              console.error('auto stack failed', err);
-            }
-          },
-        },
-        {
-          disabled: !isSingleSelection && finalSelection.length === 0,
-          label: t('contextMenus.thumbnail.selectSameCaptureTime' as any, {
-            defaultValue: 'Select same capture time',
-          }),
-          onClick: () => {
-            const active = imageList.find((i: any) => i.path === finalSelection[0]);
-            if (!active) return;
-            const key = captureTimeKey(active);
-            if (!key) return;
-            const paths = imageList
-              .filter((img: any) => captureTimeKey(img) === key)
-              .map((img: any) => img.path);
-            setLibrary({
-              multiSelectedPaths: paths,
-              libraryActivePath: paths.length ? paths[paths.length - 1] : finalSelection[0],
-              selectionAnchorPath: paths.length ? paths[0] : null,
-              showSelectedOnly: false,
-            });
-          },
-        },
-        {
-          disabled: finalSelection.length === 0,
-          label: t('contextMenus.thumbnail.copyMetadata' as any, {
-            defaultValue: 'Copy metadata',
-          }),
-          onClick: async () => {
-            const path = finalSelection[0];
-            if (!path) return;
-            try {
-              const meta: any = await invoke(Invokes.LoadMetadata, { path });
-              const exif = meta?.exif || {};
-              const fields = [
-                'ImageDescription', 'XPTitle', 'Caption', 'Headline',
-                'Artist', 'Creator', 'Copyright', 'UserComment',
-                'City', 'State', 'Country', 'Location', 'SubLocation', 'Province',
-              ];
-              const clip: Record<string, string> = {};
-              for (const k of fields) {
-                const v = exif[k];
-                if (v != null && String(v).trim() !== '') clip[k] = String(v);
-              }
-              const tags = (meta?.tags || []) as string[];
-              const userKws = tags.filter((tg) => tg.startsWith('user:')).map((tg) => tg.slice(5));
-              if (userKws.length) clip.__keywords = userKws.join('\n');
-              setLibrary({ copiedMetadata: clip });
-            } catch (err) {
-              console.error('copy metadata', err);
-            }
-          },
-        },
-        {
-          disabled: !useLibraryStore.getState().copiedMetadata || finalSelection.length === 0,
-          label: t('contextMenus.thumbnail.pasteMetadata' as any, {
-            defaultValue: 'Paste metadata',
-          }),
-          onClick: async () => {
-            const clip = { ...(useLibraryStore.getState().copiedMetadata || {}) };
-            if (!Object.keys(clip).length) return;
-            const paths = finalSelection.slice();
-            const kwRaw = clip.__keywords;
-            delete clip.__keywords;
-            try {
-              if (Object.keys(clip).length) {
-                await invoke(Invokes.UpdateExifFields, { paths, updates: clip });
-                setLibrary({
-                  imageList: imageList.map((img: any) => {
-                    if (!paths.includes(img.path)) return img;
-                    return { ...img, exif: { ...(img.exif || {}), ...clip } };
-                  }),
-                });
-              }
-              if (kwRaw) {
-                const kws = String(kwRaw).split('\n').map((k) => k.trim()).filter(Boolean);
-                for (const kw of kws) {
-                  const tag = kw.startsWith('user:') ? kw : `user:${kw.toLowerCase()}`;
-                  await invoke(Invokes.AddTagForPaths, { paths, tag });
-                }
-                setLibrary({
-                  imageList: (useLibraryStore.getState().imageList || []).map((img: any) => {
-                    if (!paths.includes(img.path)) return img;
-                    const tags = [...(img.tags || [])];
-                    for (const kw of kws) {
-                      const tag = kw.startsWith('user:') ? kw : `user:${kw.toLowerCase()}`;
-                      if (!tags.includes(tag)) tags.push(tag);
+                try {
+                  for (const p of paths) {
+                    const img = list.find((i: any) => i.path === p);
+                    const old = stackIdFromTags(img?.tags);
+                    if (old && old !== sid) {
+                      await invoke(Invokes.RemoveTagForPaths, { paths: [p], tag: stackTag(old) });
                     }
-                    return { ...img, tags };
-                  }),
-                });
-              }
-            } catch (err) {
-              console.error('paste metadata', err);
-            }
-          },
-        },
-
-
-        {
-          disabled: !isSingleSelection,
-          label: t('contextMenus.thumbnail.selectSameFolder' as any, {
-            defaultValue: 'Select same folder',
-          }),
-          onClick: () => {
-            const active = imageList.find((i: any) => i.path === finalSelection[0]);
-            if (!active) return;
-            const folderOf = (p: string) => {
-              const physical = String(p || '').split('?vc=')[0];
-              const i = Math.max(physical.lastIndexOf('/'), physical.lastIndexOf('\\'));
-              return i > 0 ? physical.slice(0, i) : '';
-            };
-            const key = folderOf(active.path);
-            if (!key) return;
-            const paths = imageList.filter((img: any) => folderOf(img.path) === key).map((img: any) => img.path);
-            setLibrary({
-              multiSelectedPaths: paths,
-              libraryActivePath: paths.length ? paths[paths.length - 1] : finalSelection[0],
-              selectionAnchorPath: paths.length ? paths[0] : null,
-              showSelectedOnly: false,
-            });
-          },
-        },
-        {
-          disabled: !isSingleSelection,
-          icon: Folder,
-          label: t('contextMenus.thumbnail.goToFolder' as any, {
-            defaultValue: 'Go to Folder in Library',
-          }),
-          onClick: () => {
-            const filePath = finalSelection[0];
-            const physical = String(filePath || '').split('?vc=')[0];
-            const sep = physical.includes('/') ? '/' : '\\';
-            const last = physical.lastIndexOf(sep);
-            if (last <= 0) return;
-            const folder = physical.substring(0, last);
-            // Clear catalog-only scopes so the folder contents show
-            useLibraryStore.getState().setLibrary({
-              showPreviousImportOnly: false,
-              showQuickCollectionOnly: false,
-              showSelectedOnly: false,
-              activeAlbumId: null,
-            });
-            useLibraryStore.getState().setFilterCriteria((prev: any) => ({
-              ...prev,
-              // keep rating/colors etc.; clear date smart-collection ranges only if needed — leave filters
-            }));
-            if (props.handleSelectSubfolder) {
-              Promise.resolve(props.handleSelectSubfolder(folder, false, undefined, true, false)).catch(
-                (err) => toast.error(String(err)),
-              );
-            } else {
-              // Fallback: set current folder path only
-              useLibraryStore.getState().setLibrary({ currentFolderPath: folder });
-            }
-            props.handleBackToLibrary();
-          },
-        },
-        {
-          disabled: !isSingleSelection,
-          icon: Folder,
-          label: t('contextMenus.thumbnail.showExplorer'),
-          onClick: () => {
-            invoke(Invokes.ShowInFinder, { path: finalSelection[0] }).catch((err) =>
-              toast.error(t('contextMenus.toasts.couldNotShowExplorer', { err })),
-            );
-          },
-        },
-        {
-          disabled:
-            finalSelection.length === 0 ||
-            !finalSelection.some((p: string) => {
-              const img = imageList.find((i: any) => i.path === p);
-              const lat = img?.exif?.GPSLatitude;
-              const lon = img?.exif?.GPSLongitude;
-              return (
-                lat != null &&
-                lon != null &&
-                lat !== '' &&
-                lon !== '' &&
-                Number.isFinite(parseFloat(String(lat))) &&
-                Number.isFinite(parseFloat(String(lon)))
-              );
-            }),
-          label: t('contextMenus.thumbnail.openInMap' as any, {
-            defaultValue: 'Open in Map',
-          }),
-          onClick: () => {
-            const gpsPaths = finalSelection.filter((p: string) => {
-              const img = imageList.find((i: any) => i.path === p);
-              const lat = img?.exif?.GPSLatitude;
-              const lon = img?.exif?.GPSLongitude;
-              return (
-                lat != null &&
-                lon != null &&
-                lat !== '' &&
-                lon !== '' &&
-                Number.isFinite(parseFloat(String(lat))) &&
-                Number.isFinite(parseFloat(String(lon)))
-              );
-            });
-            if (!gpsPaths.length) return;
-            setLibrary({
-              multiSelectedPaths: gpsPaths,
-              libraryActivePath: gpsPaths[gpsPaths.length - 1],
-              selectionAnchorPath: gpsPaths[0],
-            });
-            useUIStore.getState().setUI({ activeView: 'map' });
-          },
-        },
-
-        {
-          disabled: finalSelection.length === 0,
-          label: t('contextMenus.thumbnail.copyFilename' as any, {
-            defaultValue:
-              finalSelection.length > 1 ? 'Copy filenames' : 'Copy filename',
-          }),
-          onClick: async () => {
-            const names = finalSelection.map((p: string) => {
-              const physical = String(p).split('?vc=')[0];
-              return physical.split(/[/\\]/).pop() || physical;
-            });
-            try {
-              await navigator.clipboard.writeText(names.join('\n'));
-              toast.success(
-                names.length === 1
-                  ? t('contextMenus.toasts.filenameCopied' as any, {
-                      defaultValue: 'Filename copied',
-                    })
-                  : t('contextMenus.toasts.filenamesCopied' as any, {
-                      defaultValue: '{{count}} filenames copied',
-                      count: names.length,
-                    }),
-              );
-            } catch (err) {
-              toast.error(String(err));
-            }
-          },
-        },
-        {
-          disabled: finalSelection.length === 0,
-          label: t('contextMenus.thumbnail.copyFilePath' as any, {
-            defaultValue: finalSelection.length > 1 ? 'Copy paths' : 'Copy path',
-          }),
-          onClick: async () => {
-            const paths = finalSelection.map((p: string) => String(p).split('?vc=')[0]);
-            try {
-              await navigator.clipboard.writeText(paths.join('\n'));
-              toast.success(
-                paths.length === 1
-                  ? t('contextMenus.toasts.pathCopied' as any, {
-                      defaultValue: 'Path copied',
-                    })
-                  : t('contextMenus.toasts.pathsCopied' as any, {
-                      defaultValue: '{{count}} paths copied',
-                      count: paths.length,
-                    }),
-              );
-            } catch (err) {
-              toast.error(String(err));
-            }
-          },
-        },
-        {
-          disabled: finalSelection.length === 0,
-          label: t('contextMenus.thumbnail.clearKeywords' as any, {
-            defaultValue: 'Clear keywords',
-          }),
-          onClick: async () => {
-            const paths = finalSelection.slice();
-            try {
-              for (const path of paths) {
-                const img = imageList.find((i: any) => i.path === path);
-                const userTags = (img?.tags || []).filter(
-                  (tg: string) =>
-                    tg.startsWith('user:') ||
-                    (!tg.startsWith('color:') &&
-                      !tg.startsWith('flag:') &&
-                      !tg.startsWith('stack:') &&
-                      !!tg),
-                );
-                for (const tag of userTags) {
-                  const full = tag.startsWith('user:') ? tag : `user:${tag}`;
-                  await invoke(Invokes.RemoveTagForPaths, { paths: [path], tag: full });
-                }
-              }
-              setLibrary({
-                imageList: imageList.map((img: any) => {
-                  if (!paths.includes(img.path)) return img;
-                  const tags = (img.tags || []).filter(
-                    (tg: string) =>
-                      tg.startsWith('color:') ||
-                      tg.startsWith('flag:') ||
-                      tg.startsWith('stack:'),
-                  );
-                  return { ...img, tags: tags.length ? tags : null };
-                }),
-              });
-              toast.success(
-                t('contextMenus.toasts.keywordsCleared' as any, {
-                  defaultValue: 'Keywords cleared',
-                }),
-              );
-            } catch (err) {
-              toast.error(String(err));
-            }
-          },
-        },
-        {
-          disabled: finalSelection.length === 0,
-          label: t('contextMenus.thumbnail.addKeyword' as any, {
-            defaultValue: 'Add keyword…',
-          }),
-          onClick: async () => {
-            const paths = finalSelection.slice();
-            const raw = window.prompt(
-              paths.length > 1
-                ? `Add keyword to ${paths.length} photos (parent/child for hierarchy)`
-                : 'Add keyword (parent/child for hierarchy)',
-              '',
-            );
-            if (raw == null || !String(raw).trim()) return;
-            const cleaned = String(raw)
-              .trim()
-              .toLowerCase()
-              .replace(/^user:/, '')
-              .replace(/\s*>\s*/g, '/')
-              .replace(/\/+/g, '/')
-              .replace(/^\/|\/$/g, '');
-            if (!cleaned) return;
-            const parts = cleaned.split('/').map((p: string) => p.trim()).filter(Boolean);
-            const segments: string[] = [];
-            let acc = '';
-            for (const part of parts) {
-              acc = acc ? `${acc}/${part}` : part;
-              segments.push(acc);
-            }
-            try {
-              for (const seg of segments) {
-                await invoke(Invokes.AddTagForPaths, { paths, tag: `user:${seg}` });
-              }
-              setLibrary({
-                imageList: imageList.map((img: any) => {
-                  if (!paths.includes(img.path)) return img;
-                  const tags = [...(img.tags || [])];
-                  for (const seg of segments) {
-                    const tag = `user:${seg}`;
-                    if (!tags.includes(tag)) tags.push(tag);
                   }
-                  return { ...img, tags };
-                }),
-              });
-            } catch (err) {
-              toast.error(String(err));
-            }
-          },
-        },
-
-
-        {
-          label: t('contextMenus.editor.reimportXmp'),
-          icon: FileInput,
-          onClick: async () => {
-            const { ok, fail } = await reimportDevelopFromXmpPaths(finalSelection);
-            if (ok > 0) toast.success(t('contextMenus.toasts.reimportedXmpCount', { count: ok }));
-            if (fail > 0) toast.error(t('contextMenus.toasts.reimportXmpFailed', { count: fail }));
-            await props.refreshImageList();
-          },
-        },
-        {
-          disabled: finalSelection.length === 0,
-          label: t('contextMenus.editor.exportDevelopXmp'),
-          icon: FileOutput,
-          onClick: async () => {
-            try {
-              const { ok, fail } = await exportDevelopToXmpPaths(finalSelection);
-              if (ok > 0) {
-                toast.success(
-                  finalSelection.length === 1
-                    ? t('contextMenus.toasts.exportedDevelopXmp')
-                    : t('contextMenus.toasts.exportedDevelopXmpCount' as any, {
-                        defaultValue: 'Exported develop XMP for {{count}} photos',
-                        count: ok,
-                      }),
-                );
-              }
-              if (fail > 0) {
-                toast.error(
-                  t('contextMenus.toasts.exportDevelopXmpFailed' as any, {
-                    defaultValue: 'Failed to export XMP for {{count}} photos',
-                    count: fail,
-                  }),
-                );
-              }
-            } catch (err) {
-              toast.error(String(err));
-            }
-          },
-        },
-        {
-          disabled: !isSingleSelection,
-          label: t('contextMenus.editor.showXmp'),
-          icon: Folder,
-          onClick: () => {
-            invoke(Invokes.ShowXmpSidecar, { path: finalSelection[0] }).catch(() =>
-              toast.error(t('contextMenus.toasts.xmpNotFound')),
-            );
-          },
-        },
-        {
-          label: resetLabel,
-          icon: RotateCcw,
-          submenu: [
-            { label: t('contextMenus.editor.cancel'), icon: X, onClick: () => {} },
+                  await invoke(Invokes.AddTagForPaths, { paths, tag });
+                  setLibrary({
+                    imageList: list.map((img: any) => {
+                      if (!paths.includes(img.path)) return img;
+                      const tags = (img.tags || []).filter((tg: string) => !String(tg).startsWith(STACK_TAG_PREFIX));
+                      tags.push(tag);
+                      return { ...img, tags };
+                    }),
+                  });
+                } catch (err) {
+                  console.error('stack failed', err);
+                }
+              },
+            },
             {
-              label: t('contextMenus.editor.confirmReset'),
-              icon: Check,
-              isDestructive: true,
-              onClick: () => handleResetAdjustments(finalSelection),
+              disabled: !finalSelection.some((p: string) => {
+                const img = imageList.find((i: any) => i.path === p);
+                return !!stackIdFromTags(img?.tags);
+              }),
+              label: t('contextMenus.thumbnail.unstackPhotos' as any, { defaultValue: 'Unstack' }),
+              onClick: async () => {
+                const list = imageList || [];
+                const toUnstack = new Set<string>();
+                const tagsToRemove = new Set<string>();
+                for (const p of finalSelection) {
+                  const stack = findManualStack(list, p);
+                  for (const img of stack) {
+                    toUnstack.add(img.path);
+                    const sid = stackIdFromTags(img.tags);
+                    if (sid) tagsToRemove.add(stackTag(sid));
+                  }
+                }
+                if (!toUnstack.size) return;
+                try {
+                  for (const tag of tagsToRemove) {
+                    await invoke(Invokes.RemoveTagForPaths, { paths: Array.from(toUnstack), tag });
+                  }
+                  setLibrary({
+                    imageList: list.map((img: any) => {
+                      if (!toUnstack.has(img.path)) return img;
+                      return {
+                        ...img,
+                        tags: (img.tags || []).filter((tg: string) => !String(tg).startsWith(STACK_TAG_PREFIX)),
+                      };
+                    }),
+                  });
+                } catch (err) {
+                  console.error('unstack failed', err);
+                }
+              },
+            },
+            {
+              disabled: !finalSelection.some((p: string) => {
+                const img = imageList.find((i: any) => i.path === p);
+                return !!(img && effectiveGroupId(img));
+              }),
+              label: t('contextMenus.thumbnail.toggleExpandStack' as any, {
+                defaultValue: 'Expand/Collapse Stack',
+              }),
+              onClick: () => {
+                const img = imageList.find((i: any) => i.path === finalSelection[0]);
+                if (!img) return;
+                const gid = effectiveGroupId(img);
+                if (!gid) return;
+                const cur = new Set(useLibraryStore.getState().expandedStackIds || []);
+                if (cur.has(gid)) cur.delete(gid);
+                else cur.add(gid);
+                setLibrary({ expandedStackIds: Array.from(cur) });
+              },
             },
           ],
         },
         {
-          label: deleteLabel,
-          icon: Trash2,
-          isDestructive: true,
-          submenu: deleteSubmenu,
+          icon: CopyPlus,
+          label: t('contextMenus.thumbnail.createVirtualCopy' as any, {
+            defaultValue: 'Create Virtual Copy',
+          }),
+          disabled: finalSelection.length === 0,
+          onClick: () => handleCreateVirtualCopy(finalSelection),
         },
+        { type: OPTION_SEPARATOR },
+        {
+          disabled: (multiSelectedPaths?.length || finalSelection.length) < 2,
+          icon: RefreshCw,
+          label: t('contextMenus.thumbnail.syncSettings' as any, {
+            defaultValue: 'Sync Settings',
+          }),
+          onClick: () => handleSyncSettings(),
+        },
+        { type: OPTION_SEPARATOR },
+        {
+          icon: RotateCcw,
+          label: t('contextMenus.thumbnail.rotateLeft' as any, {
+            defaultValue: 'Rotate Left',
+          }),
+          onClick: () => rotateSelection(false),
+        },
+        {
+          icon: RotateCcw,
+          label: t('contextMenus.thumbnail.rotateRight' as any, {
+            defaultValue: 'Rotate Right',
+          }),
+          onClick: () => rotateSelection(true),
+        },
+        { type: OPTION_SEPARATOR },
+        {
+          icon: FileInput,
+          label: exportLabel,
+          onClick: onExportClick,
+        },
+        { type: OPTION_SEPARATOR },
+        {
+          icon: Trash2,
+          label: t('contextMenus.thumbnail.removeFromApp' as any, {
+            defaultValue: 'Remove Photo',
+          }),
+          onClick: () => void removeFromCatalog(),
+        },
+        ...(activeAlbumId
+          ? [
+              {
+                icon: Trash2,
+                label: t('contextMenus.thumbnail.removeFromCollection' as any, {
+                  count: selectionCount,
+                  defaultValue: 'Remove from Collection',
+                }),
+                onClick: handleRemoveFromAlbum,
+              },
+            ]
+          : useLibraryStore.getState().showQuickCollectionOnly
+            ? [
+                {
+                  icon: Trash2,
+                  label: t('contextMenus.thumbnail.removeFromCollection' as any, {
+                    count: selectionCount,
+                    defaultValue: 'Remove from Collection',
+                  }),
+                  onClick: () => {
+                    const lib = useLibraryStore.getState();
+                    const drop = new Set(finalSelection);
+                    const next = (lib.quickCollectionPaths || []).filter((p) => !drop.has(p));
+                    lib.setLibrary({
+                      quickCollectionPaths: next,
+                      imageList: lib.imageList.filter((i) => next.includes(i.path)),
+                      multiSelectedPaths: (lib.multiSelectedPaths || []).filter((p) => !drop.has(p)),
+                    });
+                  },
+                },
+              ]
+            : []),
       ];
+
       showContextMenu(event.clientX, event.clientY, options);
     },
     [
@@ -1962,6 +960,8 @@ export function useAppContextMenus(props: UseAppContextMenusProps) {
       handleSetColorLabel,
       handleTagsChanged,
       handleResetAdjustments,
+      handleSyncSettings,
+      handleRotate,
       showContextMenu,
       props,
       t,
@@ -2409,7 +1409,8 @@ export function useAppContextMenus(props: UseAppContextMenusProps) {
                   item.type === 'group' ? t('contextMenus.albums.deleteGroup') : t('contextMenus.albums.deleteAlbum'),
                 icon: Trash2,
                 isDestructive: true,
-                submenu: [
+                disabled: item.id === UNCATEGORIZED_ALBUM_ID,
+                submenu: item.id === UNCATEGORIZED_ALBUM_ID ? [] : [
                   { label: t('contextMenus.editor.cancel'), icon: X, onClick: () => {} },
                   {
                     label:
@@ -2544,3 +1545,4 @@ export function useAppContextMenus(props: UseAppContextMenusProps) {
     handleMainLibraryContextMenu,
   };
 }
+

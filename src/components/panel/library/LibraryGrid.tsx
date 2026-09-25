@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { Row } from './LibraryItems';
 import { useShallow } from 'zustand/react/shallow';
 import { useLibraryStore } from '../../../store/useLibraryStore';
-import { LibraryViewMode, SortDirection, LibraryDisplayMode } from '../../ui/AppProperties';
+import { LibraryViewMode, SortDirection, LibraryDisplayMode, ImageFile } from '../../ui/AppProperties';
 import Text from '../../ui/Text';
 import { TextColors, TextVariants, TextWeights, TEXT_COLOR_KEYS } from '../../../types/typography';
 import { useProcessStore } from '../../../store/useProcessStore';
@@ -262,6 +262,54 @@ const groupImagesByFolder = (images: any[], baseFolderPath: string | null) => {
   }));
 };
 
+function imageAspect(img: ImageFile): number {
+  const w =
+    Number(img.width) ||
+    parseFloat(String(img.exif?.ImageWidth || img.exif?.PixelXDimension || img.exif?.ExifImageWidth || '0'));
+  const h =
+    Number(img.height) ||
+    parseFloat(String(img.exif?.ImageHeight || img.exif?.PixelYDimension || img.exif?.ExifImageHeight || '0'));
+  if (w > 0 && h > 0) return w / h;
+  return 1.5;
+}
+
+function packJustifiedRows(images: ImageFile[], containerWidth: number, targetH: number, gap: number) {
+  const rows: { type: 'images'; images: ImageFile[]; widths: number[]; height: number; startIndex: number }[] = [];
+  let cur: ImageFile[] = [];
+  let curAr = 0;
+  let startIndex = 0;
+
+  const flush = (justify: boolean) => {
+    if (!cur.length) return;
+    const n = cur.length;
+    const gaps = gap * Math.max(0, n - 1);
+    let h = targetH;
+    if (justify && curAr > 0) {
+      h = Math.min(targetH * 1.2, Math.max(targetH * 0.72, (containerWidth - gaps) / curAr));
+    }
+    rows.push({
+      type: 'images',
+      images: [...cur],
+      widths: cur.map((img) => imageAspect(img) * h),
+      height: h,
+      startIndex,
+    });
+    startIndex += cur.length;
+    cur = [];
+    curAr = 0;
+  };
+
+  for (const img of images) {
+    const ar = imageAspect(img);
+    const nextW = (curAr + ar) * targetH + gap * cur.length;
+    if (cur.length > 0 && nextW > containerWidth) flush(true);
+    cur.push(img);
+    curAr += ar;
+  }
+  flush(false);
+  return rows;
+}
+
 export default function LibraryGrid(props: any) {
   const {
     imageList,
@@ -449,16 +497,20 @@ export default function LibraryGrid(props: any) {
         rows.push({ type: 'header', path: group.path, count: group.images.length, isExpanded });
 
         if (isExpanded) {
-          for (let i = 0; i < group.images.length; i += columnCount) {
-            rows.push({
-              type: 'images',
-              images: group.images.slice(i, i + columnCount),
-              startIndex: i,
-            });
+          if (isListView) {
+            for (let i = 0; i < group.images.length; i += columnCount) {
+              rows.push({
+                type: 'images',
+                images: group.images.slice(i, i + columnCount),
+                startIndex: i,
+              });
+            }
+          } else {
+            rows.push(...packJustifiedRows(group.images, availableWidth, minThumbWidth, ITEM_GAP));
           }
         }
       });
-    } else {
+    } else if (isListView) {
       for (let i = 0; i < imageList.length; i += columnCount) {
         rows.push({
           type: 'images',
@@ -466,6 +518,8 @@ export default function LibraryGrid(props: any) {
           startIndex: i,
         });
       }
+    } else {
+      rows.push(...packJustifiedRows(imageList, availableWidth, minThumbWidth, ITEM_GAP));
     }
 
     rows.push({ type: 'footer' });
@@ -516,42 +570,34 @@ export default function LibraryGrid(props: any) {
     prevActivePath.current = activePath;
 
     const element = listHandle.element as HTMLElement;
-    const { rows, rowHeight, headerHeight, columnCount } = gridData;
+    const { rows, ITEM_GAP, headerHeight, isListView, listRowHeight, OUTER_PADDING } = gridData;
 
     let targetTop = 0;
     let found = false;
+    let foundHeight = isListView ? listRowHeight : 0;
 
-    if (libraryViewMode === LibraryViewMode.Recursive) {
-      const groups = groupImagesByFolder(imageList, currentFolderPath);
-      for (const group of groups) {
-        if (group.images.length === 0) continue;
-
-        targetTop += headerHeight;
-
-        const imageIndex = group.images.findIndex((img) => img.path === activePath);
-        if (imageIndex !== -1) {
-          const rowIndex = Math.floor(imageIndex / columnCount);
-          targetTop += rowIndex * rowHeight;
-          found = true;
-          break;
-        }
-
-        const rowsInGroup = Math.ceil(group.images.length / columnCount);
-        targetTop += rowsInGroup * rowHeight;
-      }
-    } else {
-      const index = imageList.findIndex((img) => img.path === activePath);
-      if (index !== -1) {
-        const rowIndex = Math.floor(index / columnCount);
-        targetTop = rowIndex * rowHeight;
+    for (const row of rows) {
+      if (row.type === 'footer') break;
+      const h =
+        row.type === 'header'
+          ? headerHeight
+          : typeof row.height === 'number'
+            ? row.height + ITEM_GAP
+            : isListView
+              ? listRowHeight
+              : gridData.rowHeight;
+      if (row.type === 'images' && row.images.some((img: ImageFile) => img.path === activePath)) {
         found = true;
+        foundHeight = h;
+        break;
       }
+      targetTop += h;
     }
 
     if (found) {
       const clientHeight = element.clientHeight;
       const scrollTop = element.scrollTop;
-      const itemBottom = targetTop + rowHeight;
+      const itemBottom = targetTop + foundHeight;
       const SCROLL_OFFSET = 120;
 
       if (itemBottom > scrollTop + clientHeight) {
@@ -615,7 +661,10 @@ export default function LibraryGrid(props: any) {
     (index: number) => {
       if (!gridData) return 0;
       if (gridData.rows[index].type === 'footer') return gridData.isListView ? 24 : gridData.OUTER_PADDING;
-      return gridData.rows[index].type === 'header' ? gridData.headerHeight : gridData.rowHeight;
+      if (gridData.rows[index].type === 'header') return gridData.headerHeight;
+      const h = gridData.rows[index].height;
+      if (typeof h === 'number') return h + gridData.ITEM_GAP;
+      return gridData.rowHeight;
     },
     [gridData],
   );

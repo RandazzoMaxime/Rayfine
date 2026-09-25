@@ -411,11 +411,13 @@ export default function BorderModuleView({ onBackToLibrary, imageList, onRequest
   };
 
   // ---- Render ----
-  const sectionTitle = 'text-[10px] uppercase tracking-wider text-white/35';
+  const sectionTitle = 'text-[10px] uppercase tracking-wider text-text-secondary';
   const choiceClass = (active: boolean) =>
     clsx(
       'h-8 rounded border px-2 flex items-center justify-center text-[11px] tabular-nums',
-      active ? 'bg-white/10 border-white/25 text-white' : 'bg-white/5 border-white/10 text-white/50 hover:text-white/80',
+      active
+        ? 'bg-card-active border-border-color text-text-primary'
+        : 'bg-surface border-border-color/40 text-text-secondary hover:text-text-primary hover:border-border-color',
     );
 
   const ghostSrc = drag ? previews[drag.path] || thumbs[drag.path] : undefined;
@@ -467,12 +469,14 @@ export default function BorderModuleView({ onBackToLibrary, imageList, onRequest
                 defaultValue={DEFAULT_MARGIN}
                 value={marginPct}
                 suffix="%"
+                layout="stacked"
+                tone="theme"
                 onChange={(e) => {
                   const v = Number(e.target.value);
                   if (Number.isFinite(v)) setMarginPct(Math.min(25, Math.max(0, v)));
                 }}
               />
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-3 mt-1">
                 {SWATCHES.map((s) => (
                   <button
                     key={s.id}
@@ -484,14 +488,14 @@ export default function BorderModuleView({ onBackToLibrary, imageList, onRequest
                     className={clsx(
                       'w-7 h-7 rounded border',
                       color.toLowerCase() === s.color
-                        ? 'border-white ring-1 ring-white/70'
-                        : 'border-white/20 hover:border-white/50',
+                        ? 'border-accent ring-1 ring-accent'
+                        : 'border-border-color hover:border-text-secondary',
                     )}
                     style={{ background: s.color }}
                   />
                 ))}
                 <label
-                  className="relative w-7 h-7 rounded border border-white/20 hover:border-white/50 overflow-hidden cursor-pointer"
+                  className="relative w-7 h-7 rounded border border-border-color hover:border-text-secondary overflow-hidden cursor-pointer"
                   data-tooltip={t('ui.border.customColor' as any, { defaultValue: 'Custom color' })}
                   style={{
                     background: SWATCHES.some((s) => s.color === color.toLowerCase())
@@ -506,13 +510,13 @@ export default function BorderModuleView({ onBackToLibrary, imageList, onRequest
                     className="absolute inset-0 opacity-0 cursor-pointer"
                   />
                 </label>
-                <span className="ml-auto text-[10px] font-mono text-white/45 uppercase">{color}</span>
+                <span className="ml-auto text-[10px] font-mono text-text-secondary uppercase">{color}</span>
               </div>
             </section>
 
             <section className="space-y-1.5 mt-3">
               <div className={sectionTitle}>{t('ui.border.layout' as any, { defaultValue: 'Layout' })}</div>
-              <div className="text-[11px] text-white/55">
+              <div className="text-[11px] text-text-secondary">
                 {t('ui.border.filled' as any, {
                   defaultValue: '{{filled}} of {{cells}} cells filled',
                   filled: visible.length,
@@ -528,7 +532,7 @@ export default function BorderModuleView({ onBackToLibrary, imageList, onRequest
                 type="button"
                 disabled={!placed.length}
                 onClick={() => setPlaced([])}
-                className="w-full h-8 rounded bg-white/5 border border-white/10 px-2 flex items-center gap-2 text-[11px] text-white/75 hover:bg-white/10 disabled:opacity-40"
+                className="w-full h-8 rounded bg-surface border border-border-color/40 px-2 flex items-center gap-2 text-[11px] text-text-primary hover:bg-card-active disabled:opacity-40"
               >
                 <Trash2 size={12} />
                 {t('ui.border.clear' as any, { defaultValue: 'Clear layout' })}
@@ -544,7 +548,7 @@ export default function BorderModuleView({ onBackToLibrary, imageList, onRequest
                   </button>
                 ))}
               </div>
-              <div className="text-[10px] text-white/40 tabular-nums">
+              <div className="text-[10px] text-text-secondary tabular-nums">
                 {t('ui.border.exportDims' as any, {
                   defaultValue: 'Long edge {{size}} px · {{width}} × {{height}} px · JPEG',
                   size: exportSize,
@@ -565,7 +569,7 @@ export default function BorderModuleView({ onBackToLibrary, imageList, onRequest
               </button>
             </section>
 
-            <section className="mt-4 text-[10px] text-white/35 leading-relaxed">
+            <section className="mt-4 text-[10px] text-text-secondary leading-relaxed">
               {t('ui.border.note' as any, {
                 defaultValue:
                   'Click a thumbnail to add or remove it. Drag photos between cells to swap them, drag a thumbnail onto a cell to place it, or drag a cell back to the strip to remove it.',
@@ -589,7 +593,11 @@ export default function BorderModuleView({ onBackToLibrary, imageList, onRequest
                   <div
                     key={i}
                     data-border-cell={i}
-                    className={clsx('absolute group', path && 'cursor-grab', drag?.kind === 'slot' && drag.index === i && 'opacity-40')}
+                    className={clsx(
+                      'absolute group overflow-hidden',
+                      path && 'cursor-grab',
+                      drag?.kind === 'slot' && drag.index === i && 'opacity-40',
+                    )}
                     style={{ left: r.x, top: r.y, width: r.w, height: r.h }}
                     onPointerDown={path ? (e) => beginDrag(e, { kind: 'slot', index: i, path }) : undefined}
                   >
@@ -600,7 +608,7 @@ export default function BorderModuleView({ onBackToLibrary, imageList, onRequest
                             src={src}
                             alt={baseName(path)}
                             draggable={false}
-                            className="w-full h-full object-contain pointer-events-none"
+                            className="block w-full h-full object-contain pointer-events-none"
                           />
                         )}
                         {loading && (

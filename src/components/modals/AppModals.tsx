@@ -8,6 +8,7 @@ import { useSettingsStore } from '../../store/useSettingsStore';
 import { useProcessStore } from '../../store/useProcessStore';
 import { useEditorStore } from '../../store/useEditorStore';
 import CopyPasteSettingsModal from './CopyPasteSettingsModal';
+import CustomizeModal from './CustomizeModal';
 import PanoramaModal from './PanoramaModal';
 import HdrModal from './HdrModal';
 import NegativeConversionModal from './NegativeConversionModal';
@@ -21,6 +22,7 @@ import CullingModal from './CullingModal';
 import CollageModal from './CollageModal';
 import { AppSettings, Invokes, AlbumItem, Album, AlbumGroup } from '../ui/AppProperties';
 import { CopyPasteSettings } from '../../utils/adjustments';
+import { useEditorActions } from '../../hooks/useEditorActions';
 
 export interface AppModalsProps {
   handleImageSelect: (path: string) => void;
@@ -46,6 +48,7 @@ export interface AppModalsProps {
 
 export default function AppModals(props: AppModalsProps) {
   const { t } = useTranslation();
+  const { handleCopyAdjustments } = useEditorActions();
   const { appSettings, handleSettingsChange } = useSettingsStore(
     useShallow((state) => ({
       appSettings: state.appSettings,
@@ -73,6 +76,7 @@ export default function AppModals(props: AppModalsProps) {
     denoiseModalState,
     cullingModalState,
     collageModalState,
+    isCustomizeModalOpen,
     setUI,
   } = useUIStore(
     useShallow((state) => ({
@@ -95,6 +99,7 @@ export default function AppModals(props: AppModalsProps) {
       denoiseModalState: state.denoiseModalState,
       cullingModalState: state.cullingModalState,
       collageModalState: state.collageModalState,
+      isCustomizeModalOpen: state.isCustomizeModalOpen,
       setUI: state.setUI,
     })),
   );
@@ -141,10 +146,20 @@ export default function AppModals(props: AppModalsProps) {
       <CopyPasteSettingsModal
         isOpen={isCopyPasteSettingsModalOpen}
         onClose={() => setUI({ isCopyPasteSettingsModalOpen: false })}
-        settings={appSettings?.copyPasteSettings as CopyPasteSettings}
-        onSave={(newSettings) =>
-          handleSettingsChange({ ...appSettings, copyPasteSettings: newSettings } as AppSettings)
-        }
+        initialKeys={(appSettings?.copyPasteSettings as CopyPasteSettings)?.includedAdjustments}
+        onCopy={(keys) => {
+          if (appSettings) {
+            handleSettingsChange({
+              ...appSettings,
+              copyPasteSettings: {
+                ...(appSettings.copyPasteSettings as CopyPasteSettings),
+                includedAdjustments: keys,
+              },
+            } as AppSettings);
+          }
+          handleCopyAdjustments(undefined, keys);
+          setUI({ isCopyPasteSettingsModalOpen: false });
+        }}
       />
       <PanoramaModal
         error={panoramaModalState.error}
@@ -323,6 +338,7 @@ export default function AppModals(props: AppModalsProps) {
         sourceImages={collageModalState.sourceImages}
         thumbnails={thumbnails}
       />
+      <CustomizeModal isOpen={!!isCustomizeModalOpen} onClose={() => setUI({ isCustomizeModalOpen: false })} />
     </>
   );
 }

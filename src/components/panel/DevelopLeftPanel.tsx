@@ -1,16 +1,18 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type DragEvent, type ReactNode } from 'react';
 import clsx from 'clsx';
 import {
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  Plus,
   History as HistoryIcon,
   SwatchBook,
   Compass,
   FolderHeart,
   Star,
   Images,
-  LayoutGrid,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
@@ -21,12 +23,25 @@ import { useEditorStore } from '../../store/useEditorStore';
 import { useUIStore } from '../../store/useUIStore';
 import { useLibraryStore } from '../../store/useLibraryStore';
 import { useEditorActions } from '../../hooks/useEditorActions';
+import { useContextMenu } from '../../context/ContextMenuContext';
 import Text from '../ui/Text';
 import { TextVariants, TextWeights } from '../../types/typography';
 import { Invokes, AlbumItem, Album, AlbumGroup, ImageFile } from '../ui/AppProperties';
 import { reimportDevelopFromXmpPath } from '../../utils/reimportXmp';
 import DevelopPresetList from './DevelopPresetList';
 
+
+const PATHS_MIME = 'application/x-rustroom-paths';
+
+function parseDroppedPaths(e: DragEvent): string[] {
+  try {
+    const raw = e.dataTransfer.getData(PATHS_MIME) || e.dataTransfer.getData('text/plain');
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((p) => typeof p === 'string') : [];
+  } catch {
+    return [];
+  }
+}
 
 const HISTORY_KEYS = [
   'exposure',
@@ -142,43 +157,162 @@ interface DevelopLeftPanelProps {
 
 function Section({
   title,
-  icon: Icon,
   open,
   onToggle,
   children,
-  tall,
   action,
+  titleAction,
 }: {
   title: string;
-  icon: typeof Compass;
   open: boolean;
   onToggle: () => void;
   children: ReactNode;
-  tall?: boolean;
   action?: ReactNode;
+  titleAction?: ReactNode;
 }) {
   return (
-    <div className={clsx('flex flex-col border-b border-border-color/50 min-h-0', tall && 'flex-1')}>
-      <div className="flex items-center shrink-0">
+    <div className="flex flex-col border-b border-border-color/50 shrink-0">
+      <div className="flex items-center shrink-0 hover:bg-card-active">
         <button
           type="button"
           onClick={onToggle}
-          className="flex flex-1 items-center justify-between px-2.5 py-1.5 text-left hover:bg-card-active"
+          className="flex items-center gap-1 pl-1.5 pr-1 py-1.5 text-left"
         >
-          <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-secondary">
-            <Icon size={12} />
+          <ChevronRight
+            size={14}
+            className={clsx('text-text-secondary shrink-0 transition-transform', open && 'rotate-90')}
+          />
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-text-secondary">
             {title}
           </span>
-          <ChevronDown size={14} className={clsx('text-text-secondary transition-transform', open && 'rotate-180')} />
         </button>
-        {action}
-      </div>
-      {open && (
-        <div className={clsx('min-h-0 px-2 pb-2', tall ? 'flex-1 overflow-y-auto custom-scrollbar' : '')}>
-          {children}
+        <div onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
+          {titleAction}
         </div>
-      )}
+        <button type="button" onClick={onToggle} className="flex-1 min-w-0 self-stretch" aria-label={title} />
+        <div onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()} className="pr-1">
+          {action}
+        </div>
+      </div>
+      {open && <div className="px-2 pb-2">{children}</div>}
     </div>
+  );
+}
+
+function DevelopAlbumRows({
+  items,
+  depth,
+  activeAlbumId,
+  targetCollectionId,
+  onOpenAlbum,
+  onDropPhotos,
+}: {
+  items: AlbumItem[];
+  depth: number;
+  activeAlbumId: string | null;
+  targetCollectionId: string | null;
+  onOpenAlbum: (id: string, name: string, images: string[]) => void;
+  onDropPhotos: (id: string, name: string, existing: string[], incoming: string[]) => void;
+}) {
+  return (
+    <>
+      {items.map((item) => {
+        if (item.type === 'group') {
+          const g = item as AlbumGroup;
+          const kids = g.children || [];
+          return (
+            <li key={g.id}>
+              <div
+                className="w-full text-left px-1.5 py-1 rounded text-[11px] flex items-center gap-1.5 text-text-secondary"
+                style={{ paddingLeft: 6 + depth * 12 }}
+              >
+                {kids.length > 0 ? <FolderOpen size={12} className="shrink-0 opacity-70" /> : <Folder size={12} className="shrink-0 opacity-70" />}
+                <span className="truncate flex-1 font-medium">{g.name}</span>
+                <span className="text-[10px] tabular-nums opacity-50">{kids.length}</span>
+              </div>
+              {kids.length > 0 ? (
+                <ul className="space-y-0.5">
+                  <DevelopAlbumRows
+                    items={kids}
+                    depth={depth + 1}
+                    activeAlbumId={activeAlbumId}
+                    targetCollectionId={targetCollectionId}
+                    onOpenAlbum={onOpenAlbum}
+                    onDropPhotos={onDropPhotos}
+                  />
+                </ul>
+              ) : null}
+            </li>
+          );
+        }
+        const a = item as Album;
+        return (
+          <DevelopDropAlbum
+            key={a.id}
+            album={a}
+            depth={depth}
+            active={activeAlbumId === a.id}
+            isTarget={targetCollectionId === a.id}
+            onOpen={() => onOpenAlbum(a.id, a.name, a.images || [])}
+            onDropPhotos={(incoming) => onDropPhotos(a.id, a.name, a.images || [], incoming)}
+          />
+        );
+      })}
+    </>
+  );
+}
+
+function DevelopDropAlbum({
+  album,
+  depth,
+  active,
+  isTarget,
+  onOpen,
+  onDropPhotos,
+}: {
+  album: Album;
+  depth: number;
+  active: boolean;
+  isTarget: boolean;
+  onOpen: () => void;
+  onDropPhotos: (paths: string[]) => void;
+}) {
+  const [over, setOver] = useState(false);
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={onOpen}
+        onDragOver={(e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'copy';
+          setOver(true);
+        }}
+        onDragLeave={() => setOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setOver(false);
+          const paths = parseDroppedPaths(e);
+          if (paths.length) onDropPhotos(paths);
+        }}
+        className={clsx(
+          'w-full text-left px-1.5 py-1 rounded text-[11px] flex items-center gap-1.5',
+          over
+            ? 'bg-accent/25 text-text-primary ring-1 ring-accent/50'
+            : active
+              ? 'bg-card-active text-text-primary font-medium'
+              : 'text-text-primary hover:bg-card-active',
+        )}
+        style={{ paddingLeft: 6 + depth * 12 }}
+      >
+        <Images size={12} className="shrink-0 opacity-70" />
+        <span className="truncate flex-1">
+          {album.name}
+          {isTarget && <span className="ml-1 text-[9px] text-amber-300" title="Target">●</span>}
+        </span>
+        <span className="text-[10px] tabular-nums text-text-secondary">{(album.images || []).length}</span>
+      </button>
+    </li>
   );
 }
 
@@ -188,9 +322,9 @@ function Section({
  */
 export default function DevelopLeftPanel({ isInstantTransition, width }: DevelopLeftPanelProps) {
   const { t } = useTranslation();
-  const [openNav, setOpenNav] = useState(true);
-  const [openPresets, setOpenPresets] = useState(true);
-  const [openHistory, setOpenHistory] = useState(true);
+  const [openNav, setOpenNav] = useState(false);
+  const [openPresets, setOpenPresets] = useState(false);
+  const [openHistory, setOpenHistory] = useState(false);
   const [openCollections, setOpenCollections] = useState(true);
 
   const { selectedImage, adjustments, history, historyIndex, goToHistoryIndex, resetHistory, zoom } = useEditorStore(
@@ -222,12 +356,14 @@ export default function DevelopLeftPanel({ isInstantTransition, width }: Develop
       setUI: s.setUI,
     })),
   );
+  const { showContextMenu } = useContextMenu();
 
   const {
     albumTree,
     quickCollectionPaths,
     showQuickCollectionOnly,
     targetCollectionId,
+    activeAlbumId,
     setLibrary,
   } = useLibraryStore(
     useShallow((s) => ({
@@ -235,25 +371,32 @@ export default function DevelopLeftPanel({ isInstantTransition, width }: Develop
       quickCollectionPaths: s.quickCollectionPaths,
       showQuickCollectionOnly: s.showQuickCollectionOnly,
       targetCollectionId: s.targetCollectionId,
+      activeAlbumId: s.activeAlbumId,
       setLibrary: s.setLibrary,
     })),
   );
 
-  const flatAlbums = useMemo(() => {
-    const out: { id: string; name: string; images: string[] }[] = [];
-    const walk = (nodes: AlbumItem[]) => {
-      for (const n of nodes || []) {
-        if (n.type === 'album') {
-          const a = n as Album;
-          out.push({ id: a.id, name: a.name, images: a.images || [] });
-        } else if (n.type === 'group') {
-          walk((n as AlbumGroup).children || []);
-        }
+  const dropPhotosOnAlbum = async (albumId: string, albumName: string, imagePaths: string[], incoming: string[]) => {
+    if (!incoming.length) return;
+    try {
+      await invoke(Invokes.AddToAlbum, { albumId, paths: incoming });
+      const tree = await invoke<AlbumItem[]>(Invokes.GetAlbums);
+      setLibrary({ albumTree: tree as AlbumItem[] });
+      toast.success(
+        t('ui.developLeft.droppedInto' as any, {
+          defaultValue: '{{count}} photo(s) → {{name}}',
+          count: incoming.length,
+          name: albumName,
+        }),
+      );
+      if (activeAlbumId === albumId) {
+        const merged = Array.from(new Set([...(imagePaths || []), ...incoming]));
+        await openAlbumInLibrary(albumId, albumName, merged);
       }
-    };
-    walk(albumTree || []);
-    return out;
-  }, [albumTree]);
+    } catch (err) {
+      toast.error(`Drop failed: ${err}`);
+    }
+  };
 
   const leaveDevelopToLibrary = () => {
     setUI({ activeView: 'library' });
@@ -273,7 +416,6 @@ export default function DevelopLeftPanel({ isInstantTransition, width }: Develop
       showPreviousImportOnly: false,
       activeAlbumId: null,
     });
-    leaveDevelopToLibrary();
   };
 
   const openAlbumInLibrary = async (albumId: string, albumName: string, imagePaths: string[]) => {
@@ -286,19 +428,23 @@ export default function DevelopLeftPanel({ isInstantTransition, width }: Develop
         activeAlbumId: albumId,
         libraryScrollTop: 0,
       });
-      leaveDevelopToLibrary();
       const files: ImageFile[] = await invoke(Invokes.GetAlbumImages, { paths: imagePaths });
       const initialRatings: Record<string, number> = {};
       files.forEach((f) => {
         if (f.rating !== undefined) initialRatings[f.path] = f.rating;
       });
+      const currentPath = useEditorStore.getState().selectedImage?.path;
+      const keepCurrent = currentPath && files.some((f) => f.path === currentPath);
       setLibrary({
         imageList: files,
         imageRatings: initialRatings,
-        multiSelectedPaths: [],
-        libraryActivePath: null,
+        multiSelectedPaths: keepCurrent && currentPath ? [currentPath] : files[0] ? [files[0].path] : [],
+        libraryActivePath: keepCurrent ? currentPath || null : files[0]?.path ?? null,
         isViewLoading: false,
       });
+      if (!keepCurrent && files[0]) {
+        window.dispatchEvent(new CustomEvent('rustroom:open-image', { detail: { path: files[0].path } }));
+      }
     } catch (err) {
       toast.error(`Failed to load album: ${err}`);
       setLibrary({ isViewLoading: false });
@@ -306,7 +452,8 @@ export default function DevelopLeftPanel({ isInstantTransition, width }: Develop
   };
 
 
-  const { handleZoomChange } = useEditorActions();
+  const { handleZoomChange, handlePasteAdjustments } = useEditorActions();
+  const copiedAdjustments = useEditorStore((s) => s.copiedAdjustments);
 
   const imagePath = selectedImage?.path ?? null;
 
@@ -348,15 +495,6 @@ export default function DevelopLeftPanel({ isInstantTransition, width }: Develop
         >
           {t('ui.developLeft.title' as any)}
         </Text>
-        <div className="flex items-center gap-0.5">
-        <button
-          type="button"
-          className="p-1 rounded hover:bg-card-active text-text-secondary hover:text-text-primary"
-          data-tooltip={t('ui.developLeft.presetBrowser' as any, { defaultValue: 'Preset Browser' })}
-          onClick={() => setUI({ isPresetBrowserOpen: true })}
-        >
-          <LayoutGrid size={14} />
-        </button>
         <button
           type="button"
           className="p-1 rounded hover:bg-card-active text-text-secondary"
@@ -369,12 +507,11 @@ export default function DevelopLeftPanel({ isInstantTransition, width }: Develop
         >
           <ChevronLeft size={14} />
         </button>
-        </div>
       </div>
 
+      <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar flex flex-col">
       <Section
         title={t('ui.developLeft.navigator' as any)}
-        icon={Compass}
         open={openNav}
         onToggle={() => setOpenNav((v) => !v)}
         action={
@@ -437,25 +574,18 @@ export default function DevelopLeftPanel({ isInstantTransition, width }: Develop
             <div className="text-[10px] text-text-secondary truncate" title={selectedImage.path}>
               {selectedImage.path.split(/[/\\]/).pop()}
             </div>
-            {selectedImage.width > 0 && selectedImage.height > 0 && (
-              <div className="text-[10px] text-text-secondary/80 tabular-nums">
-                {selectedImage.width} × {selectedImage.height}
-                {selectedImage.isRaw ? ' · RAW' : ''}
-              </div>
-            )}
           </div>
         )}
       </Section>
 
       <DevelopPresetList
-        renderSection={(action, body) => (
+        renderSection={(action, body, titleAction) => (
           <Section
             title={t('ui.developLeft.presets' as any)}
-            icon={SwatchBook}
             open={openPresets}
             onToggle={() => setOpenPresets((v) => !v)}
-            tall
             action={action}
+            titleAction={titleAction}
           >
             {body}
           </Section>
@@ -464,7 +594,6 @@ export default function DevelopLeftPanel({ isInstantTransition, width }: Develop
 
       <Section
         title={t('ui.developLeft.history' as any)}
-        icon={HistoryIcon}
         open={openHistory}
         onToggle={() => setOpenHistory((v) => !v)}
         action={
@@ -485,7 +614,7 @@ export default function DevelopLeftPanel({ isInstantTransition, width }: Develop
           ) : null
         }
       >
-        <ul className="space-y-0.5 max-h-48 overflow-y-auto custom-scrollbar">
+        <ul className="space-y-0.5">
           {/* Newest first (classic History stack) */}
           {[...history.keys()].reverse().map((idx) => {
             const isCurrent = idx === historyIndex;
@@ -512,11 +641,38 @@ export default function DevelopLeftPanel({ isInstantTransition, width }: Develop
 
       <Section
         title={t('ui.developLeft.collections' as any, { defaultValue: 'Collections' })}
-        icon={FolderHeart}
         open={openCollections}
         onToggle={() => setOpenCollections((v) => !v)}
+        action={
+          <button
+            type="button"
+            className="p-1 rounded text-text-secondary hover:text-text-primary hover:bg-card-active"
+            data-tooltip={t('library.rightPanel.createCollection' as any, { defaultValue: 'Create collection' })}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              showContextMenu(rect.left, rect.bottom + 2, [
+                {
+                  icon: Folder,
+                  label: t('ui.developLeft.createCollection' as any, { defaultValue: 'Créer Collection…' }),
+                  onClick: () => setUI({ albumActionTarget: null, isCreateAlbumModalOpen: true }),
+                },
+                {
+                  icon: FolderPlus,
+                  label: t('ui.developLeft.createCollectionSet' as any, {
+                    defaultValue: 'Créer Ensemble de collections…',
+                  }),
+                  onClick: () => setUI({ albumActionTarget: null, isCreateAlbumGroupModalOpen: true }),
+                },
+              ]);
+            }}
+          >
+            <Plus size={14} />
+          </button>
+        }
       >
-        <ul className="space-y-0.5 max-h-40 overflow-y-auto custom-scrollbar">
+        <ul className="space-y-0.5">
           <li>
             <button
               type="button"
@@ -549,32 +705,44 @@ export default function DevelopLeftPanel({ isInstantTransition, width }: Develop
               </span>
             </button>
           </li>
-          {flatAlbums.length === 0 ? (
+          {(albumTree || []).length === 0 ? (
             <li className="px-1.5 py-1 text-[10px] text-text-secondary">
               {t('ui.developLeft.noAlbums' as any, { defaultValue: 'No albums yet' })}
             </li>
           ) : (
-            flatAlbums.map((a) => (
-              <li key={a.id}>
-                <button
-                  type="button"
-                  onClick={() => openAlbumInLibrary(a.id, a.name, a.images)}
-                  className="w-full text-left px-1.5 py-1 rounded text-[11px] flex items-center gap-1.5 text-text-primary hover:bg-card-active"
-                >
-                  <Images size={12} className="shrink-0 opacity-70" />
-                  <span className="truncate flex-1">
-                    {a.name}
-                    {targetCollectionId === a.id && (
-                      <span className="ml-1 text-[9px] text-amber-300" title="Target">●</span>
-                    )}
-                  </span>
-                  <span className="text-[10px] tabular-nums text-text-secondary">{a.images.length}</span>
-                </button>
-              </li>
-            ))
+            <DevelopAlbumRows
+              items={albumTree || []}
+              depth={0}
+              activeAlbumId={activeAlbumId}
+              targetCollectionId={targetCollectionId}
+              onOpenAlbum={openAlbumInLibrary}
+              onDropPhotos={dropPhotosOnAlbum}
+            />
           )}
         </ul>
       </Section>
+      </div>
+
+      <div className="shrink-0 flex border-t border-border-color/50">
+        <button
+          type="button"
+          className="flex-1 h-8 text-[12px] text-text-primary bg-surface/80 hover:bg-card-active disabled:opacity-40 disabled:hover:bg-surface/80 border-r border-border-color/40"
+          disabled={!selectedImage}
+          onClick={() => setUI({ isCopyPasteSettingsModalOpen: true })}
+          data-tooltip="Ctrl+C"
+        >
+          {t('ui.developLeft.copy' as any, { defaultValue: 'Copy' })}
+        </button>
+        <button
+          type="button"
+          className="flex-1 h-8 text-[12px] text-text-primary bg-surface/80 hover:bg-card-active disabled:opacity-40 disabled:hover:bg-surface/80"
+          disabled={!copiedAdjustments}
+          onClick={() => handlePasteAdjustments()}
+          data-tooltip="Ctrl+V"
+        >
+          {t('ui.developLeft.paste' as any, { defaultValue: 'Paste' })}
+        </button>
+      </div>
     </div>
   );
 }

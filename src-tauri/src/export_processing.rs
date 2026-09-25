@@ -86,6 +86,9 @@ pub struct ExportSettings {
     /// Soft limit in kilobytes for lossy formats (JPEG/WebP/JXL). Quality is lowered to fit.
     #[serde(default)]
     pub limit_file_size_kb: Option<u32>,
+    /// 8 or 16. 16-bit only applies to PNG/TIFF; other formats stay 8-bit.
+    #[serde(default)]
+    pub bit_depth: Option<u8>,
 }
 
 #[derive(Clone)]
@@ -127,6 +130,9 @@ pub struct WatermarkSettings {
     /// Text color as #RRGGBB or #RRGGBBAA (default white)
     #[serde(default)]
     pub text_color: Option<String>,
+    /// "unique" (one stamp) or "multiple" (tiled grid). Default unique.
+    #[serde(default)]
+    pub mode: Option<String>,
 }
 
 fn apply_watermark(
@@ -180,15 +186,33 @@ fn apply_watermark(
             }
             let final_watermark = DynamicImage::ImageRgba8(scaled_watermark_rgba);
             let (wm_w, wm_h) = final_watermark.dimensions();
-            let (x, y) = watermark_position(
-                base_w,
-                base_h,
-                wm_w,
-                wm_h,
-                spacing_pixels,
-                &watermark_settings.anchor,
-            );
-            image::imageops::overlay(base_image, &final_watermark, x, y);
+            let tiled = watermark_settings
+                .mode
+                .as_deref()
+                .map(|m| m.eq_ignore_ascii_case("multiple"))
+                .unwrap_or(false);
+            if tiled {
+                let gap = spacing_pixels.max(0);
+                let mut y = gap;
+                while y + wm_h as i64 <= base_h as i64 {
+                    let mut x = gap;
+                    while x + wm_w as i64 <= base_w as i64 {
+                        image::imageops::overlay(base_image, &final_watermark, x, y);
+                        x += wm_w as i64 + gap;
+                    }
+                    y += wm_h as i64 + gap;
+                }
+            } else {
+                let (x, y) = watermark_position(
+                    base_w,
+                    base_h,
+                    wm_w,
+                    wm_h,
+                    spacing_pixels,
+                    &watermark_settings.anchor,
+                );
+                image::imageops::overlay(base_image, &final_watermark, x, y);
+            }
         }
     }
 
@@ -917,7 +941,7 @@ fn encode_with_optional_size_limit(
             .max(512);
         encode_to_size_budget(image, extension, q, target)
     } else {
-        encode_image_to_bytes(image, extension, q)
+        encode_image_to_bytes(image, extension, q, export_settings.bit_depth.unwrap_or(8))
     }
 }
 
@@ -930,7 +954,7 @@ fn encode_to_size_budget(
 ) -> Result<Vec<u8>, String> {
     let mut lo: u8 = 1;
     let mut hi: u8 = preferred_quality.max(1).min(100);
-    let mut best = encode_image_to_bytes(image, extension, hi)?;
+    let mut best = encode_image_to_bytes(image, extension, hi, 8)?;
     if best.len() <= target_bytes {
         return Ok(best);
     }
@@ -941,7 +965,7 @@ fn encode_to_size_budget(
             break;
         }
         let mid = lo + (hi - lo) / 2;
-        let bytes = encode_image_to_bytes(image, extension, mid)?;
+        let bytes = encode_image_to_bytes(image, extension, mid, 8)?;
         if bytes.len() <= target_bytes {
             best_fit = Some(bytes);
             lo = mid.saturating_add(1);
@@ -957,7 +981,7 @@ fn encode_to_size_budget(
         Ok(fit)
     } else {
         // Could not fit; return lowest quality attempt
-        encode_image_to_bytes(image, extension, 1).or(Ok(best))
+        encode_image_to_bytes(image, extension, 1, 8).or(Ok(best))
     }
 }
 
@@ -965,6 +989,7 @@ fn encode_image_to_bytes(
     image: &DynamicImage,
     output_format: &str,
     jpeg_quality: u8,
+    bit_depth: u8,
 ) -> Result<Vec<u8>, String> {
     let mut image_bytes = Vec::new();
     let mut cursor = Cursor::new(&mut image_bytes);
@@ -1019,10 +1044,17 @@ fn encode_image_to_bytes(
                 .map_err(|e| e.to_string())?;
         }
         "png" => {
-            let image_to_encode = if image.as_rgb32f().is_some() {
-                DynamicImage::ImageRgb16(image.to_rgb16())
+            let has_alpha = image.color().has_alpha();
+            let image_to_encode = if bit_depth >= 16 {
+                if has_alpha {
+                    DynamicImage::ImageRgba16(image.to_rgba16())
+                } else {
+                    DynamicImage::ImageRgb16(image.to_rgb16())
+                }
+            } else if has_alpha {
+                DynamicImage::ImageRgba8(image.to_rgba8())
             } else {
-                image.clone()
+                DynamicImage::ImageRgb8(image.to_rgb8())
             };
 
             image_to_encode
@@ -1030,7 +1062,19 @@ fn encode_image_to_bytes(
                 .map_err(|e| e.to_string())?;
         }
         "tiff" => {
-            DynamicImage::ImageRgb16(image.to_rgb16())
+            let has_alpha = image.color().has_alpha();
+            let image_to_encode = if bit_depth >= 16 {
+                if has_alpha {
+                    DynamicImage::ImageRgba16(image.to_rgba16())
+                } else {
+                    DynamicImage::ImageRgb16(image.to_rgb16())
+                }
+            } else if has_alpha {
+                DynamicImage::ImageRgba8(image.to_rgba8())
+            } else {
+                DynamicImage::ImageRgb8(image.to_rgb8())
+            };
+            image_to_encode
                 .write_to(&mut cursor, image::ImageFormat::Tiff)
                 .map_err(|e| e.to_string())?;
         }
@@ -1226,6 +1270,93 @@ fn export_adjustments_as_lut(
     Ok(cube_lut)
 }
 
+fn export_original_copy(
+    source_path: &Path,
+    sidecar_path: &Path,
+    output_folder_path: &Path,
+    image_path_str: &str,
+    global_index: usize,
+    total_paths: usize,
+    appearance_count: usize,
+    explicit_vc: Option<u32>,
+    export_settings: &ExportSettings,
+    base_origin_folders: &[String],
+    is_explicit_file_path: bool,
+    adjustments_mode: &ExportAdjustmentsMode,
+) -> Result<(), String> {
+    let source_path_str = source_path.to_string_lossy().to_string();
+    let js_adjustments = match adjustments_mode {
+        ExportAdjustmentsMode::UseSidecars {
+            active_path,
+            active_adjustments,
+        } => {
+            if active_path.as_ref() == Some(&source_path_str) {
+                active_adjustments
+                    .clone()
+                    .unwrap_or_else(|| crate::exif_processing::load_sidecar(sidecar_path).adjustments)
+            } else {
+                crate::exif_processing::load_sidecar(sidecar_path).adjustments
+            }
+        }
+        ExportAdjustmentsMode::GlobalOverride(adj) => adj.clone(),
+    };
+    let _ = image_path_str;
+
+    let file_date = exif_processing::get_creation_date_from_path(source_path);
+    let filename_template = export_settings
+        .filename_template
+        .as_deref()
+        .unwrap_or("{original_filename}");
+    let mut new_stem = generate_filename_from_template(
+        filename_template,
+        source_path,
+        global_index + 1,
+        total_paths,
+        &file_date,
+    );
+    if let Some(vc_id) = explicit_vc {
+        new_stem = format!("{}_VC{:02}", new_stem, vc_id);
+    } else if appearance_count > 1 {
+        new_stem = format!("{}_VC{:02}", new_stem, appearance_count - 1);
+    }
+    let ext = source_path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    let new_filename = if ext.is_empty() {
+        new_stem.clone()
+    } else {
+        format!("{}.{}", new_stem, ext)
+    };
+    let output_path = if is_explicit_file_path && total_paths == 1 {
+        let mut p = output_folder_path.to_path_buf();
+        if !ext.is_empty() {
+            p.set_extension(ext);
+        }
+        p
+    } else if export_settings.preserve_folders {
+        if let Some(rel_dir) =
+            relative_export_dir_for_preserved_folders(source_path, base_origin_folders)
+        {
+            let full_dir = output_folder_path.join(rel_dir);
+            let _ = fs::create_dir_all(&full_dir);
+            full_dir.join(&new_filename)
+        } else {
+            output_folder_path.join(&new_filename)
+        }
+    } else {
+        output_folder_path.join(&new_filename)
+    };
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::copy(source_path, &output_path).map_err(|e| e.to_string())?;
+    let mut metadata = crate::exif_processing::load_sidecar(sidecar_path);
+    metadata.adjustments = js_adjustments;
+    crate::file_management::sync_metadata_to_xmp(&output_path, &metadata, true);
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn export_images_impl(
     paths: Vec<String>,
@@ -1251,17 +1382,20 @@ pub(crate) async fn export_images_impl(
         return Ok(());
     }
 
-    let context = match get_or_init_gpu_context(&state, &app_handle) {
-        Ok(context) => context,
-        Err(_) if cancellation_token.load(Ordering::SeqCst) => return Ok(()),
-        Err(error) => return Err(error),
+    let is_original = output_format.eq_ignore_ascii_case("original");
+    let context = if is_original {
+        None
+    } else {
+        match get_or_init_gpu_context(&state, &app_handle) {
+            Ok(ctx) => Some(Arc::new(ctx)),
+            Err(_) if cancellation_token.load(Ordering::SeqCst) => return Ok(()),
+            Err(error) => return Err(error),
+        }
     };
 
     if cancellation_token.load(Ordering::SeqCst) {
         return Ok(());
     }
-
-    let context = Arc::new(context);
     let progress_counter = Arc::new(AtomicUsize::new(0));
 
     let available_cores = std::thread::available_parallelism()
@@ -1338,7 +1472,7 @@ pub(crate) async fn export_images_impl(
             }
 
             let app_handle_clone = app_handle.clone();
-            let context_clone = Arc::clone(&context);
+            let context_clone = context.clone();
             let progress_counter_clone = Arc::clone(&progress_counter);
             let output_folder_path = output_folder_path.to_path_buf();
             let base_origin_folders = base_origin_folders.clone();
@@ -1354,6 +1488,46 @@ pub(crate) async fn export_images_impl(
                 let state = app_handle_clone.state::<AppState>();
                 let (source_path, sidecar_path) = parse_virtual_path(&image_path_str);
                 let source_path_str = source_path.to_string_lossy().to_string();
+
+                if output_format.eq_ignore_ascii_case("original") {
+                    let result = export_original_copy(
+                        &source_path,
+                        &sidecar_path,
+                        &output_folder_path,
+                        &image_path_str,
+                        global_index,
+                        total_paths,
+                        appearance_count,
+                        explicit_vc,
+                        &export_settings,
+                        &base_origin_folders,
+                        is_explicit_file_path,
+                        &adjustments_mode,
+                    );
+                    if !cancellation_token_clone.load(Ordering::SeqCst) {
+                        let current_progress =
+                            progress_counter_clone.fetch_add(1, Ordering::SeqCst) + 1;
+                        let _ = app_handle_clone.emit(
+                            "batch-export-progress",
+                            serde_json::json!({
+                                "current": current_progress,
+                                "total": total_paths,
+                                "path": &image_path_str
+                            }),
+                        );
+                    }
+                    drop(permit);
+                    return if cancellation_token_clone.load(Ordering::SeqCst) {
+                        Err("Export cancelled".to_string())
+                    } else {
+                        result
+                    };
+                }
+
+                let context_clone = context_clone
+                    .as_ref()
+                    .cloned()
+                    .ok_or_else(|| "GPU context missing".to_string())?;
 
                 let is_current_edit = match &adjustments_mode {
                     ExportAdjustmentsMode::UseSidecars { active_path, .. } => {
@@ -1913,6 +2087,7 @@ pub async fn estimate_export_sizes(
             &processed_preview,
             &output_format,
             export_settings.jpeg_quality,
+            export_settings.bit_depth.unwrap_or(8),
         )?;
         let preview_byte_size = preview_bytes.len();
 
@@ -2051,6 +2226,7 @@ pub async fn estimate_export_sizes(
             &processed_preview,
             &output_format,
             export_settings.jpeg_quality,
+            export_settings.bit_depth.unwrap_or(8),
         )?;
         let single_image_estimated_size = preview_bytes.len();
 

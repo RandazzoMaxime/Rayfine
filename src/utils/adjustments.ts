@@ -232,6 +232,10 @@ export interface Adjustments {
   sharpness: number;
   sharpnessThreshold: number;
   showClipping: boolean;
+  /** Lightroom histogram left triangle — paint clipped shadows (blue). */
+  showShadowClipping?: boolean;
+  /** Lightroom histogram right triangle — paint clipped highlights (red). */
+  showHighlightClipping?: boolean;
   structure: number;
   temperature: number;
   tint: number;
@@ -360,22 +364,26 @@ export interface MaskContainer {
 export interface Sections {
   basic: Array<string>;
   color: Array<string>;
+  colorGrading: Array<string>;
   curves: Array<string>;
   details: Array<string>;
   effects: Array<string>;
   optics: Array<string>;
   geometry: Array<string>;
+  lensBlur: Array<string>;
   calibration: Array<string>;
 }
 
 export interface SectionVisibility {
   basic: boolean;
   color: boolean;
+  colorGrading: boolean;
   curves: boolean;
   details: boolean;
   effects: boolean;
   optics: boolean;
   geometry: boolean;
+  lensBlur: boolean;
   calibration: boolean;
 }
 
@@ -480,10 +488,12 @@ export const INITIAL_MASK_ADJUSTMENTS: MaskAdjustments = {
     basic: true,
     curves: true,
     color: true,
+    colorGrading: true,
     details: true,
     effects: true,
     optics: true,
     geometry: true,
+    lensBlur: true,
     calibration: true,
   },
   shadows: 0,
@@ -578,16 +588,20 @@ export const INITIAL_ADJUSTMENTS: Adjustments = {
     basic: true,
     curves: true,
     color: true,
+    colorGrading: true,
     details: true,
     effects: true,
     optics: true,
     geometry: true,
+    lensBlur: true,
     calibration: true,
   },
   shadows: 0,
   sharpness: 0,
   sharpnessThreshold: 15,
   showClipping: false,
+  showShadowClipping: false,
+  showHighlightClipping: false,
   structure: 0,
   temperature: 0,
   tint: 0,
@@ -862,8 +876,8 @@ export const COPYABLE_ADJUSTMENT_KEYS: string[] = Object.values(ADJUSTMENT_GROUP
   .flatMap((group) => group.keys);
 
 export const ADJUSTMENT_SECTIONS: Sections = {
-  // Develop panel order aligned with common Lightroom Classic structure:
-  // Basic (tone) → Tone Curve → Color (WB / presence / HSL / grading) → Detail → Optics → Transform → Effects
+  // Lightroom Classic Develop order:
+  // Basic → Tone Curve → Color Mixer → Color Grading → Detail → Lens Corrections → Transform → Lens Blur → Effects → Calibration
   basic: [
     BasicAdjustment.Exposure,
     'toneMapper',
@@ -884,9 +898,9 @@ export const ADJUSTMENT_SECTIONS: Sections = {
     ColorAdjustment.Vibrance,
     ColorAdjustment.Saturation,
     ColorAdjustment.Hsl,
-    ColorAdjustment.ColorGrading,
     ColorAdjustment.Hue,
   ],
+  colorGrading: [ColorAdjustment.ColorGrading],
   calibration: ['colorCalibration'],
   curves: ['curves', 'pointCurves', 'parametricCurve', 'curveMode'],
   details: [
@@ -916,6 +930,8 @@ export const ADJUSTMENT_SECTIONS: Sections = {
     Effect.VignetteFeather,
     Effect.VignetteMidpoint,
     Effect.VignetteRoundness,
+  ],
+  lensBlur: [
     Effect.LensBlurEnabled,
     Effect.LensBlurAmount,
     Effect.lensBlurDiffusion,

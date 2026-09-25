@@ -42,6 +42,7 @@ export interface CellRect {
 /**
  * Pixel rects for a layout on a W×H canvas. The margin (percent of the shorter side) is applied
  * as the outer border and as the gap between neighbouring cells.
+ * Coordinates are snapped to integer pixels so 0% margin tiles edge-to-edge with no hairline gap.
  */
 export function computeCellRects(layout: Layout, W: number, H: number, marginPct: number): CellRect[] {
   const m = (marginPct / 100) * Math.min(W, H);
@@ -57,11 +58,15 @@ export function computeCellRects(layout: Layout, W: number, H: number, marginPct
     if (c.x + c.width < 1 - eps) x1 -= m / 2;
     if (c.y > eps) y0 += m / 2;
     if (c.y + c.height < 1 - eps) y1 -= m / 2;
-    return { x: x0, y: y0, w: Math.max(0, x1 - x0), h: Math.max(0, y1 - y0) };
+    const x = Math.round(x0);
+    const y = Math.round(y0);
+    const xEnd = Math.round(x1);
+    const yEnd = Math.round(y1);
+    return { x, y, w: Math.max(0, xEnd - x), h: Math.max(0, yEnd - y) };
   });
 }
 
-/** Object-contain fit of an iw×ih image into a rect. */
+/** Object-contain fit of an iw×ih image into a rect — the whole photo stays visible. */
 export function containRect(iw: number, ih: number, r: CellRect): CellRect {
   if (!iw || !ih || !r.w || !r.h) return { x: r.x, y: r.y, w: 0, h: 0 };
   const s = Math.min(r.w / iw, r.h / ih);

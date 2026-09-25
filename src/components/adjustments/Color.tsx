@@ -10,6 +10,7 @@ import { AppSettings } from '../ui/AppProperties';
 import { useEditorStore } from '../../store/useEditorStore';
 import Text from '../ui/Text';
 import { TextColors, TextVariants, TextWeights } from '../../types/typography';
+import { asShotKelvinFrom, kelvinToRelativeTemp, relativeTempToKelvin } from '../../utils/whiteBalance';
 
 interface ColorProps {
   color: string;
@@ -25,6 +26,7 @@ interface ColorPanelProps {
   isWbPickerActive?: boolean;
   toggleWbPicker?: () => void;
   onDragStateChange?: (isDragging: boolean) => void;
+  panel?: 'mixer' | 'grading';
 }
 
 interface ColorSwatchProps {
@@ -107,7 +109,7 @@ const ColorSwatch = ({ color, name, isActive, ariaLabel, onClick }: ColorSwatchP
   );
 };
 
-const ColorGradingPanel = ({ adjustments, setAdjustments, onDragStateChange }: ColorPanelProps) => {
+export const ColorGradingPanel = ({ adjustments, setAdjustments, onDragStateChange }: ColorPanelProps) => {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<'3way' | 'global'>('3way');
   const [isExpanded, setIsExpanded] = useState(false);
@@ -331,8 +333,8 @@ export const ColorCalibrationPanel = ({ adjustments, setAdjustments, onDragState
   const trackSuffix = `${activePrimary}s`;
 
   return (
-    <div className="p-2 bg-bg-tertiary rounded-md mt-2">
-      <Text variant={TextVariants.heading} className="mb-2">
+    <div className="pt-1 mt-1 border-t border-white/15">
+      <Text variant={TextVariants.heading} className="mb-0.5 text-[11px] text-text-primary">
         {t('adjustments.color.calibration.title')}
       </Text>
       <div>
@@ -418,8 +420,8 @@ const GrayMixerPanel = ({ adjustments, setAdjustments, onDragStateChange }: Colo
     } as any);
   };
   return (
-    <div className="p-2 bg-bg-tertiary rounded-md space-y-0.5">
-      <Text variant={TextVariants.heading} className="mb-2">
+    <div className="pt-1 mt-1 border-t border-white/15 space-y-0.5">
+      <Text variant={TextVariants.heading} className="mb-0.5 text-[11px] text-text-primary">
         {t('adjustments.color.bwMix' as any)}
       </Text>
       {GRAY_MIXER_CHANNELS.map(({ key, labelKey, color }) => (
@@ -451,6 +453,7 @@ export default function ColorPanel({
   isWbPickerActive = false,
   toggleWbPicker,
   onDragStateChange,
+  panel = 'mixer',
 }: ColorPanelProps) {
   const { t } = useTranslation();
   const isPointColorPickerActive = useEditorStore((s) => s.isPointColorPickerActive);
@@ -526,14 +529,25 @@ export default function ColorPanel({
   const saturation_slider = `sat-slider-${activeColor}`;
   const luminance_slider = `lum-slider-${activeColor}`;
 
+  if (panel === 'grading') {
+    return (
+      <ColorGradingPanel
+        adjustments={adjustments}
+        setAdjustments={setAdjustments}
+        appSettings={appSettings}
+        onDragStateChange={onDragStateChange}
+      />
+    );
+  }
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-1">
       {/* Global WB + Presence live in Basic (Lightroom Classic layout); masks keep them here. */}
       {isForMask && (
         <>
-      <div className="p-2 bg-bg-tertiary rounded-md">
+      <div className="pt-1 mt-1 border-t border-white/15 first:mt-0 first:pt-0 first:border-t-0">
         <div className="flex justify-between items-center mb-2">
-          <Text variant={TextVariants.heading}>{t('adjustments.color.whiteBalance')}</Text>
+          <Text variant={TextVariants.heading} className="text-[11px] text-text-primary">{t('adjustments.color.whiteBalance')}</Text>
           {!isForMask && toggleWbPicker && (
             <button
               onClick={toggleWbPicker}
@@ -570,6 +584,12 @@ export default function ColorPanel({
           value={adjustments.temperature || 0}
           trackClassName="temperature-gradient-track"
           onDragStateChange={onDragStateChange}
+          formatValue={(n) => String(relativeTempToKelvin(n, asShotKelvinFrom(adjustments as any)))}
+          parseValue={(text) => {
+            const k = parseFloat(String(text).replace(',', '.').replace('+', ''));
+            if (isNaN(k)) return null;
+            return kelvinToRelativeTemp(k, asShotKelvinFrom(adjustments as any));
+          }}
         />
         <Slider
           label={t('adjustments.color.tint')}
@@ -583,8 +603,8 @@ export default function ColorPanel({
         />
       </div>
 
-      <div className="p-2 bg-bg-tertiary rounded-md">
-        <Text variant={TextVariants.heading} className="mb-2">
+      <div className="pt-1 mt-1 border-t border-white/15 first:mt-0 first:pt-0 first:border-t-0">
+        <Text variant={TextVariants.heading} className="mb-0.5 text-[11px] text-text-primary">
           {t('adjustments.color.presence')}
         </Text>
         <Slider
@@ -610,8 +630,8 @@ export default function ColorPanel({
         </>
       )}
 
-      <div className="p-2 bg-bg-tertiary rounded-md">
-        <Text variant={TextVariants.heading} className="mb-2">
+      <div className="pt-1 mt-1 border-t border-white/15 first:mt-0 first:pt-0 first:border-t-0">
+        <Text variant={TextVariants.heading} className="mb-0.5 text-[11px] text-text-primary">
           {isForMask ? t('adjustments.color.localHue') : t('adjustments.color.hue')}
         </Text>
         <Slider
@@ -626,11 +646,11 @@ export default function ColorPanel({
         />
       </div>
 
-      <div className="p-2 bg-bg-tertiary rounded-md">
-        <Text variant={TextVariants.heading} className="mb-3">
+      <div className="pt-1 mt-1 border-t border-white/15 first:mt-0 first:pt-0 first:border-t-0">
+        <Text variant={TextVariants.heading} className="mb-1 text-[11px] text-text-primary">
           {t('adjustments.color.colorMixer')}
         </Text>
-        <div className="flex justify-between mb-4 px-1">
+        <div className="flex justify-between mb-1 px-1">
           {HSL_COLORS.map(({ name, color, label }) => (
             <ColorSwatch
               color={color}
@@ -674,24 +694,11 @@ export default function ColorPanel({
         />
       </div>
 
-      <div className="p-2 bg-bg-tertiary rounded-md">
-        <Text variant={TextVariants.heading} className="mb-3">
-          {t('adjustments.color.colorGrading')}
-        </Text>
-        <ColorGradingPanel
-          adjustments={adjustments}
-          setAdjustments={setAdjustments}
-          appSettings={appSettings}
-          onDragStateChange={onDragStateChange}
-        />
-      </div>
-
-
       {/* LR Point Color (modern mixer) — list + variance from XMP crs:PointColors / ColorVariance */}
       {!isForMask && (
-        <div className="p-2 bg-bg-tertiary rounded-md space-y-2">
+        <div className="pt-1 mt-1 border-t border-white/15 space-y-1">
           <div className="flex items-center justify-between gap-2">
-            <Text variant={TextVariants.heading}>
+            <Text variant={TextVariants.heading} className="text-[11px] text-text-primary">
               {t('adjustments.color.pointColor' as any, { defaultValue: 'Point Color' })}
             </Text>
             <div className="flex items-center gap-1">

@@ -2,7 +2,7 @@ import { useLibraryStore } from '../../../store/useLibraryStore';
 import { useUIStore } from '../../../store/useUIStore';
 import { invoke } from '@tauri-apps/api/core';
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Image as ImageIcon, Folder, FolderOpen, Star as StarIcon, SlidersHorizontal, CloudOff, Layers, Tag, MapPin } from 'lucide-react';
+import { Image as ImageIcon, Folder, FolderOpen, Star as StarIcon, SlidersHorizontal, CloudOff, Layers, Tag, MapPin, Check } from 'lucide-react';
 import clsx from 'clsx';
 import { useTranslation } from 'react-i18next';
 import { COLOR_LABELS, Color } from '../../../utils/adjustments';
@@ -15,6 +15,7 @@ import { useProcessStore } from '../../../store/useProcessStore';
 import { useSettingsStore } from '../../../store/useSettingsStore';
 import { IconAperture, IconFocalLength, IconIso, IconShutter } from '../editor/ExifIcons';
 import CheckBox from '../../ui/CheckBox';
+import { importedPathSet } from '../../../utils/catalogMembership';
 
 function toggleChecked(path: string, checked: boolean) {
   const { multiSelectedPaths, setLibrary } = useLibraryStore.getState();
@@ -22,6 +23,51 @@ function toggleChecked(path: string, checked: boolean) {
     ? Array.from(new Set([...multiSelectedPaths, path]))
     : multiSelectedPaths.filter((p) => p !== path);
   setLibrary({ multiSelectedPaths: next });
+}
+
+function RatingStars({
+  rating,
+  onRate,
+  path,
+  size = 11,
+  emptyClass = 'text-white/35 hover:text-amber-200/80',
+}: {
+  rating: number;
+  onRate?: (n: number, paths: string[]) => void;
+  path: string;
+  size?: number;
+  emptyClass?: string;
+}) {
+  return (
+    <div
+      className="flex items-center gap-px shrink-0 pointer-events-auto"
+      onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      {[1, 2, 3, 4, 5].map((n) => (
+        <button
+          key={n}
+          type="button"
+          className={clsx(
+            'p-0 leading-none flex items-center justify-center',
+            onRate ? 'cursor-pointer' : 'cursor-default',
+          )}
+          disabled={!onRate}
+          onClick={(e) => {
+            e.stopPropagation();
+            onRate?.(n, [path]);
+          }}
+          aria-label={`Rate ${n}`}
+        >
+          <StarIcon
+            size={size}
+            strokeWidth={2}
+            className={n <= rating ? 'text-amber-300 fill-amber-300' : emptyClass}
+          />
+        </button>
+      ))}
+    </div>
+  );
 }
 
 interface ImageLayer {
@@ -346,14 +392,15 @@ const ThumbnailComponent = ({
   ).length;
   const hasKeywords = keywordCount > 0;
   const inQuickCollection = useLibraryStore((s) => (s.quickCollectionPaths || []).includes(path));
+  const isImported = useLibraryStore((s) => importedPathSet(s.albumTree).has(path));
   const libraryPainter = useLibraryStore((s) => s.libraryPainter || (s.keywordPaintTag ? { kind: 'keyword' as const, value: s.keywordPaintTag } : null));
   const hasAnyOverlay =
-    hasEditIcon || hasColorLabel || hasRating || hasGroupBadge || hasFlag || inQuickCollection || hasKeywords || hasGps || !!isRaw;
+    hasEditIcon || hasColorLabel || hasRating || hasGroupBadge || hasFlag || inQuickCollection || hasKeywords || hasGps || !!isRaw || isImported;
 
   return (
     <div
       className={clsx(
-        'aspect-square bg-surface rounded-sm overflow-hidden cursor-pointer group relative flex flex-col transition-all duration-100 transform-gpu [-webkit-mask-image:-webkit-radial-gradient(white,black)]',
+        'h-full w-full bg-surface rounded-sm overflow-hidden cursor-pointer group relative flex flex-col transition-all duration-100 transform-gpu [-webkit-mask-image:-webkit-radial-gradient(white,black)]',
         // LR dims rejected photos in the grid
         isReject && 'opacity-45',
       )}
@@ -392,7 +439,7 @@ const ThumbnailComponent = ({
                   alt={path.split(/[\\/]/).pop()}
                   className={clsx(
                     'w-full h-full transition-transform duration-300 will-change-transform relative',
-                    thumbnailAspectRatio === ThumbnailAspectRatio.Contain ? 'object-contain' : 'object-cover',
+                    'object-contain',
                     isForcedHover ? 'scale-[1.02]' : 'group-hover:scale-[1.02]',
                     isReject && 'grayscale',
                   )}
@@ -445,6 +492,14 @@ const ThumbnailComponent = ({
           label="Select"
           className={isSelected || isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}
         />
+      {isImported && (
+        <div
+          className="h-4 w-4 rounded-full flex items-center justify-center bg-accent/90 text-button-text shadow-md pointer-events-none"
+          title="Imported"
+        >
+          <Check size={10} strokeWidth={3} />
+        </div>
+      )}
       {hasFlag && (
         <div
           className={clsx(
@@ -577,52 +632,22 @@ const ThumbnailComponent = ({
         </div>
       </div>
 
-      {/* Bottom rating + color — clickable stars (classic Library chrome) */}
-      {(hasRating || hasColorLabel || isActive || isSelected || !!onRate) && (
+      {!showGridFilenames && !isAlways && (hasRating || !!onRate) && (
         <div
           className={clsx(
-            // Inset from the edges so stars never overlap the selection ring; sits above the filename row.
-            'absolute inset-x-1.5 z-[25] flex items-center justify-center gap-0.5 py-0.5 rounded',
-            showGridFilenames || isAlways ? 'bottom-8' : 'bottom-1.5',
-            isActive || isSelected || hasRating
-              ? 'opacity-100'
-              : 'opacity-0 group-hover:opacity-100',
-            onRate ? 'pointer-events-auto' : 'pointer-events-none',
+            'absolute inset-x-1.5 bottom-1.5 z-[25] flex items-center justify-center pointer-events-none',
+            isActive || isSelected || hasRating ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
           )}
-          onClick={(e) => e.stopPropagation()}
-          onMouseDown={(e) => e.stopPropagation()}
         >
-          {hasColorLabel && (
-            <span
-              className="w-1.5 h-1.5 rounded-full shrink-0 ring-1 ring-black/30 mr-0.5"
-              style={{ backgroundColor: colorLabel ? colorLabel.color : 'transparent' }}
-            />
-          )}
-          {[1, 2, 3, 4, 5].map((n) => (
-            <button
-              key={n}
-              type="button"
-              className={clsx(
-                'p-0 leading-none',
-                onRate ? 'cursor-pointer hover:scale-110 transition-transform' : 'cursor-default',
-              )}
-              disabled={!onRate}
-              onClick={(e) => {
-                e.stopPropagation();
-                onRate?.(n, [path]);
-              }}
-              aria-label={`Rate ${n}`}
-            >
-              <StarIcon
-                size={9}
-                className={
-                  n <= rating
-                    ? 'text-amber-300 fill-amber-300 drop-shadow-sm'
-                    : 'text-white/30 hover:text-amber-200/80'
-                }
+          <div className="pointer-events-auto px-1 py-0.5 rounded bg-black/50 flex items-center gap-0.5">
+            {hasColorLabel && (
+              <span
+                className="w-1.5 h-1.5 rounded-full shrink-0 ring-1 ring-black/30"
+                style={{ backgroundColor: colorLabel ? colorLabel.color : 'transparent' }}
               />
-            </button>
-          ))}
+            )}
+            <RatingStars rating={rating} onRate={onRate} path={path} size={10} />
+          </div>
         </div>
       )}
 
@@ -685,7 +710,7 @@ const ThumbnailComponent = ({
 
       <div
         className={clsx(
-          'absolute bottom-0 left-0 right-0 flex flex-col p-2 pb-1.5 transition-all duration-300 ease-in-out z-20',
+          'absolute bottom-0 left-0 right-0 flex flex-col p-2 pb-1.5 min-w-0 overflow-hidden transition-all duration-300 ease-in-out z-20',
           isAlways
             ? 'bg-surface border-t border-border-color/50 pointer-events-auto'
             : isHover
@@ -697,8 +722,7 @@ const ThumbnailComponent = ({
       >
         <div
           className={clsx(
-            'flex items-end justify-between shrink-0',
-            // Hide filename row when option off (unless EXIF Always/Hover modes manage visibility)
+            'flex items-center gap-1 min-w-0 w-full',
             !showGridFilenames && !isAlways && !isHover && 'invisible',
             !showGridFilenames && isHover && 'opacity-0 group-hover:opacity-100',
           )}
@@ -706,7 +730,7 @@ const ThumbnailComponent = ({
           <Text
             variant={TextVariants.small}
             className={clsx(
-              'truncate pr-2 transition-colors duration-300',
+              'min-w-0 flex-1 truncate transition-colors duration-300',
               isAlways ? 'text-white' : 'text-white drop-shadow-sm',
             )}
           >
@@ -714,7 +738,7 @@ const ThumbnailComponent = ({
           </Text>
           {!!isRaw && (
             <span
-              className="shrink-0 mr-auto px-1 py-0.5 rounded text-[7px] font-bold uppercase tracking-wide shadow-md bg-orange-500/90 text-white"
+              className="shrink-0 px-1 py-0.5 rounded text-[7px] font-bold uppercase tracking-wide bg-orange-500/90 text-white"
               title="RAW"
             >
               RAW
@@ -746,6 +770,9 @@ const ThumbnailComponent = ({
                 ? 'VC'
                 : `×${virtualCopyStackCount(path)}`}
             </button>
+          )}
+          {(showGridFilenames || isAlways || isHover) && (hasRating || !!onRate) && (
+            <RatingStars rating={rating} onRate={onRate} path={path} size={10} />
           )}
         </div>
 
@@ -835,6 +862,7 @@ const ListItemComponent = ({
   const { t } = useTranslation();
   const data = useProcessStore((s) => s.thumbnails[path]);
   const exifOverlay = useSettingsStore((s) => s.appSettings?.exifOverlay || ExifOverlay.Off);
+  const isImported = useLibraryStore((s) => importedPathSet(s.albumTree).has(path));
 
   const [showPlaceholder, setShowPlaceholder] = useState(false);
   const [layers, setLayers] = useState<ImageLayer[]>([]);
@@ -1051,6 +1079,11 @@ const ListItemComponent = ({
             label="Select"
             className="absolute top-0.5 left-0.5 z-20"
           />
+          {isImported && (
+            <div className="absolute top-0.5 right-0.5 z-20 h-4 w-4 rounded-full flex items-center justify-center bg-accent/90 text-button-text shadow-md pointer-events-none">
+              <Check size={10} strokeWidth={3} />
+            </div>
+          )}
           {layers.length > 0 && (
             <div className="absolute inset-0 w-full h-full flex items-center justify-center">
               {layers.map((layer) => (
@@ -1174,38 +1207,13 @@ const ListItemComponent = ({
       </div>
 
       <div style={{ width: getW('rating') }} className="flex items-center px-2 h-full overflow-hidden">
-        <div
-          className="flex items-center gap-px"
-          title={String(rating)}
-          onClick={(e) => e.stopPropagation()}
-          onMouseDown={(e) => e.stopPropagation()}
-        >
-          {[1, 2, 3, 4, 5].map((n) => (
-            <button
-              key={n}
-              type="button"
-              className={clsx(
-                'p-0 leading-none',
-                onRate ? 'cursor-pointer hover:scale-110 transition-transform' : 'cursor-default',
-              )}
-              disabled={!onRate}
-              onClick={(e) => {
-                e.stopPropagation();
-                onRate?.(n, [path]);
-              }}
-              aria-label={`Rate ${n}`}
-            >
-              <StarIcon
-                size={11}
-                className={
-                  n <= rating
-                    ? 'text-amber-300 fill-amber-300'
-                    : 'text-text-secondary/30 hover:text-amber-200/70'
-                }
-              />
-            </button>
-          ))}
-        </div>
+        <RatingStars
+          rating={rating}
+          onRate={onRate}
+          path={path}
+          size={11}
+          emptyClass="text-text-secondary/30 hover:text-amber-200/70"
+        />
       </div>
 
       <div style={{ width: getW('flag') }} className="flex items-center justify-center px-1 h-full overflow-hidden">
@@ -1536,7 +1544,7 @@ const RowComponent = ({
         boxSizing: 'border-box',
       }}
     >
-      {row.images.map((imageFile: ImageFile) => {
+      {row.images.map((imageFile: ImageFile, i: number) => {
         let isPrevSelected = false;
         let isNextSelected = false;
 
@@ -1556,8 +1564,8 @@ const RowComponent = ({
           <div
             key={imageFile.path}
             style={{
-              width: isListView ? '100%' : itemWidth,
-              height: itemHeight,
+              width: isListView ? '100%' : row.widths?.[i] ?? itemWidth,
+              height: isListView ? itemHeight : row.height ?? itemHeight,
             }}
           >
             {isListView ? (

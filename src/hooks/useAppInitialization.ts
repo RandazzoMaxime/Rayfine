@@ -7,6 +7,7 @@ import { useLibraryStore } from '../store/useLibraryStore';
 import { useEditorStore } from '../store/useEditorStore';
 import { useProcessStore } from '../store/useProcessStore';
 import { THEMES, DEFAULT_THEME_ID, ThemeProps } from '../utils/themes';
+import { applyAppearance, applyCssVariables, loadAppearance } from '../utils/appearance';
 import { COPYABLE_ADJUSTMENT_KEYS } from '../utils/adjustments';
 import {
   FilterCriteria,
@@ -422,25 +423,27 @@ export const useAppInitialization = ({
   }, [appSettings?.enableFolderImageCounts, appSettings?.folderTreeSort?.key]);
 
   useEffect(() => {
-    const root = document.documentElement;
-    const currentThemeId = theme || DEFAULT_THEME_ID;
-
-    const baseTheme =
-      THEMES.find((t: ThemeProps) => t.id === currentThemeId) ||
-      THEMES.find((t: ThemeProps) => t.id === DEFAULT_THEME_ID);
-    if (!baseTheme) return;
-
-    let finalCssVariables: any = { ...baseTheme.cssVariables };
-
-    Object.entries(finalCssVariables).forEach(([key, value]) => {
-      root.style.setProperty(key, value as string);
-    });
+    const stored = loadAppearance();
+    if (stored) {
+      applyAppearance(stored);
+    } else {
+      const currentThemeId = theme || DEFAULT_THEME_ID;
+      const baseTheme =
+        THEMES.find((t: ThemeProps) => t.id === currentThemeId) ||
+        THEMES.find((t: ThemeProps) => t.id === DEFAULT_THEME_ID);
+      if (baseTheme) {
+        const appearance = currentThemeId === Theme.Light || currentThemeId === Theme.Snow || currentThemeId === Theme.Arctic
+          ? 'light'
+          : 'dark';
+        applyCssVariables(baseTheme.cssVariables, appearance);
+      }
+    }
 
     const fontFamily = appSettings?.fontFamily || 'poppins';
     const fontStack =
       fontFamily === 'system'
         ? '-apple-system, BlinkMacSystemFont, system-ui, sans-serif'
         : "'Poppins', system-ui, sans-serif";
-    root.style.setProperty('--font-family', fontStack);
+    document.documentElement.style.setProperty('--font-family', fontStack);
   }, [theme, appSettings?.fontFamily]);
 };

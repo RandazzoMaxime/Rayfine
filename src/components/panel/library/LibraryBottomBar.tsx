@@ -14,8 +14,12 @@ const SORT_OPTIONS = [
   { key: 'file_type', label: 'Type de fichier' },
 ];
 
-/** Minimal Library bottom bar: select all / none in the open folder + sort. */
-export default function LibraryBottomBar({ imageList }: { imageList: ImageFile[] }) {
+/** Library bottom bar: select-all and sort. View modes live in the header. */
+export default function LibraryBottomBar({
+  imageList,
+}: {
+  imageList: ImageFile[];
+}) {
   const { t } = useTranslation();
   const sortCriteria = useLibraryStore((s) => s.sortCriteria);
   const setSortCriteria = useLibraryStore((s) => s.setSortCriteria);

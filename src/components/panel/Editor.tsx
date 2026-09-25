@@ -20,6 +20,7 @@ import { useSettingsStore } from '../../store/useSettingsStore';
 import { useUIStore } from '../../store/useUIStore';
 import { useLibraryStore } from '../../store/useLibraryStore';
 import { useAiMasking } from '../../hooks/useAiMasking';
+import { useTranslation } from 'react-i18next';
 
 const parseRgb = (rgbStr: string): [number, number, number, number] => {
   const match = rgbStr.match(/[\d.]+/g);
@@ -77,6 +78,7 @@ interface EditorProps {
 }
 
 export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, transformWrapperRef }: EditorProps) {
+  const { t } = useTranslation();
   const appSettings = useSettingsStore((s) => s.appSettings);
   const osPlatform = useSettingsStore((s) => s.osPlatform);
   const isFullScreen = useUIStore((s) => s.isFullScreen);
@@ -1984,7 +1986,8 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
     }
   }
 
-  const isWgpuActive = appSettings?.useWgpuRenderer !== false && hasRenderedFirstFrame;
+  const isWgpuActive =
+    appSettings?.useWgpuRenderer !== false && !!selectedImage?.isReady && hasRenderedFirstFrame;
   const hasRenderedAnyPreview = hasRenderedFirstFrame || !!finalPreviewUrl;
 
   return (
@@ -1994,7 +1997,7 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
         !isInstantTransition && 'transition-all duration-300 ease-in-out',
         isFullScreen
           ? 'rounded-none p-0 gap-0'
-          : clsx('rounded-lg p-2 gap-2', appSettings?.useWgpuRenderer !== false ? 'bg-transparent' : 'bg-bg-secondary'),
+          : clsx('rounded-lg p-2 gap-2', isWgpuActive ? 'bg-transparent' : 'bg-bg-secondary'),
       )}
     >
       {hasRenderedAnyPreview && <div className="hidden" data-bench-id="editor-first-frame" />}
@@ -2035,8 +2038,8 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
         className={clsx(
           'flex-1 relative overflow-hidden touch-none',
           isFullScreen ? 'rounded-none' : 'rounded-lg',
-          appSettings?.useWgpuRenderer !== false && !isFullScreen && 'ring-[9999px] ring-bg-secondary',
-          !isWgpuActive && 'bg-bg-secondary',
+          isWgpuActive && !isFullScreen && 'ring-[9999px] ring-bg-secondary',
+          isWgpuActive ? 'bg-transparent' : 'bg-bg-secondary',
         )}
         style={{ cursor: cursorStyle }}
         onContextMenu={onContextMenu}
@@ -2065,6 +2068,13 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
             transform: `translate(${transformState.positionX}px, ${transformState.positionY}px) scale(${transformState.scale})`,
           }}
         >
+          {!selectedImage ? (
+            <div className="text-text-secondary text-sm px-6 text-center">
+              {t('editor.emptyDevelop' as any, {
+                defaultValue: 'Aucune photo. Importez ou sélectionnez une image dans le filmstrip.',
+              })}
+            </div>
+          ) : (
           <ImageCanvas
             appSettings={appSettings}
             activeAiPatchContainerId={activeAiPatchContainerId}
@@ -2117,6 +2127,7 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
             transformState={transformState}
             hasRenderedFirstFrame={hasRenderedFirstFrame}
           />
+          )}
         </div>
 
         {/* LR Loupe Info overlay (I cycles off → basic → full) */}

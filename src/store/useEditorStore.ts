@@ -64,6 +64,8 @@ interface EditorState {
 
   // Interaction State
   isSliderDragging: boolean;
+  /** Histogram hover/drag region — highlights the matching Basic tone slider. */
+  histogramToneRegion: 'blacks' | 'shadows' | 'exposure' | 'highlights' | 'whites' | null;
   zoom: number;
   displaySize: ImageDimensions;
   previewSize: ImageDimensions;
@@ -140,6 +142,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   imageRevision: 0,
 
   isSliderDragging: false,
+  histogramToneRegion: null,
   interactivePatch: null,
   activeMaskContainerId: null,
   activeMaskId: null,

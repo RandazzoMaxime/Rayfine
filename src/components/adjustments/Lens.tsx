@@ -23,7 +23,7 @@ export default function LensPanel({ adjustments, setAdjustments, onDragStateChan
 
   return (
     <div className="space-y-1">
-      <Text variant={TextVariants.small} className="text-text-secondary uppercase tracking-wide text-[10px] mb-1">
+      <Text variant={TextVariants.small} className="text-text-primary/80 tracking-wide text-[10px] mb-1 pt-1 border-t border-border-color/40">
         {t('adjustments.lens.profile' as any)}
       </Text>
       {adj.lensProfileName ? (

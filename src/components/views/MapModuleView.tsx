@@ -281,9 +281,9 @@ export default function MapModuleView({ onBackToLibrary, onOpenDevelop }: Props)
         })
         .join('\n');
       const gpx = `<?xml version="1.0" encoding="UTF-8"?>
-<gpx version="1.1" creator="RustROOM" xmlns="http://www.topografix.com/GPX/1/1">
+<gpx version="1.1" creator="Rayfine" xmlns="http://www.topografix.com/GPX/1/1">
   <metadata>
-    <name>RustROOM photo locations</name>
+    <name>Rayfine photo locations</name>
     <desc>${list.length} waypoint${list.length === 1 ? '' : 's'} from library GPS EXIF</desc>
   </metadata>
 ${wpts}
@@ -372,7 +372,7 @@ ${wpts}
       right={
         <>
           <section className="space-y-1.5">
-            <div className="text-[10px] uppercase tracking-wider text-white/35">
+            <div className="text-[10px] uppercase tracking-wider text-text-secondary">
               {t('ui.map.mapStyle' as any, { defaultValue: 'Map style' })}
             </div>
             {(
@@ -388,8 +388,8 @@ ${wpts}
                 onClick={() => setStyle(id)}
                 className={`w-full h-8 rounded border px-2 flex items-center text-[11px] ${
                   style === id
-                    ? 'bg-white/10 border-white/25 text-white'
-                    : 'bg-white/5 border-white/10 text-white/50 hover:text-white/80'
+                    ? 'bg-card-active border-border-color text-text-primary'
+                    : 'bg-surface border-border-color/40 text-text-secondary hover:text-text-primary'
                 }`}
               >
                 {label}
@@ -397,15 +397,15 @@ ${wpts}
             ))}
           </section>
           <section className="space-y-1.5 mt-3">
-            <div className="text-[10px] uppercase tracking-wider text-white/35">
+            <div className="text-[10px] uppercase tracking-wider text-text-secondary">
               {t('ui.map.options' as any, { defaultValue: 'Options' })}
             </div>
-            <label className="h-8 rounded bg-white/5 border border-white/10 px-2 flex items-center gap-2 text-[11px] text-white/70 cursor-pointer">
+            <label className="h-8 rounded bg-surface border border-border-color/40 px-2 flex items-center gap-2 text-[11px] text-text-primary cursor-pointer">
               <input
                 type="checkbox"
                 checked={showPins}
                 onChange={(e) => setShowPins(e.target.checked)}
-                className="accent-white"
+                className="accent-accent"
               />
               {t('ui.map.showPins' as any, { defaultValue: 'Show pins' })}
             </label>
@@ -414,7 +414,7 @@ ${wpts}
                 <button
                   type="button"
                   onClick={() => openInDevelop(focus.path)}
-                  className="w-full h-8 rounded bg-white/10 border border-white/20 px-2 flex items-center gap-2 text-[11px] text-white hover:bg-white/15"
+                  className="w-full h-8 rounded bg-card-active border border-border-color px-2 flex items-center gap-2 text-[11px] text-text-primary hover:bg-card-active/80"
                 >
                   <MapPin size={12} />
                   {t('ui.map.openDevelop' as any, { defaultValue: 'Open in Develop' })}
@@ -424,12 +424,12 @@ ${wpts}
                   onClick={() => {
                     invoke(Invokes.ShowInFinder, { path: focus.path }).catch(() => {});
                   }}
-                  className="w-full h-8 rounded bg-white/5 border border-white/10 px-2 flex items-center gap-2 text-[11px] text-white/75 hover:bg-white/10"
+                  className="w-full h-8 rounded bg-surface border border-border-color/40 px-2 flex items-center gap-2 text-[11px] text-text-primary hover:bg-card-active"
                 >
                   {t('ui.map.showInFolder' as any, { defaultValue: 'Show in folder' })}
                 </button>
                 <a
-                  className="h-8 rounded bg-white/5 border border-white/10 px-2 flex items-center gap-2 text-[11px] text-sky-300/90 hover:bg-white/10"
+                  className="h-8 rounded bg-surface border border-border-color/40 px-2 flex items-center gap-2 text-[11px] text-accent hover:bg-card-active"
                   href={`https://www.openstreetmap.org/?mlat=${focus.lat}&mlon=${focus.lon}#map=14/${focus.lat}/${focus.lon}`}
                   target="_blank"
                   rel="noreferrer"
@@ -454,12 +454,12 @@ ${wpts}
             </button>
           </section>
           <section className="space-y-1 mt-3">
-            <div className="text-[10px] uppercase tracking-wider text-white/35">
+            <div className="text-[10px] uppercase tracking-wider text-text-secondary">
               {t('ui.map.pins' as any, { defaultValue: 'Pins' })} ({visiblePins.length})
             </div>
             <div className="max-h-[40vh] overflow-y-auto custom-scrollbar space-y-0.5">
               {visiblePins.length === 0 ? (
-                <div className="px-2 py-2 text-[11px] text-white/35">
+                <div className="px-2 py-2 text-[11px] text-text-secondary">
                   {albumLoading
                     ? '…'
                     : filter === 'untagged'
@@ -482,14 +482,14 @@ ${wpts}
                     })}
                     className={`w-full text-left px-2 py-1.5 rounded text-[11px] flex items-start gap-1.5 ${
                       selectedPin === p.path || libraryActivePath === p.path
-                        ? 'bg-white/10 text-white'
-                        : 'text-white/70 hover:bg-white/5'
+                        ? 'bg-card-active text-text-primary'
+                        : 'text-text-secondary hover:bg-surface hover:text-text-primary'
                     }`}
                   >
                     <MapPin size={12} className="mt-0.5 shrink-0 opacity-70" />
                     <span className="min-w-0">
                       <span className="block truncate">{p.name}</span>
-                      <span className="block text-[10px] text-white/35 tabular-nums">
+                      <span className="block text-[10px] text-text-secondary tabular-nums">
                         {p.lat.toFixed(4)}, {p.lon.toFixed(4)}
                       </span>
                     </span>
@@ -498,7 +498,7 @@ ${wpts}
               )}
             </div>
           </section>
-          <section className="space-y-1 mt-4 text-[10px] text-white/35 leading-relaxed">
+          <section className="space-y-1 mt-4 text-[10px] text-text-secondary leading-relaxed">
             {t('ui.map.noteCollections' as any, {
               defaultValue:
                 'Pins from EXIF GPS of the selected collection or current folder. ←/→ cycle · Enter Develop · GPX export.',
@@ -524,15 +524,15 @@ ${wpts}
               aria-pressed={filter === id}
               className={`h-7 px-2.5 rounded text-[11px] flex items-center gap-1.5 border ${
                 filter === id
-                  ? 'bg-white/10 border-white/25 text-white'
-                  : 'bg-white/5 border-white/10 text-white/60 hover:text-white/85'
+                  ? 'bg-card-active border-border-color text-text-primary'
+                  : 'bg-surface border-border-color/40 text-text-secondary hover:text-text-primary'
               }`}
             >
               <span>{label}</span>
-              <span className="text-white/40 tabular-nums text-[10px]">{count}</span>
+              <span className="text-text-secondary tabular-nums text-[10px]">{count}</span>
             </button>
           ))}
-          <span className="ml-auto pl-2 text-[10px] text-white/40 truncate">
+          <span className="ml-auto pl-2 text-[10px] text-text-secondary truncate">
             {activeAlbum ? activeAlbum.name : t('ui.map.currentFolder' as any, { defaultValue: 'Current folder' })}
             {albumLoading ? ' …' : ''}
           </span>

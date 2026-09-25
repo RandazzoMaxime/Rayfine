@@ -96,12 +96,12 @@ fn resolve_image_metadata(
 ) -> ImageFileMetadata {
     let mut metadata = crate::exif_processing::load_sidecar(sidecar_path);
 
-    if enable_xmp_sync
-        && sync_metadata_from_xmp(image_path, &mut metadata)
+    if sync_metadata_from_xmp(image_path, &mut metadata)
         && let Ok(json) = serde_json::to_string_pretty(&metadata)
     {
         let _ = fs::write(sidecar_path, json);
     }
+    let _ = enable_xmp_sync;
 
     let is_raw = crate::formats::is_raw_file(image_path);
     let tm_override = crate::image_processing::resolve_tonemapper_override(settings, is_raw);
@@ -279,6 +279,23 @@ pub struct ImageFile {
     is_cloud_placeholder: bool,
     is_raw: bool,
     group_id: Option<String>,
+}
+
+fn prefer_raw_over_jpeg(paths: Vec<String>) -> Vec<String> {
+    let raw_stems: std::collections::HashSet<String> = paths
+        .iter()
+        .filter(|p| crate::formats::is_raw_file(p))
+        .map(|p| make_group_key(Path::new(p)))
+        .collect();
+    if raw_stems.is_empty() {
+        return paths;
+    }
+    paths
+        .into_iter()
+        .filter(|p| {
+            crate::formats::is_raw_file(p) || !raw_stems.contains(&make_group_key(Path::new(p)))
+        })
+        .collect()
 }
 
 fn make_group_key(source_path: &Path) -> String {
@@ -898,18 +915,6 @@ pub enum AlbumItem {
     },
 }
 
-fn get_albums_path(app_handle: &AppHandle) -> Result<PathBuf, String> {
-    let data_dir = app_handle
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?;
-    let albums_dir = data_dir.join("albums");
-    if !albums_dir.exists() {
-        fs::create_dir_all(&albums_dir).map_err(|e| e.to_string())?;
-    }
-    Ok(albums_dir.join("albums.json"))
-}
-
 pub fn sort_album_tree(items: &mut [AlbumItem]) {
     items.sort_by(|a, b| {
         let get_sort_key = |item: &AlbumItem| match item {
@@ -932,22 +937,15 @@ pub fn sort_album_tree(items: &mut [AlbumItem]) {
 
 #[tauri::command]
 pub fn get_albums(app_handle: AppHandle) -> Result<Vec<AlbumItem>, String> {
-    let path = get_albums_path(&app_handle)?;
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let mut items: Vec<AlbumItem> = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+    let mut items = crate::catalog::load_albums(&app_handle)?;
     sort_album_tree(&mut items);
     Ok(items)
 }
 
 #[tauri::command]
 pub fn save_albums(mut tree: Vec<AlbumItem>, app_handle: AppHandle) -> Result<(), String> {
-    let path = get_albums_path(&app_handle)?;
     sort_album_tree(&mut tree);
-    let json_string = serde_json::to_string_pretty(&tree).map_err(|e| e.to_string())?;
-    fs::write(path, json_string).map_err(|e| e.to_string())
+    crate::catalog::save_albums(&app_handle, tree)
 }
 
 #[tauri::command]
@@ -1146,6 +1144,26 @@ pub fn get_album_images(
         .collect();
 
     assign_group_ids(&mut result_list, &settings);
+    let catalog_meta = crate::catalog::all_photo_meta(&app_handle);
+    if !catalog_meta.is_empty() {
+        for file in &mut result_list {
+            if let Some(meta) = catalog_meta.get(&file.path) {
+                if file.rating == 0 && meta.rating > 0 {
+                    file.rating = meta.rating;
+                }
+                let mut tags = file.tags.take().unwrap_or_default();
+                if !meta.color.is_empty() && !tags.iter().any(|t| t.starts_with("color:")) {
+                    tags.push(format!("color:{}", meta.color));
+                }
+                if meta.pick == 1 && !tags.iter().any(|t| t == "flag:pick") {
+                    tags.push("flag:pick".into());
+                } else if meta.pick == -1 && !tags.iter().any(|t| t == "flag:reject") {
+                    tags.push("flag:reject".into());
+                }
+                file.tags = if tags.is_empty() { None } else { Some(tags) };
+            }
+        }
+    }
     Ok(result_list)
 }
 
@@ -3174,12 +3192,14 @@ pub fn load_metadata(path: String, app_handle: AppHandle) -> Result<ImageMetadat
     let (source_path, sidecar_path) = parse_virtual_path(&path);
     let mut metadata = crate::exif_processing::load_sidecar(&sidecar_path);
 
-    if enable_xmp_sync
-        && sync_metadata_from_xmp(&source_path, &mut metadata)
+    // Always pull develop settings from a sibling .xmp when the RR sidecar is empty
+    // (export Original writes that sidecar; Lightroom-style discovery).
+    if sync_metadata_from_xmp(&source_path, &mut metadata)
         && let Ok(json) = serde_json::to_string_pretty(&metadata)
     {
         let _ = fs::write(&sidecar_path, json);
     }
+    let _ = enable_xmp_sync;
 
     Ok(metadata)
 }
@@ -4105,6 +4125,7 @@ pub async fn import_files(
     settings: ImportSettings,
     app_handle: AppHandle,
 ) -> Result<(), String> {
+    let source_paths = prefer_raw_over_jpeg(source_paths);
     let total_files = source_paths.len();
     let _ = app_handle.emit("import-start", serde_json::json!({ "total": total_files }));
 

@@ -48,7 +48,7 @@ import Switch from '../../ui/Switch';
 import Slider from '../../ui/Slider';
 import BasicAdjustments from '../../adjustments/Basic';
 import CurveGraph from '../../adjustments/Curves';
-import ColorPanel from '../../adjustments/Color';
+import ColorPanel, { ColorGradingPanel } from '../../adjustments/Color';
 import DetailsPanel from '../../adjustments/Details';
 import EffectsPanel from '../../adjustments/Effects';
 import Waveform from '../editor/Waveform';
@@ -324,6 +324,7 @@ export default function MasksPanel() {
     basic: true,
     curves: false,
     color: false,
+    colorGrading: false,
     details: false,
     effects: false,
   });
@@ -2002,7 +2003,7 @@ function SettingsPanel({
     event.preventDefault();
     event.stopPropagation();
 
-    const sectionKeys = ADJUSTMENT_SECTIONS[sectionName];
+    const sectionKeys = ADJUSTMENT_SECTIONS[sectionName as keyof typeof ADJUSTMENT_SECTIONS];
     if (!sectionKeys) return;
 
     const handleCopy = () => {
@@ -2222,21 +2223,22 @@ function SettingsPanel({
         onMouseLeave={() => setIsMaskControlHovered(false)}
         className="flex flex-col gap-2"
       >
-        {Object.keys(ADJUSTMENT_SECTIONS).map((sectionName) => {
+        {(['basic', 'curves', 'color', 'colorGrading', 'details', 'effects'] as const).map((sectionName) => {
           const SectionComponent: any = {
             basic: BasicAdjustments,
             curves: CurveGraph,
             color: ColorPanel,
+            colorGrading: ColorGradingPanel,
             details: DetailsPanel,
             effects: EffectsPanel,
           }[sectionName];
-          const title = sectionName.charAt(0).toUpperCase() + sectionName.slice(1);
+          const title = t(`editor.adjustments.sections.${sectionName}`);
           return (
             <CollapsibleSection
               key={sectionName}
               title={title}
               isOpen={collapsibleState[sectionName]}
-              isContentVisible={sectionVisibility[sectionName]}
+              isContentVisible={sectionVisibility[sectionName] !== false}
               onToggle={() => handleToggleSection(sectionName)}
               onToggleVisibility={() => handleToggleVisibility(sectionName)}
               onContextMenu={(e: any) => handleSectionContextMenu(e, sectionName)}
@@ -2248,6 +2250,8 @@ function SettingsPanel({
                 isForMask={true}
                 appSettings={appSettings}
                 onDragStateChange={onDragStateChange}
+                panel={sectionName === 'color' ? 'mixer' : sectionName === 'colorGrading' ? 'grading' : undefined}
+                variant={sectionName === 'effects' ? 'effects' : undefined}
               />
             </CollapsibleSection>
           );

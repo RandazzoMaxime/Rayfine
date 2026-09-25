@@ -1,287 +1,292 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { motion } from 'framer-motion';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
-import { ADJUSTMENT_GROUPS, COPYABLE_ADJUSTMENT_KEYS, CopyPasteSettings, PasteMode } from '../../utils/adjustments';
-import Button from '../ui/Button';
-import Switch from '../ui/Switch';
-import Text from '../ui/Text';
-import { TextVariants } from '../../types/typography';
+import CheckBox from '../ui/CheckBox';
+import {
+  COPY_SETTINGS_COLUMNS,
+  CopySettingsNode,
+  DEFAULT_COPY_KEYS,
+  allCopySettingKeys,
+  collectNodeKeys,
+} from '../../utils/copySettingsTree';
+
+const SUBSET_STORAGE = 'rustroom.copySettingsSubsets.v1';
+
+interface SavedSubset {
+  id: string;
+  name: string;
+  keys: string[];
+}
 
 interface CopyPasteSettingsModalProps {
   isOpen: boolean;
   onClose(): void;
-  onSave(settings: CopyPasteSettings): void;
-  settings: CopyPasteSettings;
+  onCopy(keys: string[]): void;
+  initialKeys?: string[];
 }
 
-const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-
-const DEFAULT_SETTINGS: CopyPasteSettings = {
-  mode: PasteMode.Merge,
-  includedAdjustments: COPYABLE_ADJUSTMENT_KEYS,
-  knownAdjustments: [],
-  autoSync: false,
-};
-
-interface PasteModeSwitchProps {
-  selectedMode: PasteMode;
-  onModeChange: (mode: PasteMode) => void;
-  isVisible: boolean;
+function loadSubsets(): SavedSubset[] {
+  try {
+    const raw = localStorage.getItem(SUBSET_STORAGE);
+    if (!raw) return [];
+    const p = JSON.parse(raw);
+    return Array.isArray(p) ? p : [];
+  } catch {
+    return [];
+  }
 }
 
-const PasteModeSwitch = ({ selectedMode, onModeChange, isVisible }: PasteModeSwitchProps) => {
+function saveSubsets(list: SavedSubset[]) {
+  try {
+    localStorage.setItem(SUBSET_STORAGE, JSON.stringify(list.slice(0, 20)));
+  } catch {
+    /* ignore */
+  }
+}
+
+function nodeState(node: CopySettingsNode, selected: Set<string>) {
+  const keys = collectNodeKeys(node);
+  if (keys.length === 0) return { checked: false, indeterminate: false, keys };
+  const n = keys.filter((k) => selected.has(k)).length;
+  return { checked: n === keys.length, indeterminate: n > 0 && n < keys.length, keys };
+}
+
+function TreeRow({
+  node,
+  selected,
+  onToggle,
+  depth,
+}: {
+  node: CopySettingsNode;
+  selected: Set<string>;
+  onToggle: (keys: string[], checked: boolean) => void;
+  depth: number;
+}) {
   const { t } = useTranslation();
-  const [buttonRefs, setButtonRefs] = useState<Map<string, HTMLButtonElement>>(new Map());
-  const [bubbleStyle, setBubbleStyle] = useState({});
-  const containerRef = useRef<HTMLDivElement>(null);
-  const isInitialAnimation = useRef(true);
-
-  const pasteModeOptions = useMemo(
-    () => [
-      { id: PasteMode.Merge, label: t('modals.copyPaste.modeMerge') },
-      { id: PasteMode.Replace, label: t('modals.copyPaste.modeReplace') },
-    ],
-    [t],
-  );
-
-  useEffect(() => {
-    const selectedButton = buttonRefs.get(selectedMode);
-
-    if (!isVisible || !selectedButton || !containerRef.current) {
-      return;
-    }
-
-    const targetStyle = {
-      x: selectedButton.offsetLeft,
-      width: selectedButton.offsetWidth,
-    };
-
-    if (isInitialAnimation.current && containerRef.current.offsetWidth > 0) {
-      let initialX;
-      if (selectedMode === PasteMode.Replace) {
-        initialX = containerRef.current.offsetWidth;
-      } else {
-        initialX = -targetStyle.width;
-      }
-
-      setBubbleStyle({
-        x: [initialX, targetStyle.x],
-        width: targetStyle.width,
-      });
-      isInitialAnimation.current = false;
-    } else {
-      setBubbleStyle(targetStyle);
-    }
-  }, [selectedMode, buttonRefs, isVisible]);
-
-  useEffect(() => {
-    if (!isVisible) {
-      isInitialAnimation.current = true;
-    }
-  }, [isVisible]);
+  const { checked, indeterminate, keys } = nodeState(node, selected);
+  const label = t(node.labelKey as any, { defaultValue: node.id });
 
   return (
-    <div ref={containerRef} className="relative flex w-full gap-1 bg-bg-primary p-1 rounded-md">
-      <motion.div
-        className="absolute top-1 bottom-1 z-0 bg-accent shadow-xs"
-        style={{ borderRadius: 6 }}
-        animate={bubbleStyle}
-        transition={{ type: 'spring', bounce: 0.2, duration: 0.6 }}
-      />
-      {pasteModeOptions.map((option) => (
-        <button
-          key={option.id}
-          ref={(el) => {
-            if (el) {
-              const newRefs = new Map(buttonRefs);
-              if (newRefs.get(option.id) !== el) {
-                newRefs.set(option.id, el);
-                setButtonRefs(newRefs);
-              }
-            }
+    <div className={clsx(depth === 0 ? 'mt-1.5 first:mt-0' : 'mt-0.5')}>
+      <label
+        className={clsx(
+          'flex items-center gap-1.5 cursor-pointer select-none',
+          node.disabled && 'opacity-40 cursor-not-allowed',
+          depth === 0 ? 'font-medium text-[12px] text-text-primary' : 'text-[12px] text-text-primary/90',
+        )}
+        style={{ paddingLeft: depth * 16 }}
+        onClick={(e) => {
+          e.preventDefault();
+          if (node.disabled || keys.length === 0) return;
+          onToggle(keys, !checked);
+        }}
+      >
+        <CheckBox
+          checked={checked}
+          indeterminate={indeterminate}
+          disabled={node.disabled || keys.length === 0}
+          label={label}
+          onChange={(next) => {
+            if (node.disabled || keys.length === 0) return;
+            onToggle(keys, next);
           }}
-          onClick={() => onModeChange(option.id)}
-          className={clsx(
-            'relative flex-1 flex items-center justify-center gap-2 py-1.5 text-sm rounded-md transition-colors',
-            {
-              'text-text-primary hover:bg-surface': selectedMode !== option.id,
-              'text-button-text': selectedMode === option.id,
-            },
-          )}
-          style={{ WebkitTapHighlightColor: 'transparent' }}
-        >
-          <span className="relative z-10 flex items-center">{option.label}</span>
-        </button>
+        />
+        <span className="leading-4">{label}</span>
+      </label>
+      {node.children?.map((child) => (
+        <TreeRow key={child.id} node={child} selected={selected} onToggle={onToggle} depth={depth + 1} />
       ))}
     </div>
   );
-};
+}
 
-export default function CopyPasteSettingsModal({ isOpen, onClose, onSave, settings }: CopyPasteSettingsModalProps) {
+export default function CopyPasteSettingsModal({
+  isOpen,
+  onClose,
+  onCopy,
+  initialKeys,
+}: CopyPasteSettingsModalProps) {
   const { t } = useTranslation();
   const [isMounted, setIsMounted] = useState(false);
   const [show, setShow] = useState(false);
-  const [localSettings, setLocalSettings] = useState<CopyPasteSettings>(settings || DEFAULT_SETTINGS);
+  const [selected, setSelected] = useState<Set<string>>(new Set(DEFAULT_COPY_KEYS));
+  const [subsets, setSubsets] = useState<SavedSubset[]>(loadSubsets);
+  const [subsetId, setSubsetId] = useState('default');
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (isOpen) {
-      setLocalSettings(settings || DEFAULT_SETTINGS);
+      const start = initialKeys && initialKeys.length > 0 ? initialKeys : DEFAULT_COPY_KEYS;
+      setSelected(new Set(start));
+      setSubsetId(initialKeys && initialKeys.length > 0 ? 'previous' : 'default');
+      setSubsets(loadSubsets());
       setIsMounted(true);
       const timer = setTimeout(() => setShow(true), 10);
       return () => clearTimeout(timer);
-    } else {
-      setShow(false);
-      const timer = setTimeout(() => setIsMounted(false), 300);
-      return () => clearTimeout(timer);
     }
-  }, [isOpen, settings]);
+    setShow(false);
+    const timer = setTimeout(() => setIsMounted(false), 200);
+    return () => clearTimeout(timer);
+  }, [isOpen, initialKeys]);
 
-  const handleSave = useCallback(() => {
-    onSave(localSettings);
-    onClose();
-  }, [localSettings, onSave, onClose]);
+  const toggleKeys = useCallback((keys: string[], checked: boolean) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const k of keys) {
+        if (checked) next.add(k);
+        else next.delete(k);
+      }
+      return next;
+    });
+    setSubsetId('custom');
+  }, []);
 
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    },
-    [onClose],
-  );
+  const selectAll = () => {
+    setSelected(new Set(allCopySettingKeys()));
+    setSubsetId('all');
+  };
+
+  const selectNone = () => {
+    setSelected(new Set());
+    setSubsetId('custom');
+  };
+
+  const applySubset = (id: string) => {
+    if (id === 'save') {
+      const name = window.prompt(
+        t('modals.copyPaste.saveSubsetPrompt' as any, { defaultValue: 'Subset name' }) || '',
+        t('modals.copyPaste.saveSubsetDefault' as any, { defaultValue: 'My subset' }) || '',
+      );
+      if (!name?.trim()) return;
+      const item: SavedSubset = {
+        id: `cs_${Date.now().toString(36)}`,
+        name: name.trim(),
+        keys: Array.from(selected),
+      };
+      const next = [...subsets, item];
+      setSubsets(next);
+      saveSubsets(next);
+      setSubsetId(item.id);
+      return;
+    }
+    setSubsetId(id);
+    if (id === 'default') setSelected(new Set(DEFAULT_COPY_KEYS));
+    else if (id === 'all') setSelected(new Set(allCopySettingKeys()));
+    else if (id === 'previous' && initialKeys?.length) setSelected(new Set(initialKeys));
+    else {
+      const found = subsets.find((s) => s.id === id);
+      if (found) setSelected(new Set(found.keys));
+    }
+  };
+
+  const confirm = useCallback(() => {
+    onCopy(Array.from(selected));
+  }, [onCopy, selected]);
 
   useEffect(() => {
-    if (isOpen) {
-      window.addEventListener('keydown', handleKeyDown);
-    }
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        confirm();
+      }
     };
-  }, [isOpen, handleKeyDown]);
-
-  const handleSelectAll = () => {
-    setLocalSettings((prev) => ({ ...prev, includedAdjustments: [...COPYABLE_ADJUSTMENT_KEYS] }));
-  };
-
-  const handleSelectNone = () => {
-    setLocalSettings((prev) => ({ ...prev, includedAdjustments: [] }));
-  };
-
-  const handleGroupToggle = (keys: string[], checked: boolean) => {
-    setLocalSettings((prev) => {
-      const newSet = new Set(prev.includedAdjustments);
-      keys.forEach((key) => {
-        if (checked) newSet.add(key);
-        else newSet.delete(key);
-      });
-      return { ...prev, includedAdjustments: Array.from(newSet) };
-    });
-  };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isOpen, onClose, confirm]);
 
   if (!isMounted) return null;
 
+  const footerBtn =
+    'h-7 px-3 rounded-sm text-[12px] bg-surface border border-border-color/50 text-text-primary hover:bg-card-active';
+
   return (
     <div
-      className={`fixed inset-0 flex items-center justify-center z-50 bg-black/30 backdrop-blur-xs transition-opacity duration-300 ease-in-out ${
+      className={`fixed inset-0 flex items-center justify-center z-50 bg-black/40 transition-opacity duration-200 ${
         show ? 'opacity-100' : 'opacity-0'
       }`}
       onClick={onClose}
       role="dialog"
+      aria-modal="true"
     >
       <div
-        className={`bg-surface rounded-lg shadow-xl p-6 w-full max-w-2xl flex flex-col transform transition-all duration-300 ease-out ${
-          show ? 'scale-100 opacity-100 translate-y-0' : 'scale-95 opacity-0 -translate-y-4'
+        ref={dialogRef}
+        className={`bg-bg-secondary border border-border-color/50 shadow-2xl w-[min(56rem,94vw)] flex flex-col transform transition-all duration-200 ${
+          show ? 'scale-100 opacity-100' : 'scale-[0.98] opacity-0'
         }`}
         onClick={(e) => e.stopPropagation()}
       >
-        <Text variant={TextVariants.title} className="mb-4">
-          {t('modals.copyPaste.title')}
-        </Text>
-        <div className="grow overflow-y-auto pr-2 -mr-2 space-y-6">
-          <div>
-            <Text variant={TextVariants.heading} className="block mb-2">
-              {t('modals.copyPaste.pasteMode')}
-            </Text>
-            <PasteModeSwitch
-              selectedMode={localSettings.mode}
-              onModeChange={(mode) => setLocalSettings((p) => ({ ...p, mode }))}
-              isVisible={show}
-            />
-            <Text variant={TextVariants.small} className="mt-2">
-              <b>{t('modals.copyPaste.modeMerge')}:</b> {t('modals.copyPaste.descMerge')}
-              <br />
-              <b>{t('modals.copyPaste.modeReplace')}:</b> {t('modals.copyPaste.descReplace')}
-            </Text>
-          </div>
-
-          <div>
-            <Text variant={TextVariants.heading} className="block mb-2">
-              {t('modals.copyPaste.autoSyncTitle')}
-            </Text>
-            <Switch
-              label={t('modals.copyPaste.autoSyncLabel')}
-              checked={localSettings.autoSync}
-              onChange={(checked) => setLocalSettings((p) => ({ ...p, autoSync: checked }))}
-            />
-            <Text variant={TextVariants.small} className="mt-2">
-              {t('modals.copyPaste.autoSyncDesc')}
-            </Text>
-          </div>
-
-          <div>
-            <div className="flex justify-between items-center mb-2">
-              <Text variant={TextVariants.heading}>{t('modals.copyPaste.includedAdjustments')}</Text>
-              <div className="flex gap-2">
-                <Button
-                  className="px-4 py-2 rounded-md text-text-secondary hover:bg-surface transition-colors"
-                  size="sm"
-                  onClick={handleSelectAll}
-                >
-                  {t('modals.copyPaste.selectAll')}
-                </Button>
-                <Button
-                  className="px-4 py-2 rounded-md text-text-secondary hover:bg-surface transition-colors"
-                  size="sm"
-                  onClick={handleSelectNone}
-                >
-                  {t('modals.copyPaste.selectNone')}
-                </Button>
-              </div>
-            </div>
-            <div className="bg-bg-primary p-4 rounded-md max-h-64 overflow-y-auto">
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-6">
-                {Object.entries(ADJUSTMENT_GROUPS).map(([section, groups]) => (
-                  <div key={section}>
-                    <Text variant={TextVariants.heading} className="mb-2">
-                      {t(`editor.adjustments.sections.${section}`, { defaultValue: capitalize(section) })}
-                    </Text>
-                    {groups.map((group) => {
-                      const isFullyChecked = group.keys.every((key) => localSettings.includedAdjustments.includes(key));
-
-                      return (
-                        <div key={group.label} className="mb-1.5 last:mb-0">
-                          <Switch
-                            label={t(group.label)}
-                            checked={isFullyChecked}
-                            onChange={(checked) => handleGroupToggle(group.keys, checked)}
-                          />
-                        </div>
-                      );
-                    })}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
+        <div className="h-9 px-3 flex items-center justify-between border-b border-border-color/40">
+          <span className="text-[13px] text-text-primary">
+            {t('modals.copyPaste.titleCopy' as any, { defaultValue: 'Copy Settings' })}
+          </span>
+          <button
+            type="button"
+            className="w-7 h-7 text-text-secondary hover:text-text-primary"
+            onClick={onClose}
+            aria-label={t('modals.copyPaste.cancel')}
+          >
+            ×
+          </button>
         </div>
 
-        <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-surface">
-          <Button
-            className="px-4 py-2 rounded-md text-text-secondary bg-surface hover:bg-surface transition-colors"
-            onClick={onClose}
+        <div className="px-3 py-2 grid grid-cols-3 gap-x-6 gap-y-1 max-h-[min(70vh,32rem)] overflow-y-auto custom-scrollbar">
+          {COPY_SETTINGS_COLUMNS.map((col, i) => (
+            <div key={`col-${i}`}>
+              {col.map((node) => (
+                <TreeRow key={node.id} node={node} selected={selected} onToggle={toggleKeys} depth={0} />
+              ))}
+            </div>
+          ))}
+        </div>
+
+        <div className="px-3 py-2 border-t border-border-color/40 flex items-center gap-2 flex-wrap">
+          <button type="button" className={footerBtn} onClick={selectAll}>
+            {t('modals.copyPaste.selectAll')}
+          </button>
+          <button type="button" className={footerBtn} onClick={selectNone}>
+            {t('modals.copyPaste.selectNone')}
+          </button>
+          <div className="flex items-center gap-1.5 ml-2 text-[12px] text-text-secondary">
+            <span>{t('modals.copyPaste.subset' as any, { defaultValue: 'Subset:' })}</span>
+            <select
+              className="h-7 px-1.5 rounded-sm bg-bg-primary border border-border-color/50 text-text-primary text-[12px] min-w-[10rem]"
+              value={subsetId}
+              onChange={(e) => applySubset(e.target.value)}
+            >
+              <option value="default">{t('modals.copyPaste.subsetDefault' as any, { defaultValue: 'Default' })}</option>
+              <option value="all">{t('modals.copyPaste.subsetAll' as any, { defaultValue: 'Everything' })}</option>
+              {initialKeys && initialKeys.length > 0 && (
+                <option value="previous">
+                  {t('modals.copyPaste.subsetPrevious' as any, { defaultValue: 'Previous' })}
+                </option>
+              )}
+              {subsets.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+              <option value="save">
+                {t('modals.copyPaste.saveSubset' as any, { defaultValue: 'Save current subset…' })}
+              </option>
+            </select>
+          </div>
+          <div className="grow" />
+          <button
+            type="button"
+            className="h-7 px-4 rounded-sm text-[12px] bg-accent text-button-text hover:opacity-90 disabled:opacity-40"
+            disabled={selected.size === 0}
+            onClick={confirm}
           >
+            {t('modals.copyPaste.copy' as any, { defaultValue: 'Copy' })}
+          </button>
+          <button type="button" className={footerBtn} onClick={onClose}>
             {t('modals.copyPaste.cancel')}
-          </Button>
-          <Button onClick={handleSave}>{t('modals.copyPaste.save')}</Button>
+          </button>
         </div>
       </div>
     </div>

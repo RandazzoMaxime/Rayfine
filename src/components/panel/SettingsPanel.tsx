@@ -1214,22 +1214,20 @@ export default function SettingsPanel({
                       />
                     </SettingItem>
 
-                    {osPlatform === 'linux' && (
-                      <SettingItem
-                        label={t('settings.general.nativeTitlebar')}
-                        description={t('settings.general.nativeTitlebarDesc')}
-                      >
-                        <Switch
-                          checked={appSettings?.decorations ?? false}
-                          id="native-titlebar-toggle"
-                          label={t('settings.general.enableOsTitlebar')}
-                          onChange={(checked) => {
-                            onSettingsChange({ ...appSettings, decorations: checked });
-                            getCurrentWindow().setDecorations(checked).catch(console.error);
-                          }}
-                        />
-                      </SettingItem>
-                    )}
+                    <SettingItem
+                      label={t('settings.general.nativeTitlebar')}
+                      description={t('settings.general.nativeTitlebarDesc')}
+                    >
+                      <Switch
+                        checked={appSettings?.decorations ?? true}
+                        id="native-titlebar-toggle"
+                        label={t('settings.general.enableOsTitlebar')}
+                        onChange={(checked) => {
+                          onSettingsChange({ ...appSettings, decorations: checked });
+                          getCurrentWindow().setDecorations(checked).catch(console.error);
+                        }}
+                      />
+                    </SettingItem>
                   </div>
                 </div>
 

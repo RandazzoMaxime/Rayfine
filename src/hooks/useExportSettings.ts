@@ -18,6 +18,7 @@ export function useExportSettings() {
   const [outputSharpening, setOutputSharpening] = useState('screen');
   const [resolutionDpi, setResolutionDpi] = useState(240);
   const [limitFileSizeKb, setLimitFileSizeKb] = useState<number | null>(null);
+  const [bitDepth, setBitDepth] = useState<8 | 16>(8);
   const [enableWatermark, setEnableWatermark] = useState(false);
   const [watermarkPath, setWatermarkPath] = useState<string | null>(null);
   const [watermarkText, setWatermarkText] = useState('');
@@ -26,6 +27,7 @@ export function useExportSettings() {
   const [watermarkScale, setWatermarkScale] = useState(10);
   const [watermarkSpacing, setWatermarkSpacing] = useState(5);
   const [watermarkOpacity, setWatermarkOpacity] = useState(75);
+  const [watermarkMode, setWatermarkMode] = useState<'unique' | 'multiple'>('unique');
 
   const handleApplyPreset = useCallback((preset: ExportPreset) => {
     setFileFormat(preset.fileFormat);
@@ -44,6 +46,7 @@ export function useExportSettings() {
     setOutputSharpening(preset.outputSharpening || 'screen');
     setResolutionDpi(preset.resolutionDpi || 240);
     setLimitFileSizeKb(preset.limitFileSizeKb ?? null);
+    setBitDepth(preset.bitDepth === 16 ? 16 : 8);
     setEnableWatermark(preset.enableWatermark);
     setWatermarkPath(preset.watermarkPath);
     setWatermarkText(preset.watermarkText || '');
@@ -52,6 +55,7 @@ export function useExportSettings() {
     setWatermarkScale(preset.watermarkScale);
     setWatermarkSpacing(preset.watermarkSpacing);
     setWatermarkOpacity(preset.watermarkOpacity);
+    setWatermarkMode(preset.watermarkMode === 'multiple' ? 'multiple' : 'unique');
   }, []);
 
   const currentSettingsObject = useMemo(
@@ -72,6 +76,7 @@ export function useExportSettings() {
       outputSharpening,
       resolutionDpi,
       limitFileSizeKb,
+      bitDepth,
       enableWatermark,
       watermarkPath,
       watermarkText,
@@ -80,6 +85,7 @@ export function useExportSettings() {
       watermarkScale,
       watermarkSpacing,
       watermarkOpacity,
+      watermarkMode,
     }),
     [
       fileFormat,
@@ -98,6 +104,7 @@ export function useExportSettings() {
       outputSharpening,
       resolutionDpi,
       limitFileSizeKb,
+      bitDepth,
       enableWatermark,
       watermarkPath,
       watermarkText,
@@ -106,6 +113,7 @@ export function useExportSettings() {
       watermarkScale,
       watermarkSpacing,
       watermarkOpacity,
+      watermarkMode,
     ]
   );
 
@@ -142,6 +150,8 @@ export function useExportSettings() {
     setResolutionDpi,
     limitFileSizeKb,
     setLimitFileSizeKb,
+    bitDepth,
+    setBitDepth,
     enableWatermark,
     setEnableWatermark,
     watermarkPath,
@@ -158,6 +168,8 @@ export function useExportSettings() {
     setWatermarkSpacing,
     watermarkOpacity,
     setWatermarkOpacity,
+    watermarkMode,
+    setWatermarkMode,
     handleApplyPreset,
     currentSettingsObject,
   };

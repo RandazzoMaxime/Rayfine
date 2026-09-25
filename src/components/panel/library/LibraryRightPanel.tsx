@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import clsx from 'clsx';
 import { invoke } from '@tauri-apps/api/core';
 import { useTranslation } from 'react-i18next';
 import {
@@ -13,13 +12,13 @@ import {
 } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { toast } from 'react-toastify';
-import { useLibraryActions } from '../../../hooks/useLibraryActions';
 import LibraryImportBar from './LibraryImportBar';
+import LibraryImportApply from './LibraryImportApply';
 
 import { useLibraryStore } from '../../../store/useLibraryStore';
 import { useProcessStore } from '../../../store/useProcessStore';
 import { Invokes } from '../../ui/AppProperties';
-import { COLOR_LABELS, Color } from '../../../utils/adjustments';
+
 
 /** LR Classic Library right panel structure: Histogram · Quick Develop · Metadata (public layout). */
 
@@ -260,13 +259,12 @@ export default function LibraryRightPanel() {
     adjustments?: Record<string, any> | null;
   } | null>(null);
 
-  const { libraryActivePath, multiSelectedPaths, imageList, imageRatings, setLibrary, setFilterCriteria, filterCriteria } =
+  const { libraryActivePath, multiSelectedPaths, imageList, setLibrary, setFilterCriteria, filterCriteria } =
     useLibraryStore(
       useShallow((s) => ({
         libraryActivePath: s.libraryActivePath,
         multiSelectedPaths: s.multiSelectedPaths,
         imageList: s.imageList,
-        imageRatings: s.imageRatings,
         setLibrary: s.setLibrary,
         setFilterCriteria: s.setFilterCriteria,
         filterCriteria: s.filterCriteria,
@@ -312,7 +310,6 @@ export default function LibraryRightPanel() {
   // Metadata/histogram follow the active (clicked) photo; edits apply to checked photos.
   const primaryPath = libraryActivePath || targetPaths[0] || null;
   const primaryImage = imageList.find((i) => i.path === primaryPath);
-  const rating = primaryPath ? imageRatings[primaryPath] || primaryImage?.rating || 0 : 0;
 
   // Load lightweight metadata for active photo
   useEffect(() => {
@@ -383,34 +380,6 @@ export default function LibraryRightPanel() {
     }
   }, [targetPaths, setLibrary]);
 
-  const colorTag = (primaryImage?.tags || meta?.tags || []).find((t: string) => t.startsWith('color:'))?.substring(6);
-  const colorLabel = COLOR_LABELS.find((c: Color) => c.name === colorTag);
-  const flagTag = (primaryImage?.tags || meta?.tags || []).find((t: string) => t.startsWith('flag:'))?.substring(5);
-
-  const exif = primaryImage?.exif || meta?.exif || null;
-  const exifLines = useMemo(() => {
-    if (!exif) return [] as Array<{ k: string; v: string }>;
-    const keys = [
-      'Make',
-      'Model',
-      'LensModel',
-      'FNumber',
-      'ExposureTime',
-      'PhotographicSensitivity',
-      'ISOSpeedRatings',
-      'FocalLength',
-      'FocalLengthIn35mmFilm',
-      'DateTimeOriginal',
-    ];
-    const out: Array<{ k: string; v: string }> = [];
-    for (const k of keys) {
-      const v = exif[k];
-      if (v) out.push({ k, v: String(v) });
-    }
-    return out;
-  }, [exif]);
-
-  
   const userTags = useMemo(() => {
     const tags = primaryImage?.tags || meta?.tags || [];
     return tags
@@ -436,67 +405,6 @@ export default function LibraryRightPanel() {
       .slice(0, 12)
       .map(([k]) => k);
   }, [imageList, userTags]);
-
-  const { handleUpdateExif } = useLibraryActions();
-
-  const captionValue = String(exif?.ImageDescription || '').trim();
-  const titleValue = String(exif?.XPTitle || exif?.Title || '').trim();
-  const creatorValue = String(exif?.Artist || exif?.Creator || '').trim();
-  const rightsValue = String(exif?.Copyright || '').trim();
-  const cityValue = String(exif?.City || '').trim();
-  const countryValue = String(exif?.Country || '').trim();
-  const locationValue = String(exif?.Location || exif?.SubLocation || '').trim();
-  const stateValue = String(exif?.State || exif?.Province || '').trim();
-  const headlineValue = String(exif?.Headline || '').trim();
-  const creditValue = String(exif?.Credit || '').trim();
-  const sourceValue = String(exif?.Source || '').trim();
-  const instructionsValue = String(exif?.Instructions || '').trim();
-  const jobIdValue = String(exif?.JobIdentifier || exif?.JobID || exif?.['Job Identifier'] || '').trim();
-  const digitalSourceTypeValue = String(exif?.DigitalSourceType || exif?.['Digital Source Type'] || '').trim();
-  const captionWriterValue = String(exif?.CaptionWriter || exif?.['Caption Writer'] || exif?.Writer || '').trim();
-  const categoryValue = String(exif?.Category || '').trim();
-  const supplementalCategoriesValue = String(exif?.SupplementalCategories || exif?.['Supplemental Categories'] || '').trim();
-  const urgencyValue = String(exif?.Urgency || '').trim();
-  const intellectualGenreValue = String(exif?.IntellectualGenre || exif?.['Intellectual Genre'] || '').trim();
-  const eventValue = String(exif?.Event || '').trim();
-  const personInImageValue = String(exif?.PersonInImage || exif?.['Person In Image'] || '').trim();
-  const sceneValue = String(exif?.Scene || '').trim();
-  const subjectCodeValue = String(exif?.SubjectCode || exif?.['Subject Code'] || '').trim();
-  const authorsPositionValue = String(exif?.AuthorsPosition || exif?.['Authors Position'] || '').trim();
-  const countryCodeValue = String(exif?.CountryCode || exif?.['Country Code'] || '').trim();
-  const usageTermsValue = String(exif?.UsageTerms || exif?.['Usage Terms'] || '').trim();
-  const webStatementValue = String(exif?.WebStatement || exif?.['Web Statement'] || '').trim();
-  const creatorWorkUrlValue = String(exif?.CreatorWorkURL || exif?.['Creator Work URL'] || exif?.CiUrlWork || '').trim();
-  const creatorEmailValue = String(exif?.CiEmailWork || exif?.['Creator Email'] || exif?.Email || '').trim();
-  const creatorPhoneValue = String(exif?.CiTelWork || exif?.['Creator Phone'] || exif?.Phone || '').trim();
-  const creatorAddressValue = String(exif?.CiAdrExtadr || exif?.['Creator Address'] || '').trim();
-  const creatorCityValue = String(exif?.CiAdrCity || '').trim();
-  const creatorRegionValue = String(exif?.CiAdrRegion || '').trim();
-  const creatorPostalValue = String(exif?.CiAdrPcode || '').trim();
-  const creatorCountryValue = String(exif?.CiAdrCtry || '').trim();
-  const copyrightStatusValue = String(exif?.CopyrightStatus || exif?.['Copyright Status'] || '').trim();
-
-  const saveMetaField = useCallback(
-    async (key: string, value: string) => {
-      if (targetPaths.length === 0) return;
-      // LR Library: IPTC fields apply to the whole selection (multi-edit)
-      await handleUpdateExif(targetPaths, { [key]: value });
-      setMeta((m) =>
-        m
-          ? { ...m, exif: { ...(m.exif || {}), [key]: value } }
-          : { rating: 0, tags: null, exif: { [key]: value }, is_edited: false },
-      );
-      if (targetPaths.length > 1) {
-        toast.success(
-          t('library.rightPanel.iptcApplied' as any, {
-            defaultValue: 'Metadata updated on {{count}} photos',
-            count: targetPaths.length,
-          }),
-        );
-      }
-    },
-    [targetPaths, handleUpdateExif, t],
-  );
 
   /** Expand "parent/child" or "parent > child" into path segments (LR hierarchical keywords). */
   const expandKeywordHierarchy = (raw: string): string[] => {
@@ -593,9 +501,6 @@ export default function LibraryRightPanel() {
     [targetPaths, setLibrary],
   );
 
-
-  const fileName = primaryPath ? primaryPath.split(/[\\/]/).pop()?.split('?')[0] : null;
-
   return (
     <div className="h-full flex flex-col bg-bg-secondary border-l border-border-color/40 min-w-0">
       <div className="h-8 px-2.5 flex items-center border-b border-border-color/30 shrink-0">
@@ -625,6 +530,11 @@ export default function LibraryRightPanel() {
           onToggle={() => setOpenQuick((v) => !v)}
           icon={SlidersHorizontal}
         >
+          <p className="text-[10px] leading-snug text-text-secondary/70 mb-1.5">
+            {t('library.rightPanel.quickDevelopHint' as any, {
+              defaultValue: 'Pré-édition : ces réglages s’appliquent par défaut à l’import.',
+            })}
+          </p>
           <div className="space-y-1.5">
             {QUICK_CONTROLS.map((c) => (
               <QuickSliderRow
@@ -796,226 +706,21 @@ export default function LibraryRightPanel() {
           )}
         </Section>
 
+        <div className="px-2.5 pb-2">
+          <LibraryImportBar />
+        </div>
+
         <Section
-          title={t('library.rightPanel.metadata' as any, { defaultValue: 'Metadata' })}
+          title={t('library.rightPanel.applyDuringImport' as any, {
+            defaultValue: 'Appliquer pendant l’importation',
+          })}
           open={openMeta}
           onToggle={() => setOpenMeta((v) => !v)}
           icon={Info}
         >
-          {!primaryPath ? (
-            <p className="text-[11px] text-text-secondary/60">
-              {t('library.rightPanel.noSelection' as any, { defaultValue: 'Select a photo' })}
-            </p>
-          ) : (
-            <div className="space-y-2 text-[11px]">
-              <div>
-                <div className="text-[9px] uppercase tracking-wider text-text-secondary/50 mb-0.5">File</div>
-                <div className="text-text-primary truncate" title={fileName || ''}>
-                  {fileName}
-                </div>
-              </div>
-              <div className="flex items-center gap-3">
-                <div>
-                  <div className="text-[9px] uppercase tracking-wider text-text-secondary/50 mb-0.5">Rating</div>
-                  <div className="text-amber-300/90">{'★'.repeat(rating) || '—'}</div>
-                </div>
-                {colorLabel && (
-                  <div>
-                    <div className="text-[9px] uppercase tracking-wider text-text-secondary/50 mb-0.5">Label</div>
-                    <div className="flex items-center gap-1">
-                      <span
-                        className="w-2.5 h-2.5 rounded-full ring-1 ring-black/20"
-                        style={{ backgroundColor: colorLabel.color }}
-                      />
-                      <span className="capitalize text-text-secondary">{colorLabel.name}</span>
-                    </div>
-                  </div>
-                )}
-                {flagTag && (
-                  <div>
-                    <div className="text-[9px] uppercase tracking-wider text-text-secondary/50 mb-0.5">Flag</div>
-                    <span
-                      className={clsx(
-                        'px-1 py-0.5 rounded text-[9px] font-bold uppercase',
-                        flagTag === 'pick' ? 'bg-emerald-500/90 text-white' : 'bg-red-500/90 text-white',
-                      )}
-                    >
-                      {flagTag === 'pick' ? 'P' : 'X'}
-                    </span>
-                  </div>
-                )}
-              </div>
-              <div className="space-y-1.5 pt-1 border-t border-border-color/20">
-                <div className="text-[9px] uppercase tracking-wider text-text-secondary/50 flex items-center gap-1">
-                  <span>{t('library.rightPanel.iptc' as any, { defaultValue: 'Caption / IPTC' })}</span>
-                  {targetPaths.length > 1 && (
-                    <span className="normal-case tracking-normal text-text-secondary/40">
-                      · {t('library.rightPanel.iptcMulti' as any, {
-                        defaultValue: 'applies to {{count}} selected',
-                        count: targetPaths.length,
-                      })}
-                    </span>
-                  )}
-                </div>
-                {(
-                  [
-                    ['ImageDescription', t('library.rightPanel.caption' as any, { defaultValue: 'Caption' }), captionValue],
-                    ['CaptionWriter', t('library.rightPanel.captionWriter' as any, { defaultValue: 'Caption Writer' }), captionWriterValue],
-                    ['Category', t('library.rightPanel.category' as any, { defaultValue: 'Category' }), categoryValue],
-                    ['SupplementalCategories', t('library.rightPanel.suppCategories' as any, { defaultValue: 'Supplemental Categories' }), supplementalCategoriesValue],
-                    ['Urgency', t('library.rightPanel.urgency' as any, { defaultValue: 'Urgency' }), urgencyValue],
-                    ['XPTitle', t('library.rightPanel.title' as any, { defaultValue: 'Title' }), titleValue],
-                    ['Headline', t('library.rightPanel.headline' as any, { defaultValue: 'Headline' }), headlineValue],
-                    ['IntellectualGenre', t('library.rightPanel.genre' as any, { defaultValue: 'Genre' }), intellectualGenreValue],
-                    ['Event', t('library.rightPanel.event' as any, { defaultValue: 'Event' }), eventValue],
-                    ['PersonInImage', t('library.rightPanel.people' as any, { defaultValue: 'People' }), personInImageValue],
-                    ['Scene', t('library.rightPanel.scene' as any, { defaultValue: 'Scene' }), sceneValue],
-                    ['SubjectCode', t('library.rightPanel.subjectCode' as any, { defaultValue: 'Subject Code' }), subjectCodeValue],
-                    ['Artist', t('library.rightPanel.creator' as any, { defaultValue: 'Creator' }), creatorValue],
-                    ['AuthorsPosition', t('library.rightPanel.jobTitle' as any, { defaultValue: 'Job Title' }), authorsPositionValue],
-                    ['Copyright', t('library.rightPanel.copyright' as any, { defaultValue: 'Copyright' }), rightsValue],
-                    ['CopyrightStatus', t('library.rightPanel.copyrightStatus' as any, { defaultValue: 'Copyright Status' }), copyrightStatusValue],
-                    ['UsageTerms', t('library.rightPanel.usageTerms' as any, { defaultValue: 'Rights Usage Terms' }), usageTermsValue],
-                    ['WebStatement', t('library.rightPanel.webStatement' as any, { defaultValue: 'Copyright Info URL' }), webStatementValue],
-                    ['CreatorWorkURL', t('library.rightPanel.creatorUrl' as any, { defaultValue: 'Creator Website' }), creatorWorkUrlValue],
-                    ['CiEmailWork', t('library.rightPanel.creatorEmail' as any, { defaultValue: 'Creator Email' }), creatorEmailValue],
-                    ['CiTelWork', t('library.rightPanel.creatorPhone' as any, { defaultValue: 'Creator Phone' }), creatorPhoneValue],
-                    ['CiAdrExtadr', t('library.rightPanel.creatorAddress' as any, { defaultValue: 'Creator Address' }), creatorAddressValue],
-                    ['CiAdrCity', t('library.rightPanel.creatorCity' as any, { defaultValue: 'Creator City' }), creatorCityValue],
-                    ['CiAdrRegion', t('library.rightPanel.creatorRegion' as any, { defaultValue: 'Creator State/Region' }), creatorRegionValue],
-                    ['CiAdrPcode', t('library.rightPanel.creatorPostal' as any, { defaultValue: 'Creator Postal Code' }), creatorPostalValue],
-                    ['CiAdrCtry', t('library.rightPanel.creatorCountry' as any, { defaultValue: 'Creator Country' }), creatorCountryValue],
-                    ['Credit', t('library.rightPanel.credit' as any, { defaultValue: 'Credit' }), creditValue],
-                    ['Source', t('library.rightPanel.source' as any, { defaultValue: 'Source' }), sourceValue],
-                    ['Instructions', t('library.rightPanel.instructions' as any, { defaultValue: 'Instructions' }), instructionsValue],
-                    ['JobIdentifier', t('library.rightPanel.jobId' as any, { defaultValue: 'Job Identifier' }), jobIdValue],
-                    ['DigitalSourceType', t('library.rightPanel.digitalSource' as any, { defaultValue: 'Digital Source Type' }), digitalSourceTypeValue],
-                    ['City', t('library.rightPanel.city' as any, { defaultValue: 'City' }), cityValue],
-                    ['State', t('library.rightPanel.state' as any, { defaultValue: 'State / Province' }), stateValue],
-                    ['Country', t('library.rightPanel.country' as any, { defaultValue: 'Country' }), countryValue],
-                    ['CountryCode', t('library.rightPanel.countryCode' as any, { defaultValue: 'Country Code' }), countryCodeValue],
-                    ['Location', t('library.rightPanel.location' as any, { defaultValue: 'Location' }), locationValue],
-                  ] as const
-                ).map(([key, label, val]) => (
-                  <label key={key} className="block">
-                    <span className="text-[9px] text-text-secondary/50">{label}</span>
-                    {key === 'Urgency' ? (
-                      <select
-                        key={`${primaryPath}-${key}-${val}`}
-                        disabled={!primaryPath}
-                        defaultValue={val || ''}
-                        onChange={(e) => {
-                          const next = e.target.value;
-                          if (next !== val) saveMetaField(key, next);
-                        }}
-                        className="mt-0.5 w-full h-7 rounded bg-bg-primary/60 border border-border-color/30 px-1.5 text-[11px] text-text-primary outline-none focus:border-accent/50 disabled:opacity-40"
-                      >
-                        <option value="">{t('library.rightPanel.urgencyNone' as any, { defaultValue: 'None' })}</option>
-                        {['1', '2', '3', '4', '5', '6', '7', '8'].map((n) => (
-                          <option key={n} value={n}>
-                            {n}
-                            {n === '1'
-                              ? ` — ${t('library.rightPanel.urgencyHigh' as any, { defaultValue: 'High' })}`
-                              : n === '5'
-                                ? ` — ${t('library.rightPanel.urgencyNormal' as any, { defaultValue: 'Normal' })}`
-                                : n === '8'
-                                  ? ` — ${t('library.rightPanel.urgencyLow' as any, { defaultValue: 'Low' })}`
-                                  : ''}
-                          </option>
-                        ))}
-                      </select>
-                    ) : key === 'DigitalSourceType' ? (
-                      <select
-                        key={`${primaryPath}-${key}-${val}`}
-                        disabled={!primaryPath}
-                        defaultValue={val || ''}
-                        onChange={(e) => {
-                          const next = e.target.value;
-                          if (next !== val) saveMetaField(key, next);
-                        }}
-                        className="mt-0.5 w-full h-7 rounded bg-bg-primary/60 border border-border-color/30 px-1.5 text-[11px] text-text-primary outline-none focus:border-accent/50 disabled:opacity-40"
-                      >
-                        <option value="">{t('library.rightPanel.digitalSourceUnknown' as any, { defaultValue: 'Unknown / unset' })}</option>
-                        <option value="http://cv.iptc.org/newscodes/digitalsourcetype/digitalCapture">digitalCapture</option>
-                        <option value="http://cv.iptc.org/newscodes/digitalsourcetype/negativeFilm">negativeFilm</option>
-                        <option value="http://cv.iptc.org/newscodes/digitalsourcetype/positiveFilm">positiveFilm</option>
-                        <option value="http://cv.iptc.org/newscodes/digitalsourcetype/print">print</option>
-                        <option value="http://cv.iptc.org/newscodes/digitalsourcetype/softwareImage">softwareImage</option>
-                        <option value="http://cv.iptc.org/newscodes/digitalsourcetype/compositeWithTrainedAlgorithmicMedia">compositeWithTrainedAlgorithmicMedia</option>
-                        <option value="http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia">trainedAlgorithmicMedia</option>
-                      </select>
-                    ) : key === 'CopyrightStatus' ? (
-                      <select
-                        key={`${primaryPath}-${key}-${val}`}
-                        disabled={!primaryPath}
-                        defaultValue={
-                          /public/i.test(val)
-                            ? 'Public Domain'
-                            : /copyright/i.test(val) || val === 'True' || val === 'true'
-                              ? 'Copyrighted'
-                              : val
-                                ? val
-                                : ''
-                        }
-                        onChange={(e) => {
-                          const next = e.target.value;
-                          if (next !== val) saveMetaField(key, next);
-                        }}
-                        className="mt-0.5 w-full h-7 rounded bg-bg-primary/60 border border-border-color/30 px-1.5 text-[11px] text-text-primary outline-none focus:border-accent/50 disabled:opacity-40"
-                      >
-                        <option value="">
-                          {t('library.rightPanel.copyrightUnknown' as any, {
-                            defaultValue: 'Unknown',
-                          })}
-                        </option>
-                        <option value="Copyrighted">
-                          {t('library.rightPanel.copyrighted' as any, {
-                            defaultValue: 'Copyrighted',
-                          })}
-                        </option>
-                        <option value="Public Domain">
-                          {t('library.rightPanel.publicDomain' as any, {
-                            defaultValue: 'Public Domain',
-                          })}
-                        </option>
-                      </select>
-                    ) : (
-                      <input
-                        type="text"
-                        defaultValue={val}
-                        key={`${primaryPath}-${key}-${val}`}
-                        disabled={!primaryPath}
-                        onBlur={(e) => {
-                          const next = e.target.value.trim();
-                          if (next !== val) saveMetaField(key, next);
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-                        }}
-                        className="mt-0.5 w-full h-7 rounded bg-bg-primary/60 border border-border-color/30 px-1.5 text-[11px] text-text-primary outline-none focus:border-accent/50 disabled:opacity-40"
-                        placeholder={label}
-                      />
-                    )}
-                  </label>
-                ))}
-              </div>
-              {exifLines.length > 0 && (
-                <div className="space-y-1 pt-1 border-t border-border-color/20">
-                  <div className="text-[9px] uppercase tracking-wider text-text-secondary/50">Camera</div>
-                  {exifLines.map(({ k, v }) => (
-                    <div key={k} className="flex gap-2">
-                      <span className="text-text-secondary/60 w-[72px] shrink-0 truncate">{k}</span>
-                      <span className="text-text-primary truncate">{v}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+          <LibraryImportApply />
         </Section>
       </div>
-
-      <LibraryImportBar />
     </div>
   );
 }

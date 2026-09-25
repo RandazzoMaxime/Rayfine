@@ -385,12 +385,15 @@
       },
       "sections": {
         "basic": "Básico",
-        "color": "Color",
+        "color": "Mezclador de color",
+        "colorGrading": "Gradación de color",
         "curves": "Curvas",
         "details": "Detalles",
         "effects": "Efectos",
-        "optics": "Optics",
-        "geometry": "Transform"
+        "optics": "Correcciones de lente",
+        "geometry": "Transformar",
+        "lensBlur": "Desenfoque de lente",
+        "calibration": "Calibración"
       },
       "title": "Ajustes",
       "tooltips": {
@@ -1120,7 +1123,7 @@
     },
     "splash": {
       "addFolder": "Añadir carpeta",
-      "brand": "RapidRAW",
+      "brand": "Rayfine",
       "continueSession": "Continuar sesión",
       "contribute": "Contribuir en GitHub",
       "descriptionAndroid": "Un editor de imágenes RAW increíblemente rápido y acelerado por GPU. Abre la biblioteca para comenzar.",

@@ -66,6 +66,11 @@ export enum Invokes {
   GetFolderChildren = 'get_folder_children',
   GetLogFilePath = 'get_log_file_path',
   GetOrCreateInternalLibraryRoot = 'get_or_create_internal_library_root',
+  GetCatalogLocation = 'get_catalog_location',
+  SetCatalogLocation = 'set_catalog_location',
+  ListWatermarks = 'list_watermarks',
+  ImportWatermarks = 'import_watermarks',
+  RemoveWatermark = 'remove_watermark',
   GetPinnedFolderTrees = 'get_pinned_folder_trees',
   GetSupportedFileTypes = 'get_supported_file_types',
   HandleExportPresetsToFile = 'handle_export_presets_to_file',
@@ -122,6 +127,7 @@ export enum Invokes {
   SaveAlbums = 'save_albums',
   AddToAlbum = 'add_to_album',
   GetAlbumImages = 'get_album_images',
+  ImportLightroomCatalog = 'import_lightroom_catalog',
 }
 
 export enum ExifOverlay {
@@ -204,6 +210,10 @@ export interface AppSettings {
   /** Recently visited library folders (paths), newest first. */
   recentFolders?: string[];
   lastRootPath: string | null;
+  /** User data folder (catalog, watermarks, settings copy). */
+  dataDir?: string | null;
+  /** @deprecated use dataDir */
+  catalogDir?: string | null;
   rootFolders?: string[];
   libraryViewMode?: LibraryViewMode;
   sortCriteria?: SortCriteria;

@@ -16,6 +16,7 @@ import { useTranslation } from 'react-i18next';
 import { ToolType } from '../components/panel/right/Masks';
 import { SOFT_PROOF_PROFILES } from '../utils/softProofProfiles';
 import { COLOR_LABELS } from '../utils/adjustments';
+import { pickDevelopPath } from '../utils/catalogMembership';
 
 interface KeyboardShortcutsProps {
   sortedImageList: Array<ImageFile>;
@@ -119,26 +120,30 @@ export const useKeyboardShortcuts = ({
         },
       },
       go_to_develop: {
-        shouldFire: (s: any) => {
-          if (s.editor.selectedImage) return true;
-          return !!(s.library.libraryActivePath || (s.library.multiSelectedPaths && s.library.multiSelectedPaths[0]));
-        },
+        shouldFire: () => true,
         execute: (e: any, s: any) => {
           e.preventDefault();
-          const openAdj = () =>
+          if (s.editor.selectedImage) {
             s.ui.setUI({
+              activeView: 'develop',
               activeRightPanel: Panel.Adjustments,
               renderedRightPanel: Panel.Adjustments,
             });
-          if (s.editor.selectedImage) {
-            openAdj();
             return;
           }
-          const target = s.library.libraryActivePath || s.library.multiSelectedPaths?.[0];
-          if (target) {
-            handleImageSelect(target);
-            // handleImageSelect also opens Adjustments
-          }
+          const target = pickDevelopPath(s.library.albumTree, [
+            s.library.libraryActivePath,
+            ...(s.library.multiSelectedPaths || []),
+            ...(s.library.imageList || []).map((img: ImageFile) => img.path),
+          ]);
+          if (target) handleImageSelect(target);
+          else
+            s.ui.setUI({
+              activeView: 'develop',
+              activeRightPanel: Panel.Adjustments,
+              renderedRightPanel: Panel.Adjustments,
+              uiVisibility: { ...s.ui.uiVisibility, developLeft: true, filmstrip: true },
+            });
         },
       },
 
@@ -151,23 +156,30 @@ export const useKeyboardShortcuts = ({
         },
       },
       module_develop: {
-        shouldFire: (s: any) =>
-          !!(
-            s.editor.selectedImage ||
-            s.library.libraryActivePath ||
-            (s.library.multiSelectedPaths && s.library.multiSelectedPaths[0])
-          ),
+        shouldFire: () => true,
         execute: (e: any, s: any) => {
           e.preventDefault();
-          // reuse go_to_develop logic
-          s.ui.setUI({
-            activeView: 'develop',
-            activeRightPanel: Panel.Adjustments,
-            renderedRightPanel: Panel.Adjustments,
-          });
-          if (s.editor.selectedImage) return;
-          const target = s.library.libraryActivePath || s.library.multiSelectedPaths?.[0];
+          if (s.editor.selectedImage) {
+            s.ui.setUI({
+              activeView: 'develop',
+              activeRightPanel: Panel.Adjustments,
+              renderedRightPanel: Panel.Adjustments,
+            });
+            return;
+          }
+          const target = pickDevelopPath(s.library.albumTree, [
+            s.library.libraryActivePath,
+            ...(s.library.multiSelectedPaths || []),
+            ...(s.library.imageList || []).map((img: ImageFile) => img.path),
+          ]);
           if (target) handleImageSelect(target);
+          else
+            s.ui.setUI({
+              activeView: 'develop',
+              activeRightPanel: Panel.Adjustments,
+              renderedRightPanel: Panel.Adjustments,
+              uiVisibility: { ...s.ui.uiVisibility, developLeft: true, filmstrip: true },
+            });
         },
       },
       module_map: {
@@ -542,17 +554,26 @@ export const useKeyboardShortcuts = ({
         },
       },
       copy_adjustments: {
-        shouldFire: () => true,
-        execute: (e: any) => {
+        shouldFire: (s: any) =>
+          !!(s.editor.selectedImage || s.library.libraryActivePath || s.library.multiSelectedPaths?.[0]),
+        execute: (e: any, s: any) => {
           e.preventDefault();
-          handleCopyAdjustments();
+          s.ui.setUI({ isCopyPasteSettingsModalOpen: true });
         },
       },
       paste_adjustments: {
-        shouldFire: () => true,
-        execute: (e: any) => {
+        shouldFire: (s: any) => !!s.editor.copiedAdjustments,
+        execute: (e: any, s: any) => {
           e.preventDefault();
-          handlePasteAdjustments();
+          const paths =
+            s.library.multiSelectedPaths?.length > 0
+              ? s.library.multiSelectedPaths
+              : s.editor.selectedImage
+                ? [s.editor.selectedImage.path]
+                : s.library.libraryActivePath
+                  ? [s.library.libraryActivePath]
+                  : [];
+          handlePasteAdjustments(paths);
         },
       },
       match_previous: {
@@ -1049,14 +1070,8 @@ export const useKeyboardShortcuts = ({
         },
       },
       loupe_cycle_zoom: {
-        shouldFire: (s: any) => {
-          const mode = s.settings?.appSettings?.libraryDisplayMode;
-          return !s.editor.selectedImage && (mode === 'loupe' || mode === LibraryDisplayMode.Loupe);
-        },
-        execute: (e: any) => {
-          e.preventDefault();
-          window.dispatchEvent(new CustomEvent('rustroom:loupe-cycle-zoom'));
-        },
+        shouldFire: () => false,
+        execute: () => {},
       },
       zoom_100: {
         shouldFire: (s: any) => !!s.editor.selectedImage,
@@ -1185,10 +1200,15 @@ export const useKeyboardShortcuts = ({
         shouldFire: (s: any) => !!s.editor.selectedImage,
         execute: (e: any, s: any) => {
           e.preventDefault();
-          // LR J: shadow/highlight clipping indicators
           const adj = s.editor.adjustments || {};
+          const on = !!(adj.showShadowClipping || adj.showHighlightClipping || adj.showClipping);
           s.editor.setEditor({
-            adjustments: { ...adj, showClipping: !adj.showClipping },
+            adjustments: {
+              ...adj,
+              showClipping: false,
+              showShadowClipping: !on,
+              showHighlightClipping: !on,
+            },
           });
         },
       },
@@ -1212,8 +1232,12 @@ export const useKeyboardShortcuts = ({
             s.editor.setEditor({ beforeAfterOrientation: next });
             return;
           }
-          const next = !s.editor.beforeAfterSplit;
-          s.editor.setEditor({ beforeAfterSplit: next, showOriginal: next ? false : s.editor.showOriginal });
+          const next = !(s.editor.beforeAfterSplit && s.editor.beforeAfterOrientation === 'two-up');
+          s.editor.setEditor({
+            beforeAfterSplit: next,
+            beforeAfterOrientation: 'two-up',
+            showOriginal: next ? false : s.editor.showOriginal,
+          });
         },
       },
       soft_proof: {
@@ -4605,13 +4629,7 @@ export const useKeyboardShortcuts = ({
           } catch {
             /* ignore */
           }
-          useUIStore.getState().setRightPanel(Panel.Export);
-          // Library export panel path
-          try {
-            useUIStore.getState().setUI({ isLibraryExportPanelVisible: true });
-          } catch {
-            /* ignore */
-          }
+          useUIStore.getState().setUI({ isExportModalOpen: true, isLibraryExportPanelVisible: false });
           window.setTimeout(() => {
             try {
               window.dispatchEvent(new CustomEvent('rustroom:export-previous'));
@@ -4625,7 +4643,7 @@ export const useKeyboardShortcuts = ({
         shouldFire: (s: any) => !!s.editor.selectedImage,
         execute: (e: any, s: any) => {
           e.preventDefault();
-          s.ui.setRightPanel(Panel.Export);
+          s.ui.setUI({ isExportModalOpen: true });
         },
       },
       toggle_library_exif: {

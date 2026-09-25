@@ -1,7 +1,8 @@
-import { useCallback, useState, useEffect } from 'react';
+import { useCallback, useState, useEffect, useRef } from 'react';
 import { platform } from '@tauri-apps/plugin-os';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Minus, Square, X } from 'lucide-react';
+import { useUIStore } from '../store/useUIStore';
 
 const RestoreDownIcon = ({ size = 14, className = '' }) => (
   <svg
@@ -23,6 +24,18 @@ const RestoreDownIcon = ({ size = 14, className = '' }) => (
 export default function TitleBar() {
   const [osPlatform, setOsPlatform] = useState('');
   const [isMaximized, setIsMaximized] = useState(false);
+  const [fileOpen, setFileOpen] = useState(false);
+  const fileRef = useRef<HTMLDivElement | null>(null);
+  const setUI = useUIStore((s) => s.setUI);
+
+  useEffect(() => {
+    if (!fileOpen) return;
+    const close = (e: MouseEvent) => {
+      if (!fileRef.current?.contains(e.target as Node)) setFileOpen(false);
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [fileOpen]);
 
   const appWindow = getCurrentWindow();
 
@@ -115,7 +128,30 @@ export default function TitleBar() {
             </div>
           )}
           <div data-tauri-drag-region className={`flex items-center h-full ${isMac ? '' : 'px-4'}`}>
-            <p className="text-sm font-semibold text-text-secondary pointer-events-none">RapidRAW</p>
+            <p className="text-sm font-semibold text-text-secondary pointer-events-none">Rayfine</p>
+          </div>
+          <div className="relative h-full flex items-center z-20" ref={fileRef}>
+            <button
+              type="button"
+              className="h-full px-3 text-[12px] text-text-secondary hover:text-text-primary hover:bg-white/5"
+              onClick={() => setFileOpen((v) => !v)}
+            >
+              Fichier
+            </button>
+            {fileOpen && (
+              <div className="absolute top-full left-0 mt-0 min-w-[10rem] py-1 rounded bg-surface border border-border-color/50 shadow-xl">
+                <button
+                  type="button"
+                  className="w-full text-left px-3 py-1.5 text-[12px] text-text-primary hover:bg-card-active"
+                  onClick={() => {
+                    setFileOpen(false);
+                    setUI({ isExportModalOpen: true });
+                  }}
+                >
+                  Exporter…
+                </button>
+              </div>
+            )}
           </div>
         </div>
         <div data-tauri-drag-region className="flex-1 h-full" />

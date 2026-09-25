@@ -1,19 +1,16 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
-import { Image as ImageIcon, Star, SlidersHorizontal, MapPin } from 'lucide-react';
+import { Image as ImageIcon } from 'lucide-react';
 import clsx from 'clsx';
 import { Grid, useGridCallbackRef } from 'react-window';
-import { useTranslation } from 'react-i18next';
 import { ImageFile, SelectedImage, ThumbnailAspectRatio, GroupingMode } from '../ui/AppProperties';
-import { Color, COLOR_LABELS } from '../../utils/adjustments';
-import { findVirtualCopyStack } from '../../utils/imageGrouping';
-import Text from '../ui/Text';
-import { TextColors, TextVariants, TextWeights } from '../../types/typography';
 import { useProcessStore } from '../../store/useProcessStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { useLibraryStore } from '../../store/useLibraryStore';
 
-const HORIZONTAL_PADDING = 4;
-const ITEM_GAP = 8;
+const HORIZONTAL_PADDING = 2;
+const ITEM_GAP = 2;
+/** Fixed filmstrip cell (LR / Border): same slot size for every photo. */
+const CELL_ASPECT = 4 / 3;
 
 interface ImageLayer {
   id: string;
@@ -32,6 +29,7 @@ interface ItemData {
   onImageSelect?: (path: string, event: any) => void;
   onImageDoubleClick?: (path: string) => void;
   onRate?: (rate: number, paths?: string[]) => void;
+  onSetColorLabel?: (color: string | null, paths?: string[]) => void;
   itemHeight: number;
   setRatio: (index: number, ratio: number) => void;
 }
@@ -39,14 +37,12 @@ interface ItemData {
 const FilmstripThumbnail = memo(
   ({
     imageFile,
-    imageRatings,
     isActive,
     isSelected,
+    multiSelectedPaths,
     onContextMenu,
     onImageSelect,
     onImageDoubleClick,
-    onRate,
-    thumbnailAspectRatio,
     itemHeight: _itemHeight,
     index,
     setRatio,
@@ -55,16 +51,17 @@ const FilmstripThumbnail = memo(
     imageRatings: any;
     isActive: boolean;
     isSelected: boolean;
+    multiSelectedPaths: string[];
     onContextMenu?: (event: any, path: string) => void;
     onImageSelect?: (path: string, event: any) => void;
     onImageDoubleClick?: (path: string) => void;
     onRate?: (rate: number, paths?: string[]) => void;
+    onSetColorLabel?: (color: string | null, paths?: string[]) => void;
     thumbnailAspectRatio: ThumbnailAspectRatio;
     itemHeight: number;
     index: number;
     setRatio: (index: number, ratio: number) => void;
   }) => {
-    const { t } = useTranslation();
     const thumbData = useProcessStore((s) => s.thumbnails[imageFile.path]);
 
     const [layers, setLayers] = useState<ImageLayer[]>([]);
@@ -85,63 +82,36 @@ const FilmstripThumbnail = memo(
 
     const isInitialLoad = useRef(true);
 
-    const { path, tags, is_edited: isEdited } = imageFile;
-    const rating = imageRatings?.[path] || 0;
-    const colorTag = tags?.find((t: string) => t.startsWith('color:'))?.substring(6);
-    const colorLabel = COLOR_LABELS.find((c: Color) => c.name === colorTag);
-    const isVirtualCopy = path.includes('?vc=') || !!imageFile.is_virtual_copy;
-    // Badge also on master when stack has copies (best-effort: any sibling ?vc= for same physical)
-    const hasVcStack = (() => {
-      try {
-        const list = useLibraryStore.getState().imageList || [];
-        return findVirtualCopyStack(list, path).length >= 2;
-      } catch {
-        return false;
-      }
-    })();
-    const displayEditIcon = useSettingsStore((s) => s.appSettings?.displayEditIcon ?? true);
-    const showEditIcon = isEdited && displayEditIcon;
-
-    const hasEditIcon = !!showEditIcon;
-    const hasColorLabel = !!colorLabel;
-    const hasRating = rating > 0;
+    const { path, tags } = imageFile;
     const flagTag = tags?.find((t: string) => t.startsWith('flag:'))?.substring(5);
-    const isPick = flagTag === 'pick';
     const isReject = flagTag === 'reject';
-    const hasFlag = isPick || isReject;
-    const isRaw = !!imageFile?.is_raw;
-    const hasGps = (() => {
-      const e = imageFile?.exif || {};
-      const lat = e.GPSLatitude ?? e.gpsLatitude;
-      const lon = e.GPSLongitude ?? e.gpsLongitude;
-      if (lat == null || lon == null || lat === '' || lon === '') return false;
-      return Number.isFinite(parseFloat(String(lat))) && Number.isFinite(parseFloat(String(lon)));
-    })();
-    const inQuickCollection = useLibraryStore((s) => (s.quickCollectionPaths || []).includes(path));
-    const hasAnyOverlay = hasEditIcon || hasColorLabel || hasRating || hasFlag || inQuickCollection || hasGps;
 
     const cleanPath = path.split('?')[0];
     const filename = cleanPath.split(/[\\/]/).pop() || '';
 
-    const truncatedTitle =
-      filename.length > 40 ? filename.substring(0, 20) + '...' + filename.substring(filename.length - 17) : filename;
+    useEffect(() => {
+      const w = imageFile.width;
+      const h = imageFile.height;
+      if (w && h && w > 0 && h > 0) {
+        setRatio(index, w / h);
+      }
+    }, [imageFile.width, imageFile.height, index, setRatio]);
 
     useEffect(() => {
-      if (thumbnailAspectRatio === ThumbnailAspectRatio.Contain && thumbData) {
-        const img = new Image();
-        img.onload = () => {
-          const ratio = img.naturalWidth / img.naturalHeight;
-          setRatio(index, ratio);
-
-          if (isInitialLoad.current) {
-            setTimeout(() => {
-              isInitialLoad.current = false;
-            }, 50);
-          }
-        };
-        img.src = thumbData;
-      }
-    }, [thumbData, thumbnailAspectRatio, index, setRatio]);
+      if (!thumbData) return;
+      const img = new Image();
+      img.onload = () => {
+        if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+          setRatio(index, img.naturalWidth / img.naturalHeight);
+        }
+        if (isInitialLoad.current) {
+          setTimeout(() => {
+            isInitialLoad.current = false;
+          }, 50);
+        }
+      };
+      img.src = thumbData;
+    }, [thumbData, index, setRatio]);
 
     useEffect(() => {
       if (!thumbData) {
@@ -182,22 +152,21 @@ const FilmstripThumbnail = memo(
       });
     }, []);
 
-    // Active = bottom edge highlight (classic filmstrip); multi-select = softer ring
-    const ringClass = isActive
-      ? 'ring-1 ring-white/80 shadow-md'
-      : isSelected
-        ? 'ring-1 ring-white/35'
-        : 'hover:ring-1 hover:ring-white/25';
-
-    const imageClasses = clsx('w-full h-full group-hover:scale-[1.02] transition-transform duration-300', isReject && 'grayscale');
+    const imageClasses = clsx('max-w-full max-h-full w-auto h-auto object-contain', isReject && 'grayscale');
 
     return (
       <div
         className={clsx(
-          'h-full w-full rounded-md overflow-hidden cursor-pointer shrink-0 group relative transition-all duration-150 bg-surface',
-          ringClass,
+          'h-full w-full cursor-pointer shrink-0 relative box-border p-[2px] group',
           isReject && 'opacity-45',
         )}
+        draggable
+        onDragStart={(e) => {
+          const paths =
+            isSelected && multiSelectedPaths.length > 1 ? multiSelectedPaths : [path];
+          e.dataTransfer.setData('application/x-rustroom-paths', JSON.stringify(paths));
+          e.dataTransfer.effectAllowed = 'copy';
+        }}
         onClick={(e: any) => {
           e.stopPropagation();
           onImageSelect?.(path, e);
@@ -207,162 +176,52 @@ const FilmstripThumbnail = memo(
           onImageDoubleClick?.(path);
         }}
         onContextMenu={(e: any) => onContextMenu?.(e, path)}
-        style={{
-          zIndex: isActive ? 2 : isSelected ? 1 : 'auto',
-        }}
-        data-tooltip={truncatedTitle}
+        style={{ zIndex: isActive ? 2 : isSelected ? 1 : 'auto' }}
+        data-tooltip={filename}
       >
-        {isActive && (
-          <div
-            className="filmstrip-active-edge absolute left-0 right-0 bottom-0 h-[3px] bg-white/90 z-20 pointer-events-none"
-            aria-hidden
-          />
-        )}
-        {layers.length > 0 ? (
-          <div className="absolute inset-0 w-full h-full">
-            {layers.map((layer) => (
-              <div
-                key={layer.id}
-                className="absolute inset-0 w-full h-full"
-                style={{
-                  opacity: layer.opacity,
-                  transition: 'opacity 150ms ease-in-out',
-                  willChange: 'opacity',
-                }}
-                onTransitionEnd={() => handleTransitionEnd(layer.id)}
-              >
-                {thumbnailAspectRatio === ThumbnailAspectRatio.Contain && (
-                  <img
-                    alt=""
-                    className="absolute inset-0 w-full h-full object-cover blur-md scale-110 opacity-50"
-                    src={layer.url}
-                  />
-                )}
-                <img
-                  alt={truncatedTitle}
-                  className={`${imageClasses} ${
-                    thumbnailAspectRatio === ThumbnailAspectRatio.Contain ? 'object-contain' : 'object-cover'
-                  } relative`}
-                  loading="lazy"
-                  decoding="async"
-                  src={layer.url}
-                />
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="w-full h-full flex items-center justify-center bg-surface">
-            <ImageIcon size={24} className="text-text-secondary animate-pulse" />
-          </div>
-        )}
-
         <div
           className={clsx(
-            'absolute top-0 right-0 w-3/4 h-3/4 bg-linear-to-bl from-black/25 via-black/0 to-transparent pointer-events-none z-0 transition-opacity duration-200 ease-in-out',
-            hasAnyOverlay ? 'opacity-100' : 'opacity-0',
+            'relative h-full w-full overflow-hidden border flex items-center justify-center bg-bg-secondary',
+            isActive || isSelected
+              ? 'border-accent'
+              : 'border-border-color/50 group-hover:border-text-primary/45',
           )}
-        />
-
-        {hasFlag && (
-          <div
-            className={clsx(
-              'absolute top-0.5 left-0.5 z-10 px-1 py-0.5 rounded text-[8px] font-bold uppercase tracking-wide pointer-events-none shadow-md',
-              isPick ? 'bg-emerald-500/90 text-white' : 'bg-red-500/90 text-white',
-            )}
-          >
-            {isPick ? 'P' : 'X'}
-          </div>
-        )}
-        {hasGps && (
-          <div
-            className={clsx(
-              'absolute z-10 w-3.5 h-3.5 rounded-full bg-sky-500/90 text-white flex items-center justify-center pointer-events-none shadow',
-              hasFlag ? 'top-0.5 left-5' : 'top-0.5 left-0.5',
-            )}
-            title="GPS"
-          >
-            <MapPin size={8} className="fill-white" />
-          </div>
-        )}
-        {inQuickCollection && (
-          <div
-            className={clsx(
-              'absolute z-10 w-2.5 h-2.5 rounded-full bg-amber-400 ring-1 ring-black/40 pointer-events-none shadow',
-              hasFlag ? 'top-0.5 left-5' : 'top-0.5 left-0.5',
-            )}
-            title="Quick Collection"
-            aria-label="In Quick Collection"
-          />
-        )}
-        <div className="absolute top-0.5 right-0.5 flex items-center justify-end z-10 pointer-events-none">
-          <div
-            className={clsx(
-              'rounded-full h-4 px-1 flex items-center justify-center gap-0 shadow-md bg-black/35 pointer-events-auto transition-all duration-150 ease-out origin-top-right',
-              hasEditIcon || hasColorLabel ? 'opacity-100 scale-100' : 'opacity-0 scale-90 pointer-events-none',
-            )}
-          >
+        >
+          {isActive && (
             <div
-              className={clsx(
-                'text-white flex items-center transition-all duration-200 ease-out overflow-hidden',
-                hasEditIcon ? 'max-w-3 opacity-100 scale-100' : 'max-w-0 opacity-0 scale-75 pointer-events-none',
-              )}
-            >
-              <SlidersHorizontal size={10} />
+              className="filmstrip-active-edge absolute left-0 right-0 bottom-0 h-[3px] bg-accent z-20 pointer-events-none"
+              aria-hidden
+            />
+          )}
+          {layers.length > 0 ? (
+            <div className="absolute inset-0 w-full h-full flex items-center justify-center">
+              {layers.map((layer) => (
+                <div
+                  key={layer.id}
+                  className="absolute inset-0 w-full h-full flex items-center justify-center"
+                  style={{
+                    opacity: layer.opacity,
+                    transition: 'opacity 150ms ease-in-out',
+                    willChange: 'opacity',
+                  }}
+                  onTransitionEnd={() => handleTransitionEnd(layer.id)}
+                >
+                  <img
+                    alt=""
+                    className={imageClasses}
+                    loading="lazy"
+                    decoding="async"
+                    src={layer.url}
+                  />
+                </div>
+              ))}
             </div>
-
-            <div
-              className={clsx(
-                'flex items-center justify-center shrink-0 transition-all duration-200 ease-out overflow-hidden',
-                hasColorLabel ? 'max-w-3 opacity-100 scale-100' : 'max-w-0 opacity-0 scale-75 pointer-events-none',
-                hasColorLabel && hasEditIcon ? 'ml-1.5' : 'ml-0',
-              )}
-            >
-              <div
-                className="w-2.5 h-2.5 rounded-full transition-colors duration-200"
-                style={{ backgroundColor: colorLabel ? colorLabel.color : 'transparent' }}
-              />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center">
+              <ImageIcon size={20} className="text-text-secondary animate-pulse" />
             </div>
-
-          </div>
+          )}
         </div>
-
-        {/* Develop filmstrip: no stars / RAW badge (Library shows them) */}
-        {(isVirtualCopy || hasVcStack) && (
-          <>
-            <div className="absolute bottom-0 right-0 w-1/2 h-1/2 bg-linear-to-tl from-black/30 via-black/0 to-transparent pointer-events-none z-0" />
-
-            <button
-              type="button"
-              className="absolute bottom-1 right-1 z-10 pointer-events-auto"
-              onClick={(e) => {
-                e.stopPropagation();
-                e.preventDefault();
-                // Cycle master ↔ virtual copies for this physical file
-                const list = useLibraryStore.getState().imageList || [];
-                const stack = findVirtualCopyStack(list, path);
-                if (stack.length < 2) return;
-                const idx = stack.findIndex((img) => img.path === path);
-                const next = stack[(idx < 0 ? 0 : idx + 1) % stack.length];
-                onImageSelect?.(next.path, e);
-              }}
-              data-tooltip={t('ui.filmstrip.tooltips.virtualCopyCycle' as any, {
-                defaultValue: 'Click to cycle virtual copy stack',
-              })}
-            >
-              <Text
-                as="div"
-                variant={TextVariants.small}
-                color={TextColors.white}
-                weight={TextWeights.bold}
-                className="shadow-md text-[10px] px-1 py-0.5 rounded-full bg-black/40 hover:bg-black/60"
-              >
-                {isVirtualCopy
-                  ? t('ui.filmstrip.virtualCopyAbbreviation')
-                  : t('ui.filmstrip.stackAbbreviation' as any, { defaultValue: 'Stack' })}
-              </Text>
-            </button>
-          </>
-        )}
       </div>
     );
   },
@@ -380,6 +239,7 @@ const FilmstripCell = ({
   onImageSelect,
   onImageDoubleClick,
   onRate,
+  onSetColorLabel,
   itemHeight,
   setRatio,
 }: any) => {
@@ -404,10 +264,12 @@ const FilmstripCell = ({
           imageRatings={imageRatings}
           isActive={selectedPath === imageFile.path}
           isSelected={multiSelectedPaths.includes(imageFile.path)}
+          multiSelectedPaths={multiSelectedPaths}
           onContextMenu={onContextMenu}
           onImageSelect={onImageSelect}
           onImageDoubleClick={onImageDoubleClick}
           onRate={onRate}
+          onSetColorLabel={onSetColorLabel}
           thumbnailAspectRatio={thumbnailAspectRatio}
           itemHeight={itemHeight}
           index={columnIndex}
@@ -428,44 +290,22 @@ const FilmstripList = ({
   data: Omit<ItemData, 'itemHeight' | 'setRatio'> & { clickTriggeredScroll: React.RefObject<boolean> };
 }) => {
   const [gridHandle, setGridHandle] = useGridCallbackRef();
-  const ratioMapRef = useRef<Record<number, number>>({});
-  const [ratioMapVersion, setRatioMapVersion] = useState(0);
   const visibleRange = useRef({ start: 0, stop: 0 });
   const prevSelectedPath = useRef<string | null>(null);
   const isReadyForSmooth = useRef(false);
   const resizeEndTimer = useRef<number | null>(null);
   const currentDataRef = useRef(data);
   currentDataRef.current = data;
-  const pendingResizeRef = useRef<number | null>(null);
-  const lowestPendingIndexRef = useRef<number>(Infinity);
   const isAnimatingScroll = useRef(false);
   const scrollAnimationTimeout = useRef<any>(null);
   const pendingScrollTarget = useRef<number | null>(null);
   const hasCompletedInitialScroll = useRef(false);
 
-  const itemHeight = useMemo(() => {
-    const baseHeight = Math.max(20, height - 20);
-    const expandedHeight = Math.max(20, height - 8);
-
-    let totalWidthExpanded = HORIZONTAL_PADDING * 2;
-    for (let i = 0; i < data.imageList.length; i++) {
-      const ratio = data.thumbnailAspectRatio === ThumbnailAspectRatio.Cover ? 1 : ratioMapRef.current[i] || 1.5;
-      totalWidthExpanded += expandedHeight * ratio + ITEM_GAP;
-    }
-
-    if (totalWidthExpanded <= width) {
-      return expandedHeight;
-    }
-
-    return baseHeight;
-  }, [data.imageList.length, data.thumbnailAspectRatio, height, width, ratioMapVersion]);
+  const itemHeight = useMemo(() => Math.max(20, height - 8), [height]);
 
   const getColumnWidth = useCallback(
-    (index: number) => {
-      const ratio = data.thumbnailAspectRatio === ThumbnailAspectRatio.Cover ? 1 : ratioMapRef.current[index] || 1.5;
-      return itemHeight * ratio + ITEM_GAP;
-    },
-    [data.thumbnailAspectRatio, itemHeight, ratioMapVersion],
+    () => Math.round(itemHeight * CELL_ASPECT) + ITEM_GAP,
+    [itemHeight],
   );
 
   useEffect(() => {
@@ -501,19 +341,11 @@ const FilmstripList = ({
 
   useEffect(() => {
     return () => {
-      if (pendingResizeRef.current !== null) {
-        cancelAnimationFrame(pendingResizeRef.current);
-      }
       if (scrollAnimationTimeout.current) {
         clearTimeout(scrollAnimationTimeout.current);
       }
     };
   }, []);
-
-  useEffect(() => {
-    ratioMapRef.current = {};
-    setRatioMapVersion((v) => v + 1);
-  }, [data.thumbnailAspectRatio]);
 
   const onCellsRendered = useCallback(
     (
@@ -613,29 +445,7 @@ const FilmstripList = ({
     }
   }, [data.selectedPath, data.imageList, isItemVisible, data.clickTriggeredScroll, performSafeScroll, gridHandle]);
 
-  const setRatio = useCallback(
-    (index: number, ratio: number) => {
-      if (Math.abs((ratioMapRef.current[index] || 0) - ratio) > 0.01) {
-        ratioMapRef.current[index] = ratio;
-
-        if (index < lowestPendingIndexRef.current) {
-          lowestPendingIndexRef.current = index;
-        }
-
-        if (pendingResizeRef.current === null) {
-          pendingResizeRef.current = requestAnimationFrame(() => {
-            if (gridHandle && typeof (gridHandle as any).resetAfterColumnIndex === 'function') {
-              (gridHandle as any).resetAfterColumnIndex(lowestPendingIndexRef.current);
-            }
-            setRatioMapVersion((v) => v + 1);
-            lowestPendingIndexRef.current = Infinity;
-            pendingResizeRef.current = null;
-          });
-        }
-      }
-    },
-    [gridHandle],
-  );
+  const setRatio = useCallback((_index: number, _ratio: number) => {}, []);
 
   const cellProps = useMemo(
     () => ({
@@ -682,6 +492,7 @@ interface FilmStripProps {
   onImageSelect?(path: string, event: any): void;
   onImageDoubleClick?(path: string): void;
   onRate?(rate: number, paths?: string[]): void;
+  onSetColorLabel?(color: string | null, paths?: string[]): void;
   onRequestThumbnails?(paths: string[]): void;
   selectedImage?: SelectedImage;
   thumbnailAspectRatio: ThumbnailAspectRatio;
@@ -698,6 +509,7 @@ export default function Filmstrip({
   onImageSelect,
   onImageDoubleClick,
   onRate,
+  onSetColorLabel,
   onRequestThumbnails,
   selectedImage,
   thumbnailAspectRatio,
@@ -764,6 +576,7 @@ export default function Filmstrip({
             onImageSelect: handleImageSelect,
             onImageDoubleClick,
             onRate,
+            onSetColorLabel,
             clickTriggeredScroll,
           }}
         />

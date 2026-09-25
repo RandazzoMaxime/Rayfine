@@ -1,11 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { Paintbrush, X } from 'lucide-react';
 
 import CommunityPage from '../panel/CommunityPage';
 import MainLibrary from '../panel/MainLibrary';
 import LibraryBottomBar from '../panel/library/LibraryBottomBar';
-import LibraryLightbox from '../panel/library/LibraryLightbox';
 
 import { useUIStore } from '../../store/useUIStore';
 import { useLibraryStore } from '../../store/useLibraryStore';
@@ -13,7 +12,7 @@ import { useEditorStore } from '../../store/useEditorStore';
 import { useProcessStore } from '../../store/useProcessStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
 
-import { ImageFile, LibraryViewMode, ThumbnailAspectRatio, ThumbnailSize } from '../ui/AppProperties';
+import { ImageFile, LibraryDisplayMode, LibraryViewMode, ThumbnailAspectRatio, ThumbnailSize } from '../ui/AppProperties';
 import { GroupBadgeInfo, GroupId } from '../../utils/imageGrouping';
 
 interface LibraryViewProps {
@@ -93,6 +92,7 @@ export default function LibraryView({
     imageRatings,
     isViewLoading,
     isTreeLoading,
+    setLibrary,
   } = useLibraryStore(
     useShallow((state) => ({
       rootPaths: state.rootPaths,
@@ -103,6 +103,7 @@ export default function LibraryView({
       imageRatings: state.imageRatings,
       isViewLoading: state.isViewLoading,
       isTreeLoading: state.isTreeLoading,
+      setLibrary: state.setLibrary,
     })),
   );
 
@@ -128,8 +129,12 @@ export default function LibraryView({
       })),
     );
 
-  // Double-click = look at one photo larger; Develop is reached explicitly, not by double-click.
-  const [lightboxPath, setLightboxPath] = useState<string | null>(null);
+  const openLoupe = (path: string) => {
+    setLibrary({ libraryActivePath: path, selectionAnchorPath: path });
+    if (appSettings) {
+      handleSettingsChange({ ...appSettings, libraryDisplayMode: LibraryDisplayMode.Loupe });
+    }
+  };
 
   const libraryPainter = useLibraryStore((s) => s.libraryPainter);
   const keywordPaintTagLegacy = useLibraryStore((s) => s.keywordPaintTag);
@@ -239,7 +244,7 @@ export default function LibraryView({
             onEmptyAreaContextMenu={handleMainLibraryContextMenu}
             onGoHome={handleGoHome}
             onImageClick={handleLibraryImageSingleClick}
-            onImageDoubleClick={(path: string) => setLightboxPath(path)}
+            onImageDoubleClick={openLoupe}
             onImportClick={() => handleImportClick(currentFolderPath as string)}
             onLibraryRefresh={handleLibraryRefresh}
             onOpenFolder={handleOpenFolder}
@@ -260,7 +265,6 @@ export default function LibraryView({
           />
           </>
         )}
-        {lightboxPath && <LibraryLightbox path={lightboxPath} onClose={() => setLightboxPath(null)} />}
         {rootPaths && rootPaths.length > 0 && activeView !== 'community' && (
           <LibraryBottomBar imageList={sortedImageList} />
         )}

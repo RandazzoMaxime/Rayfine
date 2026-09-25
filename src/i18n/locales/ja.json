@@ -369,12 +369,15 @@
       },
       "sections": {
         "basic": "基本",
-        "color": "カラー",
+        "color": "カラーミキサー",
+        "colorGrading": "カラーグレーディング",
         "curves": "トーンカーブ",
         "details": "ディテール",
         "effects": "効果",
-        "optics": "Optics",
-        "geometry": "Transform"
+        "optics": "レンズ補正",
+        "geometry": "変形",
+        "lensBlur": "レンズブラー",
+        "calibration": "キャリブレーション"
       },
       "title": "補正",
       "tooltips": {
@@ -1094,7 +1097,7 @@
     },
     "splash": {
       "addFolder": "フォルダを追加",
-      "brand": "RapidRAW",
+      "brand": "Rayfine",
       "continueSession": "セッションを続行",
       "contribute": "GitHubで貢献する",
       "descriptionAndroid": "圧倒的に高速な、GPUアクセラレーション対応RAW画像エディタ。ライブラリを開いて始めましょう。",

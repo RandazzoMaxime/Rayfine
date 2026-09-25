@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { useLibraryStore } from '../store/useLibraryStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { RawStatus, EditedStatus, FlagStatus, SortDirection, ImageFile, GroupingMode } from '../components/ui/AppProperties';
-import { buildDisplayGroups, effectiveGroupId, GroupBadgeInfo, GroupId } from '../utils/imageGrouping';
+import { buildDisplayGroups, effectiveGroupId, GroupBadgeInfo, GroupId, hideNonRawWhenRawSibling } from '../utils/imageGrouping';
 
 export const ADVANCED_QUERY_REGEX =
   /^(iso|aperture|f|shutter|s|focal|mm|rating|color|camera|make|model|lens)\s*(?::)?\s*(>=|<=|>|<|=)?\s*(.+)$/i;
@@ -609,11 +609,13 @@ if (filterCriteria.hasKeywords && filterCriteria.hasKeywords !== 'all') {
     return tagsMatch && textMatch;
   };
 
+  // Lightroom: if RAW + JPEG share a name, only the RAW is shown (and importable).
+  const libraryImages = hideNonRawWhenRawSibling(imageList);
   // Always collapse manual stacks; also RAW/JPEG groups when grouping mode is on
   const groupEditedFiles = appSettings?.groupEditedFiles ?? true;
   const expandedIds: string[] = Array.isArray(expandedStackIds) ? expandedStackIds : [];
   const groupingResult = buildDisplayGroups(
-    imageList,
+    libraryImages,
     isGroupingActive ? groupingMode : 'off',
     groupEditedFiles,
     expandedIds,

@@ -106,7 +106,7 @@ export default function ModuleFilmstrip({
   return (
     <div className="shrink-0 w-full border-t border-border-color/30 bg-bg-secondary">
       <BottomBar
-        filmstripHeight={Math.min(Math.max(bottomPanelHeight || 112, 96), 148)}
+        filmstripHeight={Math.min(Math.max(bottomPanelHeight || 88, 64), 120)}
         imageList={imageList}
         imageRatings={imageRatings}
         isCopied={isCopied}

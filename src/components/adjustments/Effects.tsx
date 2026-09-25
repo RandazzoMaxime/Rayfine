@@ -23,6 +23,7 @@ interface EffectsPanelProps {
   onLutHover?: (path: string | null) => void;
   appSettings: AppSettings | null;
   onDragStateChange?: (isDragging: boolean) => void;
+  variant?: 'all' | 'lensBlur' | 'effects';
 }
 
 interface BokehShapeSwitchProps {
@@ -144,6 +145,7 @@ export default function EffectsPanel({
   onLutHover,
   appSettings,
   onDragStateChange,
+  variant = 'all',
 }: EffectsPanelProps) {
   const { t } = useTranslation();
   const [isGeneratingDepth, setIsGeneratingDepth] = useState(false);
@@ -193,11 +195,118 @@ export default function EffectsPanel({
   };
 
   const adjustmentVisibility = appSettings?.adjustmentVisibility || {};
+  const showLensBlur = variant !== 'effects' && !isForMask;
+
+  const lensBlurControls = (
+    <div className={variant === 'lensBlur' ? 'space-y-2' : 'p-2 bg-bg-tertiary rounded-md'}>
+      {variant !== 'lensBlur' && (
+        <Text variant={TextVariants.heading} className="mb-0.5 text-[11px] text-text-primary">
+          {t('adjustments.effects.lensBlur')}
+        </Text>
+      )}
+
+      <Switch
+        label={t('adjustments.effects.lensBlur')}
+        checked={!!adjustments.lensBlurEnabled}
+        onChange={handleLensBlurToggle}
+      />
+
+      <div
+        className={`grid transition-all duration-300 ease-in-out ${
+          adjustments.lensBlurEnabled ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
+        }`}
+      >
+        <div className="overflow-hidden">
+          <div className="space-y-2 pt-2 pb-1">
+            {isGeneratingDepth ? (
+              <div className="flex flex-col items-center justify-center gap-1 p-4 text-text-secondary text-center">
+                <div className="flex items-center gap-2">
+                  <Loader2 size={16} className="animate-spin shrink-0" />
+                  <Text variant={TextVariants.label}>
+                    {aiModelDownloadStatus
+                      ? t('editor.masks.settings.aiModelDownloading')
+                      : t('editor.ai.generatingDepthMap')}
+                  </Text>
+                </div>
+                {aiModelDownloadStatus && (
+                  <Text variant={TextVariants.small} className="text-accent">
+                    {aiModelDownloadStatus}
+                  </Text>
+                )}
+              </div>
+            ) : (
+              <>
+                <Slider
+                  label={t('adjustments.effects.amount')}
+                  max={100}
+                  min={0}
+                  defaultValue={40}
+                  onChange={(e: any) => handleAdjustmentChange(Effect.LensBlurAmount, e.target.value)}
+                  step={1}
+                  value={adjustments.lensBlurAmount ?? 50}
+                  onDragStateChange={onDragStateChange}
+                  fillOrigin="min"
+                />
+
+                <Slider
+                  label={t('adjustments.effects.lensDiffusion')}
+                  max={100}
+                  min={0}
+                  defaultValue={0}
+                  onChange={(e: any) => handleAdjustmentChange(Effect.lensBlurDiffusion, e.target.value)}
+                  step={1}
+                  value={adjustments.lensBlurDiffusion ?? 0}
+                  onDragStateChange={onDragStateChange}
+                />
+
+                <BokehShapeSwitch
+                  selectedShape={adjustments.lensBlurShape || 'circle'}
+                  onShapeChange={(shapeId) =>
+                    setAdjustments((prev: Partial<Adjustments>) => ({ ...prev, [Effect.LensBlurShape]: shapeId }))
+                  }
+                />
+
+                <DepthRangePicker
+                  minDepth={100 - (adjustments.lensBlurMaxDepth ?? 100)}
+                  maxDepth={100 - (adjustments.lensBlurMinDepth ?? 20)}
+                  minFade={adjustments.lensBlurMaxFade ?? 20}
+                  maxFade={adjustments.lensBlurMinFade ?? 20}
+                  defaultMinDepth={0}
+                  defaultMaxDepth={80}
+                  defaultMinFade={20}
+                  defaultMaxFade={20}
+                  onChange={(values: {
+                    minDepth: number;
+                    maxDepth: number;
+                    minFade: number;
+                    maxFade: number;
+                  }) => {
+                    setAdjustments((prev: Partial<Adjustments>) => ({
+                      ...prev,
+                      lensBlurMinDepth: 100 - values.maxDepth,
+                      lensBlurMaxDepth: 100 - values.minDepth,
+                      lensBlurMinFade: values.maxFade,
+                      lensBlurMaxFade: values.minFade,
+                    }));
+                  }}
+                  onDragStateChange={onDragStateChange}
+                />
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  if (variant === 'lensBlur') {
+    return <div className="space-y-2">{lensBlurControls}</div>;
+  }
 
   return (
-    <div className="space-y-2">
-      <div className="p-2 bg-bg-tertiary rounded-md">
-        <Text variant={TextVariants.heading} className="mb-1">
+    <div className="space-y-1">
+      <div className="pt-1 mt-1 border-t border-white/15 first:mt-0 first:pt-0 first:border-t-0">
+        <Text variant={TextVariants.heading} className="mb-0.5 text-[11px] text-text-primary">
           {t('adjustments.effects.creative')}
         </Text>
 
@@ -234,108 +343,12 @@ export default function EffectsPanel({
         )}
       </div>
 
+      {showLensBlur && lensBlurControls}
+
       {!isForMask && (
-        <div className="space-y-2">
-          <div className="p-2 bg-bg-tertiary rounded-md">
-            <Text variant={TextVariants.heading} className="mb-1">
-              {t('adjustments.effects.lensBlur')}
-            </Text>
-
-            <Switch
-              label={t('adjustments.effects.lensBlur')}
-              checked={!!adjustments.lensBlurEnabled}
-              onChange={handleLensBlurToggle}
-            />
-
-            <div
-              className={`grid transition-all duration-300 ease-in-out ${
-                adjustments.lensBlurEnabled ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
-              }`}
-            >
-              <div className="overflow-hidden">
-                <div className="space-y-2 pt-2 pb-1">
-                  {isGeneratingDepth ? (
-                    <div className="flex flex-col items-center justify-center gap-1 p-4 text-text-secondary text-center">
-                      <div className="flex items-center gap-2">
-                        <Loader2 size={16} className="animate-spin shrink-0" />
-                        <Text variant={TextVariants.label}>
-                          {aiModelDownloadStatus
-                            ? t('editor.masks.settings.aiModelDownloading')
-                            : t('editor.ai.generatingDepthMap')}
-                        </Text>
-                      </div>
-                      {aiModelDownloadStatus && (
-                        <Text variant={TextVariants.small} className="text-accent">
-                          {aiModelDownloadStatus}
-                        </Text>
-                      )}
-                    </div>
-                  ) : (
-                    <>
-                      <Slider
-                        label={t('adjustments.effects.amount')}
-                        max={100}
-                        min={0}
-                        defaultValue={40}
-                        onChange={(e: any) => handleAdjustmentChange(Effect.LensBlurAmount, e.target.value)}
-                        step={1}
-                        value={adjustments.lensBlurAmount ?? 50}
-                        onDragStateChange={onDragStateChange}
-                        fillOrigin="min"
-                      />
-
-                      <Slider
-                        label={t('adjustments.effects.lensDiffusion')}
-                        max={100}
-                        min={0}
-                        defaultValue={0}
-                        onChange={(e: any) => handleAdjustmentChange(Effect.lensBlurDiffusion, e.target.value)}
-                        step={1}
-                        value={adjustments.lensBlurDiffusion ?? 0}
-                        onDragStateChange={onDragStateChange}
-                      />
-
-                      <BokehShapeSwitch
-                        selectedShape={adjustments.lensBlurShape || 'circle'}
-                        onShapeChange={(shapeId) =>
-                          setAdjustments((prev: Partial<Adjustments>) => ({ ...prev, [Effect.LensBlurShape]: shapeId }))
-                        }
-                      />
-
-                      <DepthRangePicker
-                        minDepth={100 - (adjustments.lensBlurMaxDepth ?? 100)}
-                        maxDepth={100 - (adjustments.lensBlurMinDepth ?? 20)}
-                        minFade={adjustments.lensBlurMaxFade ?? 20}
-                        maxFade={adjustments.lensBlurMinFade ?? 20}
-                        defaultMinDepth={0}
-                        defaultMaxDepth={80}
-                        defaultMinFade={20}
-                        defaultMaxFade={20}
-                        onChange={(values: {
-                          minDepth: number;
-                          maxDepth: number;
-                          minFade: number;
-                          maxFade: number;
-                        }) => {
-                          setAdjustments((prev: Partial<Adjustments>) => ({
-                            ...prev,
-                            lensBlurMinDepth: 100 - values.maxDepth,
-                            lensBlurMaxDepth: 100 - values.minDepth,
-                            lensBlurMinFade: values.maxFade,
-                            lensBlurMaxFade: values.minFade,
-                          }));
-                        }}
-                        onDragStateChange={onDragStateChange}
-                      />
-                    </>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="p-2 bg-bg-tertiary rounded-md">
-            <Text variant={TextVariants.heading} className="mb-1">
+        <div className="space-y-1">
+          <div className="pt-1 mt-1 border-t border-white/15">
+            <Text variant={TextVariants.heading} className="mb-0.5 text-[11px] text-text-primary">
               {t('adjustments.effects.lut')}
             </Text>
             <LUTControl
@@ -351,8 +364,8 @@ export default function EffectsPanel({
           </div>
 
           {adjustmentVisibility.vignette !== false && (
-            <div className="p-2 bg-bg-tertiary rounded-md">
-              <Text variant={TextVariants.heading} className="mb-1">
+            <div className="pt-1 mt-1 border-t border-white/15">
+              <Text variant={TextVariants.heading} className="mb-0.5 text-[11px] text-text-primary">
                 {t('adjustments.effects.vignette')}
               </Text>
               <div className="flex flex-wrap gap-0.5 mb-1.5">
@@ -438,8 +451,8 @@ export default function EffectsPanel({
           )}
 
           {adjustmentVisibility.grain !== false && (
-            <div className="p-2 bg-bg-tertiary rounded-md">
-              <Text variant={TextVariants.heading} className="mb-1">
+            <div className="pt-1 mt-1 border-t border-white/15">
+              <Text variant={TextVariants.heading} className="mb-0.5 text-[11px] text-text-primary">
                 {t('adjustments.effects.grain')}
               </Text>
               <Slider

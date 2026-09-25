@@ -1,11 +1,9 @@
 import { motion, LayoutGroup } from 'framer-motion';
 import {
   SlidersHorizontal,
-  Info,
   Crop,
   Layers,
   Paintbrush,
-  FileInput,
   type LucideIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -24,16 +22,13 @@ interface RightPanelSwitcherProps {
   layout?: 'horizontal' | 'vertical';
 }
 
-// Tool order loosely mirrors Develop workflow: adjust → geometry/local → metadata → export (presets live in the Develop left panel)
 const panelGroups: Array<Array<PanelOptions>> = [
-  [{ id: Panel.Adjustments, icon: SlidersHorizontal, title: 'editor.switcher.tooltips.adjust' }],
   [
+    { id: Panel.Adjustments, icon: SlidersHorizontal, title: 'editor.switcher.tooltips.adjust' },
     { id: Panel.Crop, icon: Crop, title: 'editor.switcher.tooltips.crop' },
-    { id: Panel.Masks, icon: Layers, title: 'editor.switcher.tooltips.masks' },
     { id: Panel.Ai, icon: Paintbrush, title: 'editor.switcher.tooltips.inpaint' },
+    { id: Panel.Masks, icon: Layers, title: 'editor.switcher.tooltips.masks' },
   ],
-  [{ id: Panel.Metadata, icon: Info, title: 'editor.switcher.tooltips.info' }],
-  [{ id: Panel.Export, icon: FileInput, title: 'editor.switcher.tooltips.export' }],
 ];
 
 export default function RightPanelSwitcher({
@@ -47,7 +42,7 @@ export default function RightPanelSwitcher({
 
   return (
     <LayoutGroup id="right-panel-switcher">
-    <div className={isHorizontal ? 'flex items-center overflow-x-auto p-1 gap-1' : 'flex flex-col p-1 gap-1 h-full'}>
+    <div className={isHorizontal ? 'flex items-center justify-center overflow-x-auto p-1 gap-1' : 'flex flex-col items-center p-1 gap-1 h-full'}>
       {panelGroups.map((group, groupIndex) => (
         <div key={groupIndex} className={isHorizontal ? 'flex items-center gap-1' : 'flex flex-col gap-1'}>
           {groupIndex > 0 && (

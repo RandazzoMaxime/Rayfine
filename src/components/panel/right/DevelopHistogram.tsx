@@ -1,7 +1,7 @@
-import { useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 
-import Waveform from '../editor/Waveform';
+import Waveform, { HistogramToneRegion } from '../editor/Waveform';
 import Resizer from '../../ui/Resizer';
 import { Orientation } from '../../ui/AppProperties';
 import { Adjustments } from '../../../utils/adjustments';
@@ -29,11 +29,36 @@ export default function DevelopHistogram() {
     );
   const exif = useEditorStore((s) => s.selectedImage?.exif) as Record<string, any> | null | undefined;
   const exifItems = formatShootingInfo(exif);
+  const dragStartRef = useRef<Record<string, number>>({});
 
-  // Scopes are always displayed, so the backend must always compute them with each render.
   useEffect(() => {
     if (!isWaveformVisible) setEditor({ isWaveformVisible: true });
   }, [isWaveformVisible, setEditor]);
+
+  const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
+
+  const handleHistogramDrag = useCallback(
+    (region: HistogramToneRegion, deltaX: number, dragging: boolean) => {
+      setEditor({ isSliderDragging: dragging });
+      if (!dragging) {
+        dragStartRef.current = {};
+        return;
+      }
+      const key = region === 'exposure' ? 'brightness' : region;
+      setAdjustments((prev: Adjustments) => {
+        if (dragStartRef.current[key] === undefined) {
+          dragStartRef.current[key] = Number((prev as any)[key] ?? 0);
+        }
+        const scale = key === 'brightness' ? 0.02 : 0.45;
+        const min = key === 'brightness' ? -5 : -100;
+        const max = key === 'brightness' ? 5 : 100;
+        const next = clamp(dragStartRef.current[key] + deltaX * scale, min, max);
+        dragStartRef.current[key] = next;
+        return { ...prev, [key]: next };
+      });
+    },
+    [setAdjustments, setEditor],
+  );
 
   return (
     <div className="shrink-0 relative flex flex-col border-b border-border-color/40" style={{ height: Math.min(Math.max(waveformHeight || 150, 110), 200) }}>
@@ -43,8 +68,24 @@ export default function DevelopHistogram() {
           histogram={histogram}
           displayMode={activeWaveformChannel || 'histogram'}
           setDisplayMode={setActiveWaveformChannel}
-          showClipping={adjustments.showClipping || false}
-          onToggleClipping={() => setAdjustments((prev: Adjustments) => ({ ...prev, showClipping: !prev.showClipping }))}
+          showShadowClipping={!!(adjustments.showShadowClipping || adjustments.showClipping)}
+          showHighlightClipping={!!(adjustments.showHighlightClipping || adjustments.showClipping)}
+          onToggleShadowClipping={() =>
+            setAdjustments((prev: Adjustments) => ({
+              ...prev,
+              showShadowClipping: !prev.showShadowClipping,
+              showClipping: false,
+            }))
+          }
+          onToggleHighlightClipping={() =>
+            setAdjustments((prev: Adjustments) => ({
+              ...prev,
+              showHighlightClipping: !prev.showHighlightClipping,
+              showClipping: false,
+            }))
+          }
+          onHistogramDrag={handleHistogramDrag}
+          onHistogramRegionChange={(region) => setEditor({ histogramToneRegion: region })}
           theme={theme}
         />
       </div>

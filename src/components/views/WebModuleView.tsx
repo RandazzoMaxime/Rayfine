@@ -1,14 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
+import clsx from 'clsx';
 import { Globe } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
-import { save as saveDialog, open as openDialog } from '@tauri-apps/plugin-dialog';
+import { save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { toast } from 'react-toastify';
 import { useShallow } from 'zustand/react/shallow';
 import ModuleShell from './ModuleShell';
 import { useLibraryStore } from '../../store/useLibraryStore';
 import { useProcessStore } from '../../store/useProcessStore';
 import { ImageFile, Invokes } from '../ui/AppProperties';
+import { isLightHex, normalizeHex } from '../../utils/appearance';
+import { zipStore } from '../../utils/zipStore';
 
 interface Props {
   onBackToLibrary(): void;
@@ -22,28 +25,67 @@ function escapeHtml(s: string) {
     .replace(/"/g, '&quot;');
 }
 
+const GALLERY_BG_KEY = 'rustroom.webGalleryBg.v1';
+const DEFAULT_GALLERY_BG = '#0d0d0d';
+const GALLERY_SWATCHES = [
+  { id: 'black', color: '#0d0d0d' },
+  { id: 'darkGray', color: '#2a2a2a' },
+  { id: 'white', color: '#f5f5f5' },
+  { id: 'warm', color: '#ebe4d8' },
+];
+
+function loadGalleryBg(): string {
+  try {
+    const raw = localStorage.getItem(GALLERY_BG_KEY);
+    const hex = raw ? normalizeHex(raw) : null;
+    return hex || DEFAULT_GALLERY_BG;
+  } catch {
+    return DEFAULT_GALLERY_BG;
+  }
+}
+
+function galleryInk(bg: string) {
+  const light = isLightHex(bg);
+  return {
+    fg: light ? '#1a1a1a' : '#eee',
+    muted: light ? '#5c5c5c' : '#8a8a8a',
+    cell: light ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.05)',
+    border: light ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.12)',
+    scheme: light ? 'light' : 'dark',
+  };
+}
+
 function buildGalleryHtml(opts: {
   title: string;
   template: 'classic' | 'grid' | 'mosaic';
   cols: number;
   items: { name: string; src: string | null }[];
+  background: string;
 }): string {
-  const { title, template, cols, items } = opts;
-  const colClass =
-    template === 'classic' ? 2 : template === 'mosaic' ? 4 : Math.min(5, Math.max(2, cols));
+  const { title, template, cols, items, background } = opts;
+  const colClass = template === 'classic' ? 2 : Math.min(5, Math.max(2, cols));
+  const ink = galleryInk(background);
   const cells = items
     .map((it, i) => {
-      const tall = template === 'mosaic' && i % 5 === 0;
       const img = it.src
         ? `<img src="${it.src}" alt="${escapeHtml(it.name)}" loading="lazy" data-full="${it.src}" />`
         : `<div class="ph">${escapeHtml(it.name)}</div>`;
-      return `<figure class="cell${tall ? ' tall' : ''}" data-idx="${i}" data-name="${escapeHtml(
+      return `<figure class="cell" data-idx="${i}" data-name="${escapeHtml(
         it.name,
       )}" tabindex="0" role="button">${img}<figcaption>${escapeHtml(
         it.name,
       )}</figcaption></figure>`;
     })
     .join('\n');
+
+  const layoutCss =
+    template === 'mosaic'
+      ? `.gallery { column-count: ${colClass}; column-gap: 0.65rem; padding: 1rem 1.5rem 2rem; }
+  .cell { break-inside: avoid; margin: 0 0 0.65rem; display: inline-block; width: 100%; vertical-align: top; }
+  .cell img { width: 100%; height: auto; object-fit: contain; display: block; }`
+      : `.gallery { display: grid; gap: 0.65rem; padding: 1rem 1.5rem 2rem; grid-template-columns: repeat(${colClass}, minmax(0, 1fr)); align-items: start; }
+  .cell { display: flex; flex-direction: column; margin: 0; }
+  .cell img { width: 100%; height: auto; object-fit: contain; display: block; }`;
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -52,20 +94,17 @@ function buildGalleryHtml(opts: {
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>${escapeHtml(title)}</title>
 <style>
-  :root { color-scheme: dark; }
+  :root { color-scheme: ${ink.scheme}; }
   * { box-sizing: border-box; }
-  body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, sans-serif; background: #0d0d0d; color: #eee; }
+  body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, sans-serif; background: ${background}; color: ${ink.fg}; }
   header { padding: 1.25rem 1.5rem 0.5rem; }
   h1 { margin: 0; font-size: 1.35rem; font-weight: 600; letter-spacing: 0.02em; }
-  .meta { color: #888; font-size: 0.8rem; margin-top: 0.35rem; }
-  .grid { display: grid; gap: 0.6rem; padding: 1rem 1.5rem 2rem; grid-template-columns: repeat(${colClass}, minmax(0, 1fr)); }
-  .cell { margin: 0; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; overflow: hidden; aspect-ratio: 1; display: flex; flex-direction: column; }
-  .cell.tall { grid-row: span 2; aspect-ratio: auto; min-height: 100%; }
-  .cell img { width: 100%; height: 100%; object-fit: cover; flex: 1; }
-  .cell .ph { flex: 1; display: flex; align-items: center; justify-content: center; color: #555; font-size: 0.75rem; padding: 0.5rem; text-align: center; }
-  figcaption { font-size: 0.7rem; color: #999; padding: 0.35rem 0.5rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-top: 1px solid #2a2a2a; }
-  footer { padding: 0 1.5rem 1.5rem; color: #555; font-size: 0.7rem; }
-  .cell { cursor: zoom-in; }
+  .meta { color: ${ink.muted}; font-size: 0.8rem; margin-top: 0.35rem; }
+  ${layoutCss}
+  .cell { background: ${ink.cell}; border: 1px solid ${ink.border}; border-radius: 6px; overflow: hidden; cursor: zoom-in; }
+  .cell .ph { display: flex; align-items: center; justify-content: center; color: ${ink.muted}; font-size: 0.75rem; padding: 1.5rem 0.5rem; text-align: center; }
+  figcaption { font-size: 0.7rem; color: ${ink.muted}; padding: 0.35rem 0.5rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-top: 1px solid ${ink.border}; }
+  footer { padding: 0 1.5rem 1.5rem; color: ${ink.muted}; font-size: 0.7rem; }
   .cell:focus-within { outline: 1px solid #6af; }
   #lb { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.92); z-index: 50; align-items: center; justify-content: center; flex-direction: column; gap: .75rem; padding: 1rem; }
   #lb.open { display: flex; }
@@ -78,12 +117,12 @@ function buildGalleryHtml(opts: {
 <body>
 <header>
   <h1>${escapeHtml(title)}</h1>
-  <div class="meta">${items.length} photo${items.length === 1 ? '' : 's'} · ${escapeHtml(template)} layout · exported from RustROOM</div>
+  <div class="meta">${items.length} photo${items.length === 1 ? '' : 's'} · ${escapeHtml(template)} layout · exported from Rayfine</div>
 </header>
-<main class="grid">
+<main class="gallery">
 ${cells}
 </main>
-<footer>Generated by RustROOM Web module (public LR-style layout). Thumbnails embedded when available. Click a photo for lightbox · Esc / ← → navigate.</footer>
+<footer>Generated by Rayfine. Thumbnails embedded when available. Click a photo for lightbox · Esc / ← → navigate.</footer>
 <div id="lb" aria-hidden="true">
   <button type="button" id="lb-close" aria-label="Close">Close</button>
   <img id="lb-img" alt="" />
@@ -138,8 +177,24 @@ export default function WebModuleView({ onBackToLibrary }: Props) {
   const [template, setTemplate] = useState<'classic' | 'grid' | 'mosaic'>('grid');
   const [title, setTitle] = useState('Photo Gallery');
   const [cols, setCols] = useState(3);
+  const [galleryBg, setGalleryBg] = useState(loadGalleryBg);
   const [exporting, setExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState<string | null>(null);
+  const [formatModal, setFormatModal] = useState(false);
+  const [imageFormat, setImageFormat] = useState<'jpg' | 'png'>('jpg');
   const [lastExportPath, setLastExportPath] = useState<string | null>(null);
+  const ink = galleryInk(galleryBg);
+
+  const setBg = (hex: string) => {
+    const n = normalizeHex(hex);
+    if (!n) return;
+    setGalleryBg(n);
+    try {
+      localStorage.setItem(GALLERY_BG_KEY, n);
+    } catch {
+      /* ignore */
+    }
+  };
 
   const { imageList, multiSelectedPaths } = useLibraryStore(
     useShallow((s) => ({
@@ -164,137 +219,171 @@ export default function WebModuleView({ onBackToLibrary }: Props) {
     if (paths.length) invoke('update_thumbnail_queue', { paths }).catch(() => {});
   }, [photos]);
 
-  const handleExportHtml = async () => {
-    if (photos.length === 0) {
-      toast.info(t('ui.web.empty' as any, { defaultValue: 'Select photos in Library' }));
-      return;
-    }
-    setExporting(true);
+  const toBytes = (raw: unknown): Uint8Array => {
+    if (raw instanceof Uint8Array) return raw;
+    if (Array.isArray(raw)) return Uint8Array.from(raw as number[]);
+    if (raw instanceof ArrayBuffer) return new Uint8Array(raw);
+    return new Uint8Array(0);
+  };
+
+  const jpegToPng = (jpeg: Uint8Array): Promise<Uint8Array> =>
+    new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(new Blob([jpeg], { type: 'image/jpeg' }));
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext('2d');
+        URL.revokeObjectURL(url);
+        if (!ctx) {
+          reject(new Error('Canvas 2D unavailable'));
+          return;
+        }
+        ctx.drawImage(img, 0, 0);
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) {
+              reject(new Error('PNG encode failed'));
+              return;
+            }
+            blob.arrayBuffer().then((ab) => resolve(new Uint8Array(ab)), reject);
+          },
+          'image/png',
+        );
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error('JPEG decode failed'));
+      };
+      img.src = url;
+    });
+
+  const previewJpeg = async (path: string): Promise<Uint8Array | null> => {
     try {
-      const safeTitle = (title || 'gallery').replace(/[^\w\-]+/g, '_').slice(0, 60) || 'gallery';
-      const filePath = await saveDialog({
-        defaultPath: `${safeTitle}.html`,
-        filters: [{ name: 'HTML', extensions: ['html', 'htm'] }],
-        title: t('ui.web.exportHtml' as any, { defaultValue: 'Export HTML' }),
+      const metadata: any = await invoke(Invokes.LoadMetadata, { path });
+      const adjustments =
+        metadata?.adjustments && !metadata.adjustments.is_null ? metadata.adjustments : {};
+      const raw = await invoke(Invokes.GeneratePreviewForPath, {
+        path,
+        jsAdjustments: adjustments,
       });
-      if (!filePath) return;
-
-      const items = photos.map((img) => {
-        const name = img.path.split(/[\\/]/).pop()?.split('?')[0] || img.path;
-        const src = thumbs[img.path] || null;
-        // Only embed data URLs / http(s); skip blob: (not portable on disk)
-        const portable =
-          src && (src.startsWith('data:') || src.startsWith('http://') || src.startsWith('https://'))
-            ? src
-            : null;
-        return { name, src: portable };
-      });
-
-      const html = buildGalleryHtml({ title, template, cols, items });
-      await invoke(Invokes.WriteTextFile, { path: filePath, contents: html });
-      setLastExportPath(filePath);
-      toast.success(
-        t('ui.web.exportDone' as any, {
-          defaultValue: 'Gallery HTML saved ({{count}} photos)',
-          count: photos.length,
-        }),
-      );
-    } catch (e) {
-      toast.error(String(e));
-    } finally {
-      setExporting(false);
+      const bytes = toBytes(raw);
+      if (bytes.length) return bytes;
+    } catch (err) {
+      console.warn('Web export preview failed', path, err);
+    }
+    const thumb = thumbs[path];
+    if (!thumb) return null;
+    try {
+      const res = await fetch(thumb);
+      return new Uint8Array(await res.arrayBuffer());
+    } catch {
+      return null;
     }
   };
 
-  /** Multi-file package: folder/index.html + images/* (LR-style web gallery package). */
-  const handleExportPackage = async () => {
+  const handleExportPackage = async (format: 'jpg' | 'png') => {
     if (photos.length === 0) {
       toast.info(t('ui.web.empty' as any, { defaultValue: 'Select photos in Library' }));
       return;
     }
+    const safeTitle = (title || 'gallery').replace(/[^\w\-]+/g, '_').slice(0, 60) || 'gallery';
+    const filePath = await saveDialog({
+      defaultPath: `${safeTitle}.zip`,
+      filters: [{ name: 'ZIP', extensions: ['zip'] }],
+      title: t('ui.web.exportPackage' as any, { defaultValue: 'Export package' }),
+    });
+    if (!filePath) return;
+
     setExporting(true);
+    setExportProgress(`0/${photos.length}`);
     try {
-      const safeTitle = (title || 'gallery').replace(/[^\w\-]+/g, '_').slice(0, 60) || 'gallery';
-      const parentDir = await openDialog({
-        directory: true,
-        multiple: false,
-        title: t('ui.web.exportPackagePick' as any, {
-          defaultValue: 'Choose folder for web gallery package',
-        }),
-      });
-      if (!parentDir || typeof parentDir !== 'string') return;
-
-      const packageRoot = `${parentDir.replace(/[\\/]+$/, '')}/${safeTitle}`;
-      const imagesDir = `${packageRoot}/images`;
-      await invoke(Invokes.CreateFolder, { path: imagesDir });
-
-      // Build unique disk names for selection collisions
+      const ext = format === 'png' ? 'png' : 'jpg';
       const used = new Map<string, number>();
-      const plan: { name: string; sourcePath: string; diskName: string }[] = [];
-      for (const img of photos) {
-        const base = img.path.split(/[\\/]/).pop()?.split('?')[0] || 'photo.jpg';
-        const lower = base.toLowerCase();
-        let diskName = base;
-        if (used.has(lower)) {
-          const n = (used.get(lower) || 1) + 1;
-          used.set(lower, n);
-          const dot = base.lastIndexOf('.');
-          const stem = dot > 0 ? base.slice(0, dot) : base;
-          const ext = dot > 0 ? base.slice(dot) : '';
-          diskName = `${stem}_${n}${ext}`;
+      const zipEntries: { name: string; data: Uint8Array }[] = [];
+      const htmlItems: { name: string; src: string }[] = [];
+      const missing: string[] = [];
+
+      for (let i = 0; i < photos.length; i++) {
+        const img = photos[i];
+        setExportProgress(`${i + 1}/${photos.length}`);
+        const base = img.path.split(/[\\/]/).pop()?.split('?')[0] || `photo_${i + 1}`;
+        const stem = base.replace(/\.[^.]+$/, '') || `photo_${i + 1}`;
+        let diskStem = stem;
+        const key = diskStem.toLowerCase();
+        if (used.has(key)) {
+          const n = (used.get(key) || 1) + 1;
+          used.set(key, n);
+          diskStem = `${stem}_${n}`;
         } else {
-          used.set(lower, 1);
+          used.set(key, 1);
         }
-        plan.push({ name: base, sourcePath: img.path, diskName });
+        const diskName = `${diskStem}.${ext}`;
+        const jpeg = await previewJpeg(img.path);
+        if (!jpeg) {
+          missing.push(base);
+          continue;
+        }
+        const data = format === 'png' ? await jpegToPng(jpeg) : jpeg;
+        zipEntries.push({ name: `images/${diskName}`, data });
+        htmlItems.push({ name: base, src: `images/${diskName}` });
       }
 
-      // Copy each file with unique disk name (handles basename collisions)
-      for (const item of plan) {
-        await invoke(Invokes.CopyFileTo, {
-          sourcePath: item.sourcePath,
-          destinationPath: `${imagesDir}/${item.diskName}`,
-        });
+      const html = buildGalleryHtml({
+        title,
+        template,
+        cols,
+        items: htmlItems,
+        background: galleryBg,
+      });
+      zipEntries.push({
+        name: 'index.html',
+        data: new TextEncoder().encode(html),
+      });
+
+      const zip = zipStore(zipEntries);
+      const bytes = Array.from(zip);
+      const tempPath: string = await invoke(Invokes.SaveTempFile, { bytes });
+      await invoke(Invokes.CopyFileTo, { sourcePath: tempPath, destinationPath: filePath });
+      setLastExportPath(filePath);
+      if (missing.length) {
+        toast.warn(
+          t('ui.web.exportMissing' as any, {
+            defaultValue: 'Package saved — skipped {{count}} photos without a preview',
+            count: missing.length,
+          }),
+        );
+      } else {
+        toast.success(
+          t('ui.web.exportPackageDone' as any, {
+            defaultValue: 'ZIP gallery saved ({{count}} photos + index.html)',
+            count: htmlItems.length,
+          }),
+        );
       }
-
-      const hasCollision = plan.some((p) => p.diskName !== p.name);
-
-      const htmlItems = plan.map((p) => ({
-        name: p.name,
-        src: `images/${p.diskName}`,
-      }));
-
-      const html = buildGalleryHtml({ title, template, cols, items: htmlItems });
-      const indexPath = `${packageRoot}/index.html`;
-      await invoke(Invokes.WriteTextFile, { path: indexPath, contents: html });
-      setLastExportPath(packageRoot);
-      toast.success(
-        t('ui.web.exportPackageDone' as any, {
-          defaultValue: hasCollision
-            ? 'Gallery package saved ({{count}} photos; unique names for collisions)'
-            : 'Gallery package saved ({{count}} photos + index.html)',
-          count: photos.length,
-        }),
-      );
     } catch (e) {
       toast.error(String(e));
     } finally {
       setExporting(false);
+      setExportProgress(null);
     }
   };
 
 
   return (
+    <>
     <ModuleShell
       moduleId="web"
       title={t('ui.moduleBar.web' as any)}
       subtitle={t('ui.moduleShell.webSubtitle' as any, {
-        defaultValue: 'Web gallery preview and HTML export from the current selection.',
+        defaultValue: 'Aperçu de galerie web et export ZIP.',
       })}
       icon={Globe}
       onBackToLibrary={onBackToLibrary}
       left={
         <>
-          <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-white/35">
+          <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-text-secondary">
             {t('ui.web.templates' as any, { defaultValue: 'Template browser' })}
           </div>
           {(
@@ -309,7 +398,9 @@ export default function WebModuleView({ onBackToLibrary }: Props) {
               type="button"
               onClick={() => setTemplate(id)}
               className={`w-full text-left px-2 py-1.5 rounded text-[12px] ${
-                template === id ? 'bg-white/10 text-white' : 'text-white/70 hover:bg-white/5'
+                template === id
+                  ? 'bg-card-active text-text-primary'
+                  : 'text-text-secondary hover:bg-surface hover:text-text-primary'
               }`}
             >
               {label}
@@ -320,19 +411,19 @@ export default function WebModuleView({ onBackToLibrary }: Props) {
       right={
         <>
           <section className="space-y-2">
-            <div className="text-[10px] uppercase tracking-wider text-white/35">
+            <div className="text-[10px] uppercase tracking-wider text-text-secondary">
               {t('ui.web.siteInfo' as any, { defaultValue: 'Site info' })}
             </div>
-            <label className="block text-[11px] text-white/60">
+            <label className="block text-[11px] text-text-secondary">
               {t('ui.web.title' as any, { defaultValue: 'Title' })}
               <input
-                className="mt-1 w-full h-8 rounded bg-white/5 border border-white/10 px-2 text-white/90"
+                className="mt-1 w-full h-8 rounded bg-surface border border-border-color/40 px-2 text-text-primary"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
               />
             </label>
-            {template === 'grid' && (
-              <label className="block text-[11px] text-white/60">
+            {template !== 'classic' && (
+              <label className="block text-[11px] text-text-secondary">
                 {t('ui.web.columns' as any, { defaultValue: 'Columns' })}
                 <input
                   type="range"
@@ -342,38 +433,69 @@ export default function WebModuleView({ onBackToLibrary }: Props) {
                   onChange={(e) => setCols(Number(e.target.value))}
                   className="mt-1 w-full"
                 />
+                <span className="text-[10px] tabular-nums text-text-secondary">{cols}</span>
               </label>
             )}
-            <div className="text-[10px] uppercase tracking-wider text-white/35 mt-2">
+            <div className="text-[10px] uppercase tracking-wider text-text-secondary mt-2">
+              {t('ui.web.galleryBg' as any, { defaultValue: 'Fond de la galerie' })}
+            </div>
+            <div className="flex items-center gap-3">
+              {GALLERY_SWATCHES.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => setBg(s.color)}
+                  aria-pressed={galleryBg === s.color}
+                  className={clsx(
+                    'w-7 h-7 rounded border',
+                    galleryBg === s.color
+                      ? 'border-accent ring-1 ring-accent'
+                      : 'border-border-color hover:border-text-secondary',
+                  )}
+                  style={{ background: s.color }}
+                />
+              ))}
+              <label
+                className="relative w-7 h-7 rounded border border-border-color hover:border-text-secondary overflow-hidden cursor-pointer"
+                data-tooltip={t('ui.web.customBg' as any, { defaultValue: 'Couleur personnalisée' })}
+                style={{
+                  background: GALLERY_SWATCHES.some((s) => s.color === galleryBg)
+                    ? 'conic-gradient(red, yellow, lime, aqua, blue, magenta, red)'
+                    : galleryBg,
+                }}
+              >
+                <input
+                  type="color"
+                  value={galleryBg}
+                  onChange={(e) => setBg(e.target.value)}
+                  className="absolute inset-0 opacity-0 cursor-pointer"
+                />
+              </label>
+              <span className="ml-auto text-[10px] font-mono text-text-secondary uppercase">{galleryBg}</span>
+            </div>
+            <div className="text-[10px] uppercase tracking-wider text-text-secondary mt-2">
               {t('ui.web.output' as any, { defaultValue: 'Output' })}
             </div>
             <button
               type="button"
               disabled={exporting || photos.length === 0}
-              onClick={handleExportHtml}
-              className="w-full h-8 rounded bg-white/15 hover:bg-white/25 disabled:opacity-40 disabled:cursor-not-allowed text-[11px] text-white font-semibold uppercase tracking-wide"
-            >
-              {exporting
-                ? t('ui.web.exporting' as any, { defaultValue: 'Exporting…' })
-                : t('ui.web.exportHtml' as any, { defaultValue: 'Export HTML' })}
-            </button>
-            <button
-              type="button"
-              disabled={exporting || photos.length === 0}
-              onClick={handleExportPackage}
+              onClick={() => setFormatModal(true)}
               className="w-full h-8 rounded bg-accent/80 hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed text-[11px] text-button-text font-semibold uppercase tracking-wide"
               data-tooltip={t('ui.web.exportPackageTip' as any, {
-                defaultValue: 'Folder with images/ + index.html (portable multi-file package)',
+                defaultValue: 'ZIP with index.html and images/ (JPEG or PNG)',
               })}
             >
               {exporting
-                ? t('ui.web.exporting' as any, { defaultValue: 'Exporting…' })
+                ? t('ui.web.exportingProgress' as any, {
+                    defaultValue: 'Export… {{progress}}',
+                    progress: exportProgress || '',
+                  })
                 : t('ui.web.exportPackage' as any, { defaultValue: 'Export package…' })}
             </button>
             {lastExportPath && (
               <button
                 type="button"
-                className="w-full h-8 rounded border border-white/15 text-[12px] text-white/75 hover:bg-white/5"
+                className="w-full h-8 rounded border border-border-color/40 text-[12px] text-text-primary hover:bg-surface"
                 onClick={() => {
                   invoke(Invokes.ShowInFinder, { path: lastExportPath }).catch(() => {});
                 }}
@@ -381,59 +503,139 @@ export default function WebModuleView({ onBackToLibrary }: Props) {
                 {t('ui.web.showInFolder' as any, { defaultValue: 'Show in folder' })}
               </button>
             )}
-            <p className="text-[10px] text-white/35 leading-relaxed">
+            <p className="text-[10px] text-text-secondary leading-relaxed">
               {t('ui.web.note' as any, {
-                defaultValue:
-                  'HTML: single file (embedded thumbs when available). Package: folder with images/ + index.html for sharing.',
+                defaultValue: 'ZIP contenant index.html et le dossier images/ (JPEG ou PNG).',
               })}
             </p>
           </section>
         </>
       }
     >
-      <div className="w-full h-full min-h-[280px] rounded border border-white/10 bg-[#0d0d0d] overflow-auto p-4">
-        <h2 className="text-white/90 text-[16px] font-semibold mb-3 tracking-wide">{title}</h2>
-        <div
-          className={`grid gap-2 ${
-            template === 'classic'
-              ? 'grid-cols-2'
-              : template === 'mosaic'
-                ? 'grid-cols-4 auto-rows-[80px]'
-                : cols === 2
-                  ? 'grid-cols-2'
-                  : cols === 3
-                    ? 'grid-cols-3'
-                    : cols === 4
-                      ? 'grid-cols-4'
-                      : 'grid-cols-5'
-          }`}
-        >
-          {photos.length === 0 ? (
-            <div className="col-span-full text-center text-white/30 text-[12px] py-16 uppercase tracking-widest">
-              {t('ui.web.empty' as any, { defaultValue: 'Select photos in Library' })}
-            </div>
-          ) : (
-            photos.map((img, i) => {
+      <div
+        className="w-full h-full min-h-[280px] rounded border border-border-color/40 overflow-auto p-4"
+        style={{ background: galleryBg, color: ink.fg }}
+      >
+        <h2 className="text-[16px] font-semibold mb-3 tracking-wide" style={{ color: ink.fg }}>
+          {title}
+        </h2>
+        {photos.length === 0 ? (
+          <div className="text-center text-[12px] py-16 uppercase tracking-widest" style={{ color: ink.muted }}>
+            {t('ui.web.empty' as any, { defaultValue: 'Select photos in Library' })}
+          </div>
+        ) : template === 'mosaic' ? (
+          <div style={{ columnCount: cols, columnGap: '0.5rem' }}>
+            {photos.map((img) => {
               const src = thumbs[img.path];
-              const tall = template === 'mosaic' && i % 5 === 0;
               return (
-                <div
+                <figure
                   key={img.path}
-                  className={`rounded overflow-hidden bg-white/5 border border-white/10 ${
-                    tall ? 'row-span-2' : ''
-                  } aspect-square`}
+                  className="mb-2 break-inside-avoid rounded overflow-hidden"
+                  style={{ background: ink.cell, border: `1px solid ${ink.border}` }}
                 >
                   {src ? (
-                    <img src={src} alt="" className="w-full h-full object-cover" />
+                    <img src={src} alt="" className="block w-full h-auto" />
                   ) : (
-                    <div className="w-full h-full animate-pulse bg-white/5" />
+                    <div className="w-full animate-pulse" style={{ aspectRatio: '3 / 2', background: ink.cell }} />
                   )}
-                </div>
+                </figure>
               );
-            })
-          )}
-        </div>
+            })}
+          </div>
+        ) : (
+          <div
+            className={
+              template === 'classic'
+                ? 'grid grid-cols-2 gap-2'
+                : cols === 2
+                  ? 'grid grid-cols-2 gap-2'
+                  : cols === 3
+                    ? 'grid grid-cols-3 gap-2'
+                    : cols === 4
+                      ? 'grid grid-cols-4 gap-2'
+                      : 'grid grid-cols-5 gap-2'
+            }
+          >
+            {photos.map((img) => {
+              const src = thumbs[img.path];
+              return (
+                <figure
+                  key={img.path}
+                  className="rounded overflow-hidden min-w-0"
+                  style={{ background: ink.cell, border: `1px solid ${ink.border}` }}
+                >
+                  {src ? (
+                    <img src={src} alt="" className="block w-full h-auto" />
+                  ) : (
+                    <div className="w-full animate-pulse" style={{ aspectRatio: '3 / 2', background: ink.cell }} />
+                  )}
+                </figure>
+              );
+            })}
+          </div>
+        )}
       </div>
     </ModuleShell>
+
+    {formatModal && (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs"
+        role="dialog"
+        aria-modal="true"
+        onClick={() => setFormatModal(false)}
+      >
+        <div
+          className="bg-surface rounded-lg shadow-xl p-5 w-full max-w-sm border border-border-color/40"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="text-[14px] font-semibold text-text-primary mb-1">
+            {t('ui.web.exportPackage' as any, { defaultValue: 'Export package' })}
+          </div>
+          <p className="text-[12px] text-text-secondary mb-4">
+            {t('ui.web.formatPrompt' as any, {
+              defaultValue: 'Format des images dans le ZIP',
+            })}
+          </p>
+          <div className="grid grid-cols-2 gap-2 mb-5">
+            {(['jpg', 'png'] as const).map((fmt) => (
+              <button
+                key={fmt}
+                type="button"
+                onClick={() => setImageFormat(fmt)}
+                className={clsx(
+                  'h-16 rounded-lg border text-[13px] font-semibold uppercase tracking-wide',
+                  imageFormat === fmt
+                    ? 'bg-card-active border-accent text-text-primary'
+                    : 'bg-bg-primary border-border-color/40 text-text-secondary hover:text-text-primary',
+                )}
+              >
+                {fmt === 'jpg' ? 'JPEG' : 'PNG'}
+              </button>
+            ))}
+          </div>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              className="h-8 px-3 rounded text-[12px] text-text-secondary hover:bg-card-active"
+              onClick={() => setFormatModal(false)}
+            >
+              {t('modals.confirm.cancel' as any, { defaultValue: 'Annuler' })}
+            </button>
+            <button
+              type="button"
+              className="h-8 px-3 rounded bg-accent text-button-text text-[12px] font-semibold uppercase tracking-wide"
+              onClick={() => {
+                const fmt = imageFormat;
+                setFormatModal(false);
+                void handleExportPackage(fmt);
+              }}
+            >
+              {t('ui.web.exportPackage' as any, { defaultValue: 'Export package…' })}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }

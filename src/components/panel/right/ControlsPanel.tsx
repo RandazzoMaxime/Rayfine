@@ -1,21 +1,19 @@
 import React, { useCallback, useEffect } from 'react';
-import {
-  Eye, RotateCcw, Copy, ClipboardPaste, Aperture, ChevronsDown, ChevronsUp } from 'lucide-react';
+import { Eye, RotateCcw, Copy, ClipboardPaste, Aperture } from 'lucide-react';
 import clsx from 'clsx';
 import { useTranslation } from 'react-i18next';
 import BasicAdjustments from '../../adjustments/Basic';
 import CurveGraph from '../../adjustments/Curves';
-import ColorPanel, { ColorCalibrationPanel } from '../../adjustments/Color';
+import ColorPanel, { ColorCalibrationPanel, ColorGradingPanel } from '../../adjustments/Color';
 import DetailsPanel from '../../adjustments/Details';
 import EffectsPanel from '../../adjustments/Effects';
 import LensPanel from '../../adjustments/Lens';
 import TransformPanel from '../../adjustments/Transform';
 import CollapsibleSection from '../../ui/CollapsibleSection';
+import ProfileExplorer from './ProfileExplorer';
 import { Adjustments, SectionVisibility, INITIAL_ADJUSTMENTS, ADJUSTMENT_SECTIONS } from '../../../utils/adjustments';
 import { useContextMenu } from '../../../context/ContextMenuContext';
 import { OPTION_SEPARATOR } from '../../ui/AppProperties';
-import Text from '../../ui/Text';
-import { TextVariants } from '../../../types/typography';
 import { useShallow } from 'zustand/react/shallow';
 import { useEditorStore } from '../../../store/useEditorStore';
 import { useSettingsStore } from '../../../store/useSettingsStore';
@@ -35,9 +33,10 @@ export default function Controls() {
     })),
   );
 
-  const { collapsibleSectionsState, setUI } = useUIStore(
+  const { collapsibleSectionsState, isProfileBrowserOpen, setUI } = useUIStore(
     useShallow((state) => ({
       collapsibleSectionsState: state.collapsibleSectionsState,
+      isProfileBrowserOpen: state.isProfileBrowserOpen,
       setUI: state.setUI,
     })),
   );
@@ -100,19 +99,6 @@ export default function Controls() {
     });
   };
 
-  const handleResetAdjustments = () => {
-    setAdjustments((prev: Adjustments) => ({
-      ...prev,
-      ...Object.keys(ADJUSTMENT_SECTIONS)
-        .flatMap((s) => ADJUSTMENT_SECTIONS[s])
-        .reduce((acc: any, key: string) => {
-          acc[key] = INITIAL_ADJUSTMENTS[key as keyof Adjustments];
-          return acc;
-        }, {}),
-      sectionVisibility: { ...INITIAL_ADJUSTMENTS.sectionVisibility },
-    }));
-  };
-
   const handleToggleSection = (section: string, evt?: { altKey?: boolean; metaKey?: boolean }) => {
     setCollapsibleState((prev: any) => {
       const isOpening = !prev[section];
@@ -145,9 +131,11 @@ export default function Controls() {
     'basic',
     'curves',
     'color',
+    'colorGrading',
     'details',
     'optics',
     'geometry',
+    'lensBlur',
     'effects',
     'calibration',
   ] as const;
@@ -183,7 +171,7 @@ export default function Controls() {
     event.preventDefault();
     event.stopPropagation();
 
-    const sectionKeys = ADJUSTMENT_SECTIONS[sectionName];
+    const sectionKeys = ADJUSTMENT_SECTIONS[sectionName as keyof typeof ADJUSTMENT_SECTIONS];
     if (!sectionKeys) {
       return;
     }
@@ -260,74 +248,62 @@ export default function Controls() {
     showContextMenu(event.clientX, event.clientY, options);
   };
 
+  if (isProfileBrowserOpen) {
+    return <ProfileExplorer />;
+  }
+
   return (
     <div className="flex flex-col h-full">
-      <div className="px-2.5 py-1.5 flex justify-between items-center shrink-0 border-b border-border-color/40">
-        <Text variant={TextVariants.title}>{t('editor.adjustments.title')}</Text>
-        <div className="flex items-center gap-1">
-          <button
-            className={clsx(
-              'p-1.5 rounded-full hover:bg-surface disabled:cursor-not-allowed transition-colors',
-              (adjustments as any).autoTone && 'bg-accent/20 text-accent',
-            )}
-            disabled={!selectedImage?.isReady}
-            onClick={handleAutoAdjustments}
-            data-tooltip={
-              (adjustments as any).autoTone
-                ? t('editor.adjustments.tooltips.autoAdjustActive' as any, {
-                    defaultValue: 'Auto applied (AutoTone)',
-                  })
-                : t('editor.adjustments.tooltips.autoAdjust')
-            }
-          >
-            <Aperture size={16} />
-          </button>
-          <button
-            type="button"
-            className="p-1.5 rounded-full hover:bg-surface transition-colors"
-            onClick={handleExpandAllSections}
-            data-tooltip={t('editor.adjustments.tooltips.expandAll' as any, {
-              defaultValue: 'Expand all panels',
-            })}
-          >
-            <ChevronsDown size={16} />
-          </button>
-          <button
-            type="button"
-            className="p-1.5 rounded-full hover:bg-surface transition-colors"
-            onClick={handleCollapseAllSections}
-            data-tooltip={t('editor.adjustments.tooltips.collapseAll' as any, {
-              defaultValue: 'Collapse all panels',
-            })}
-          >
-            <ChevronsUp size={16} />
-          </button>
-          <button
-            className="p-1.5 rounded-full hover:bg-surface disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            disabled={!selectedImage}
-            onClick={handleResetAdjustments}
-            data-tooltip={t('editor.adjustments.tooltips.resetAdjustments')}
-          >
-            <RotateCcw size={16} />
-          </button>
-        </div>
+      <div className="px-2 py-1 flex justify-between items-center shrink-0">
+        <span className="text-[11px] font-medium text-text-primary tracking-wide">
+          {t('editor.adjustments.title')}
+        </span>
+        <button
+          className={clsx(
+            'p-1 rounded-full hover:bg-surface disabled:cursor-not-allowed transition-colors',
+            (adjustments as any).autoTone && 'bg-accent/20 text-accent',
+          )}
+          disabled={!selectedImage?.isReady}
+          onClick={handleAutoAdjustments}
+          data-tooltip={
+            (adjustments as any).autoTone
+              ? t('editor.adjustments.tooltips.autoAdjustActive' as any, {
+                  defaultValue: 'Auto applied (AutoTone)',
+                })
+              : t('editor.adjustments.tooltips.autoAdjust')
+          }
+        >
+          <Aperture size={14} />
+        </button>
       </div>
 
-      <div className="grow overflow-y-scroll px-2.5 py-1.5 flex flex-col gap-0.5 custom-scrollbar">
-        {(['basic', 'curves', 'color', 'details', 'optics', 'geometry', 'effects', 'calibration'] as const).map((sectionName) => {
+      <div className="grow overflow-y-scroll px-0 py-0 flex flex-col custom-scrollbar">
+        {DEVELOP_SECTIONS.map((sectionName) => {
           const SectionComponent: any = {
             basic: BasicAdjustments,
             color: ColorPanel,
+            colorGrading: ColorGradingPanel,
             curves: CurveGraph,
             details: DetailsPanel,
             effects: EffectsPanel,
             optics: LensPanel,
             geometry: TransformPanel,
+            lensBlur: EffectsPanel,
             calibration: ColorCalibrationPanel,
           }[sectionName];
 
           const title = t(`editor.adjustments.sections.${sectionName}`);
           const sectionVisibility = adjustments.sectionVisibility || INITIAL_ADJUSTMENTS.sectionVisibility;
+          const extraProps =
+            sectionName === 'color'
+              ? { panel: 'mixer' as const }
+              : sectionName === 'colorGrading'
+                ? { panel: 'grading' as const }
+                : sectionName === 'lensBlur'
+                  ? { variant: 'lensBlur' as const }
+                  : sectionName === 'effects'
+                    ? { variant: 'effects' as const }
+                    : {};
 
           return (
             <div className="shrink-0 group" key={sectionName}>
@@ -350,6 +326,7 @@ export default function Controls() {
                   isWbPickerActive={isWbPickerActive}
                   toggleWbPicker={toggleWbPicker}
                   onDragStateChange={onDragStateChange}
+                  {...extraProps}
                 />
               </CollapsibleSection>
             </div>

@@ -1201,7 +1201,7 @@ export const KEYBIND_DEFINITIONS: KeybindDefinition[] = [
   {
     action: 'toggle_presets',
     description: 'settings.keybinds.actions.toggle_presets',
-    defaultCombo: ['KeyY'],
+    defaultCombo: ['ctrl', 'alt', 'KeyY'],
     section: 'panels',
   },
   {
@@ -1293,7 +1293,7 @@ export const KEYBIND_DEFINITIONS: KeybindDefinition[] = [
   {
     action: 'before_after_split',
     description: 'settings.keybinds.actions.before_after_split',
-    defaultCombo: ['Backslash'],
+    defaultCombo: ['KeyY'],
     section: 'editing',
   },
   {

@@ -10,8 +10,6 @@ import {
   Adjustments,
   INITIAL_ADJUSTMENTS,
   COPYABLE_ADJUSTMENT_KEYS,
-  PasteMode,
-  LensAdjustment,
   normalizeLoadedAdjustments,
 } from '../utils/adjustments';
 import { calculateCenteredCrop } from '../utils/cropUtils';
@@ -152,7 +150,7 @@ export function useEditorActions() {
     [setEditor],
   );
 
-  const handleCopyAdjustments = useCallback(async (pathOrEvent?: string | any) => {
+  const handleCopyAdjustments = useCallback(async (pathOrEvent?: string | any, keys?: string[]) => {
     const pathOverride = typeof pathOrEvent === 'string' ? pathOrEvent : undefined;
     const { selectedImage, adjustments } = useEditorStore.getState();
     const { libraryActivePath, multiSelectedPaths } = useLibraryStore.getState();
@@ -179,10 +177,15 @@ export function useEditorActions() {
 
     if (!sourceAdjustments) return;
 
+    const keyList =
+      Array.isArray(keys) && keys.length > 0 ? keys : COPYABLE_ADJUSTMENT_KEYS;
+
     const adjustmentsToCopy: any = {};
 
-    for (const key of COPYABLE_ADJUSTMENT_KEYS) {
+    for (const key of keyList) {
       if (Object.prototype.hasOwnProperty.call(sourceAdjustments, key)) {
+        adjustmentsToCopy[key] = structuredClone(sourceAdjustments[key]);
+      } else if (sourceAdjustments[key] !== undefined) {
         adjustmentsToCopy[key] = structuredClone(sourceAdjustments[key]);
       }
     }
@@ -194,33 +197,19 @@ export function useEditorActions() {
     (paths?: string[]) => {
       const { copiedAdjustments, selectedImage, adjustments } = useEditorStore.getState();
       const { multiSelectedPaths } = useLibraryStore.getState();
-      const { appSettings } = useSettingsStore.getState();
       const { setProcess } = useProcessStore.getState();
 
-      if (!copiedAdjustments || !appSettings) return;
+      if (!copiedAdjustments) return;
 
-      const mode = appSettings.copyPasteSettings?.mode ?? PasteMode.Merge;
-      const includedAdjustments =
-        appSettings.copyPasteSettings?.includedAdjustments ?? COPYABLE_ADJUSTMENT_KEYS;
+      const clipboardKeys = Object.keys(copiedAdjustments);
       const adjustmentsToApply: Partial<Adjustments> = {};
 
-      for (const key of includedAdjustments) {
-        if (Object.prototype.hasOwnProperty.call(copiedAdjustments, key)) {
-          const value = copiedAdjustments[key as keyof Adjustments];
-          if (mode === PasteMode.Merge) {
-            const defaultValue = INITIAL_ADJUSTMENTS[key as keyof Adjustments];
-            if (JSON.stringify(value) !== JSON.stringify(defaultValue))
-              adjustmentsToApply[key as keyof Adjustments] = value;
-          } else {
-            adjustmentsToApply[key as keyof Adjustments] = value;
-          }
-        }
+      for (const key of clipboardKeys) {
+        adjustmentsToApply[key as keyof Adjustments] = copiedAdjustments[key as keyof Adjustments];
       }
 
-      if (includedAdjustments.includes(LensAdjustment.LensMaker)) {
-        if (!adjustmentsToApply.lensMaker) {
-          adjustmentsToApply.lensDistortionParams = null;
-        }
+      if (Object.prototype.hasOwnProperty.call(copiedAdjustments, 'lensMaker') && !adjustmentsToApply.lensMaker) {
+        adjustmentsToApply.lensDistortionParams = null;
       }
 
       if (Object.keys(adjustmentsToApply).length === 0) {

@@ -7,18 +7,19 @@ import {
   ChevronRight,
   Star as StarIcon,
   Maximize2,
-  Scan,
-  Ratio,
   Flag,
   FlagOff,
 } from 'lucide-react';
 import { useProcessStore } from '../../../store/useProcessStore';
 import { ImageFile } from '../../ui/AppProperties';
 import { COLOR_LABELS, Color } from '../../../utils/adjustments';
+import { generateLibraryPreview } from '../../../utils/libraryPreview';
+import CheckBox from '../../ui/CheckBox';
+import { useLibraryStore } from '../../../store/useLibraryStore';
 
 /**
  * Lightroom Classic–style Loupe (single-image) library view.
- * Fit / Fill / 1:1, scroll zoom + pan, rating, flags, color labels, EXIF strip, prev/next.
+ * Fit default, wheel zoom + pan, rating, flags, color labels, EXIF strip, prev/next.
  * Original RustROOM chrome — public LR layout structure only.
  */
 interface LoupeViewProps {
@@ -35,8 +36,6 @@ interface LoupeViewProps {
   onSetFlag?(flag: 'pick' | 'reject' | null, paths?: string[]): void;
 }
 
-type LoupeMode = 'fit' | 'fill' | 'one';
-
 export default function LoupeView({
   imageList,
   multiSelectedPaths,
@@ -51,13 +50,27 @@ export default function LoupeView({
   onSetFlag,
 }: LoupeViewProps) {
   const { t } = useTranslation();
-  /** LR loupe: Fit → Fill → 1:1 cycle (Z / click) */
-  const [mode, setMode] = useState<LoupeMode>('fit');
-  const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const included = !!(activePath && multiSelectedPaths.includes(activePath));
+  const setIncluded = (checked: boolean) => {
+    if (!activePath) return;
+    const current = useLibraryStore.getState().multiSelectedPaths || [];
+    const next = checked
+      ? current.includes(activePath)
+        ? current
+        : [...current, activePath]
+      : current.filter((p) => p !== activePath);
+    useLibraryStore.getState().setLibrary({ multiSelectedPaths: next });
+  };
   /** LR Loupe Info: off → basic → full (I key, library loupe only) */
   const [loupeInfoMode, setLoupeInfoMode] = useState<'off' | 'basic' | 'full'>('basic');
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const zoomRef = useRef(1);
+  const panRef = useRef({ x: 0, y: 0 });
+  zoomRef.current = zoom;
+  panRef.current = pan;
+  const canPan = zoom > 1.01;
 
   const path = useMemo(() => {
     if (activePath) return activePath;
@@ -77,22 +90,54 @@ export default function LoupeView({
   const preview = useProcessStore((s) => (path ? s.previews[path] : undefined));
   const src = preview?.url || thumbUrl;
 
-  // Reset zoom/pan when photo or mode changes
+  useEffect(() => {
+    if (!path) return;
+    generateLibraryPreview(path);
+  }, [path]);
+
   useEffect(() => {
     setZoom(1);
     setPan({ x: 0, y: 0 });
-  }, [path, mode]);
+  }, [path]);
+
+  const resetFit = useCallback(() => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }, []);
+
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const z = zoomRef.current;
+      const factor = e.deltaY > 0 ? 1 / 1.12 : 1.12;
+      const nextZ = Math.min(8, Math.max(1, Math.round(z * factor * 100) / 100));
+      if (nextZ <= 1) {
+        setZoom(1);
+        setPan({ x: 0, y: 0 });
+        return;
+      }
+      const rect = el.getBoundingClientRect();
+      const cx = e.clientX - rect.left - rect.width / 2;
+      const cy = e.clientY - rect.top - rect.height / 2;
+      const p = panRef.current;
+      const k = nextZ / z;
+      setPan({
+        x: cx * (1 - k) + p.x * k,
+        y: cy * (1 - k) + p.y * k,
+      });
+      setZoom(nextZ);
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
 
   useEffect(() => {
     const paths = [path, prev?.path, next?.path].filter(Boolean) as string[];
     if (paths.length && onRequestThumbnails) onRequestThumbnails(paths);
   }, [path, prev?.path, next?.path, onRequestThumbnails]);
 
-  const cycleMode = useCallback(() => {
-    setMode((m) => (m === 'fit' ? 'fill' : m === 'fill' ? 'one' : 'fit'));
-  }, []);
-
-  // LR Loupe: Z cycles Fit → Fill → 1:1; I cycles info overlay
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (
@@ -102,25 +147,15 @@ export default function LoupeView({
       )
         return;
       if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
-      if (e.key === 'z' || e.key === 'Z') {
-        e.preventDefault();
-        cycleMode();
-        return;
-      }
       if (e.key === 'i' || e.key === 'I') {
         e.preventDefault();
         e.stopPropagation();
         setLoupeInfoMode((m) => (m === 'off' ? 'basic' : m === 'basic' ? 'full' : 'off'));
       }
     };
-    const onCycle = () => cycleMode();
     window.addEventListener('keydown', onKey, true);
-    window.addEventListener('rustroom:loupe-cycle-zoom', onCycle as EventListener);
-    return () => {
-      window.removeEventListener('keydown', onKey, true);
-      window.removeEventListener('rustroom:loupe-cycle-zoom', onCycle as EventListener);
-    };
-  }, [cycleMode]);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, []);
 
   const rating = path ? imageRatings[path] || image?.rating || 0 : 0;
   const colorTag = image?.tags?.find((tg) => tg.startsWith('color:'))?.substring(6);
@@ -168,8 +203,6 @@ export default function LoupeView({
   }, [prev, next, go]);
 
   const pathsFor = path ? [path] : undefined;
-  const effectiveZoom = mode === 'one' ? Math.max(1, zoom) : mode === 'fit' ? 1 : Math.max(1, zoom);
-  const canPan = mode !== 'fit' && effectiveZoom > 1;
 
   return (
     <div className="flex-1 min-h-0 flex flex-col p-2 gap-2">
@@ -198,57 +231,29 @@ export default function LoupeView({
         <div className="flex items-center gap-0.5">
           <button
             type="button"
-            onClick={() => setMode('fit')}
             className={clsx(
               'h-6 px-1.5 rounded text-[9px] uppercase tracking-wide flex items-center gap-0.5',
-              mode === 'fit'
+              zoom <= 1.01
                 ? 'bg-card-active text-text-primary'
-                : 'text-text-secondary hover:bg-surface',
+                : 'text-text-secondary hover:bg-surface hover:text-text-primary',
             )}
             data-tooltip={t('library.loupe.fitTip' as any, { defaultValue: 'Fit' })}
+            onClick={resetFit}
           >
             <Maximize2 size={11} />
             <span className="hidden sm:inline">
               {t('library.loupe.fit' as any, { defaultValue: 'Fit' })}
             </span>
           </button>
-          <button
-            type="button"
-            onClick={() => setMode('fill')}
-            className={clsx(
-              'h-6 px-1.5 rounded text-[9px] uppercase tracking-wide flex items-center gap-0.5',
-              mode === 'fill'
-                ? 'bg-card-active text-text-primary'
-                : 'text-text-secondary hover:bg-surface',
-            )}
-            data-tooltip={t('library.loupe.fillTip' as any, { defaultValue: 'Fill' })}
-          >
-            <Scan size={11} />
-            <span className="hidden sm:inline">
-              {t('library.loupe.fill' as any, { defaultValue: 'Fill' })}
+          {zoom > 1.01 && (
+            <span className="text-[10px] tabular-nums text-text-secondary/70 px-1">
+              {Math.round(zoom * 100)}%
             </span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode('one')}
-            className={clsx(
-              'h-6 px-1.5 rounded text-[9px] uppercase tracking-wide flex items-center gap-0.5',
-              mode === 'one'
-                ? 'bg-card-active text-text-primary'
-                : 'text-text-secondary hover:bg-surface',
-            )}
-            data-tooltip={t('library.loupe.oneTip' as any, {
-              defaultValue: '1:1 (scroll to zoom further)',
-            })}
-          >
-            <Ratio size={11} />
-            <span className="hidden sm:inline">1:1</span>
-          </button>
+          )}
         </div>
         {path && (
           <span className="text-[10px] tabular-nums text-text-secondary/50">
             {index + 1}/{imageList.length}
-            {effectiveZoom > 1 ? ` · ${Math.round(effectiveZoom * 100)}%` : ''}
           </span>
         )}
       </div>
@@ -256,24 +261,7 @@ export default function LoupeView({
       <div
         ref={stageRef}
         className="flex-1 min-h-0 relative flex items-center justify-center rounded-md border border-border-color/35 bg-[#121212] overflow-hidden"
-        onWheel={(e) => {
-          if (mode === 'fit') {
-            // Enter 1:1 zoom from fit on first scroll
-            if (e.deltaY < 0) {
-              e.preventDefault();
-              setMode('one');
-              setZoom(1.2);
-            }
-            return;
-          }
-          e.preventDefault();
-          const delta = e.deltaY > 0 ? -0.12 : 0.12;
-          setZoom((z) => {
-            const nextZ = Math.min(6, Math.max(1, Math.round((z + delta) * 100) / 100));
-            if (nextZ <= 1) setPan({ x: 0, y: 0 });
-            return nextZ;
-          });
-        }}
+        style={{ cursor: canPan ? 'grab' : 'default' }}
         onMouseDown={(e) => {
           if (!canPan || e.button !== 0) return;
           e.preventDefault();
@@ -293,41 +281,24 @@ export default function LoupeView({
           window.addEventListener('mousemove', onMove);
           window.addEventListener('mouseup', onUp);
         }}
-        style={{ cursor: canPan ? 'grab' : 'default' }}
       >
         {src ? (
           <img
             src={src}
             alt={name}
-            className={clsx(
-              'select-none will-change-transform',
-              mode === 'fill' && zoom <= 1
-                ? 'w-full h-full object-cover'
-                : mode === 'one' || zoom > 1
-                  ? 'max-w-none max-h-none object-contain'
-                  : 'max-w-full max-h-full object-contain',
-            )}
+            className="select-none max-w-full max-h-full object-contain will-change-transform"
             draggable={false}
             style={
-              mode === 'one' || zoom > 1
+              zoom > 1.01
                 ? {
-                    transform: `translate(${pan.x}px, ${pan.y}px) scale(${effectiveZoom})`,
+                    transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
                     transformOrigin: 'center center',
-                    // Approximate 1:1: prefer natural size when available
-                    width: mode === 'one' ? 'auto' : undefined,
-                    height: mode === 'one' ? 'auto' : undefined,
-                    maxWidth: mode === 'one' ? 'none' : undefined,
-                    maxHeight: mode === 'one' ? 'none' : undefined,
                   }
                 : undefined
             }
             onDoubleClick={() => path && onImageDoubleClick(path)}
             onContextMenu={(e) => path && onContextMenu(e, path)}
             onClick={(e) => {
-              // single click without modifiers: cycle Fit/Fill/1:1
-              if (!e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
-                cycleMode();
-              }
               if (path) onImageClick(path, e);
             }}
           />
@@ -357,7 +328,7 @@ export default function LoupeView({
         </button>
 
         {loupeInfoMode !== 'off' && (
-          <div className="absolute bottom-2 left-1/2 -translate-x-1/2 px-2.5 py-1.5 rounded-md bg-black/55 backdrop-blur-sm border border-white/10 text-white max-w-[90%] text-center pointer-events-none">
+          <div className="absolute bottom-10 left-1/2 -translate-x-1/2 px-2.5 py-1.5 rounded-md bg-black/55 backdrop-blur-sm border border-white/10 text-white max-w-[90%] text-center pointer-events-none">
             <div className="text-[11px] font-medium truncate">{name}</div>
             {exifLine.exposure && (
               <div className="text-[10px] text-white/85 tabular-nums mt-0.5">{exifLine.exposure}</div>
@@ -371,6 +342,27 @@ export default function LoupeView({
             )}
           </div>
         )}
+
+        <div
+          className={clsx(
+            'absolute bottom-0 left-0 right-0 h-8 px-2.5 flex items-center gap-2 bg-black/55 backdrop-blur-sm cursor-pointer',
+            !activePath && 'opacity-40 pointer-events-none',
+          )}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={() => {
+            if (activePath) setIncluded(!included);
+          }}
+        >
+          <CheckBox
+            checked={included}
+            onChange={setIncluded}
+            disabled={!activePath}
+            label={t('library.bottomBar.includeInImport' as any, { defaultValue: 'Inclure dans l’importation' })}
+          />
+          <span className="text-[11px] text-white/90 whitespace-nowrap select-none">
+            {t('library.bottomBar.includeInImport' as any, { defaultValue: 'Inclure dans l’importation' })}
+          </span>
+        </div>
       </div>
 
       <div className="h-8 flex items-center gap-1 px-1 shrink-0">
@@ -443,7 +435,7 @@ export default function LoupeView({
 
         <span className="ml-auto text-[10px] text-text-secondary/50 hidden md:inline">
           {t('library.loupe.hint' as any, {
-            defaultValue: 'Z: Fit/Fill/1:1 · scroll zoom · drag pan · arrows · double-click Develop',
+            defaultValue: 'Molette : zoom · glisser : déplacer · flèches · double-clic Développer',
           })}
         </span>
       </div>

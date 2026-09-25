@@ -69,6 +69,30 @@ function pickPrimary(files: ImageFile[], preference: GroupPreference): ImageFile
   }
 }
 
+/** Directory + stem (no extension), for pairing IMG_001.CR2 with IMG_001.JPG. */
+export function sameNameStemKey(path: string): string {
+  const clean = physicalPathOf(path);
+  const slash = Math.max(clean.lastIndexOf('/'), clean.lastIndexOf('\\'));
+  const dir = slash >= 0 ? clean.slice(0, slash) : '';
+  const name = slash >= 0 ? clean.slice(slash + 1) : clean;
+  const dot = name.lastIndexOf('.');
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  return `${dir}/${stem}`.toLowerCase();
+}
+
+/** Hide JPEG/TIFF/HEIC companions when a RAW with the same name exists (Lightroom). */
+export function hideNonRawWhenRawSibling(images: ImageFile[]): ImageFile[] {
+  const stemsWithRaw = new Set<string>();
+  for (const img of images) {
+    if (img.is_raw && !img.is_virtual_copy) stemsWithRaw.add(sameNameStemKey(img.path));
+  }
+  if (stemsWithRaw.size === 0) return images;
+  return images.filter((img) => {
+    if (img.is_raw || img.is_virtual_copy) return true;
+    return !stemsWithRaw.has(sameNameStemKey(img.path));
+  });
+}
+
 export function getFileExtension(path: string): string {
   const clean = path.split('?')[0];
   const dot = clean.lastIndexOf('.');

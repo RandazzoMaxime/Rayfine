@@ -2236,10 +2236,22 @@ fn get_global_adjustments_from_json(
             SCALES.chromatic_aberration,
             None,
         ),
-        show_clipping: if js_adjustments["showClipping"].as_bool().unwrap_or(false) {
-            1
-        } else {
-            0
+        show_clipping: {
+            let legacy = js_adjustments["showClipping"].as_bool().unwrap_or(false);
+            let highlights = js_adjustments["showHighlightClipping"]
+                .as_bool()
+                .unwrap_or(legacy);
+            let shadows = js_adjustments["showShadowClipping"]
+                .as_bool()
+                .unwrap_or(legacy);
+            let mut bits: u32 = 0;
+            if highlights {
+                bits |= 1;
+            }
+            if shadows {
+                bits |= 2;
+            }
+            bits
         },
         is_raw_image: if is_raw { 1 } else { 0 },
         _pad_ca1: 0.0,

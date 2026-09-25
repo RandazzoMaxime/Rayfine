@@ -13,6 +13,8 @@ import { INITIAL_ADJUSTMENTS, normalizeLoadedAdjustments } from '../utils/adjust
 import { denormalizeMaskCoordinates } from '../utils/maskUtils';
 import { globalImageCache } from '../utils/ImageLRUCache';
 import { debouncedSave, debouncedSetHistory } from './useEditorActions';
+import i18n from '../i18n';
+import { isPathImported, filterRemovedFromCatalog } from '../utils/catalogMembership';
 
 export interface AppNavigationProps {
   clearThumbnailQueue: () => void;
@@ -121,10 +123,43 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
   const handleImageSelect = useCallback(
     async (path: string) => {
       const { selectedImage, isSliderDragging, resetHistory, setEditor } = useEditorStore.getState();
-      const { setLibrary, multiSelectedPaths } = useLibraryStore.getState();
+      const { setLibrary, multiSelectedPaths, albumTree } = useLibraryStore.getState();
       const { setUI } = useUIStore.getState();
+      const ui = useUIStore.getState();
 
-      if (selectedImage?.path === path) return;
+      const enterDevelop = () => {
+        if (ui.activeView === 'develop') return;
+        setUI({
+          activeView: 'develop',
+          ...(selectedImage
+            ? {}
+            : {
+                activeRightPanel: Panel.Adjustments,
+                renderedRightPanel: Panel.Adjustments,
+              }),
+          uiVisibility: {
+            ...ui.uiVisibility,
+            developLeft: true,
+            filmstrip: ui.uiVisibility?.filmstrip ?? true,
+          },
+        });
+      };
+
+      if (selectedImage?.path === path) {
+        enterDevelop();
+        return;
+      }
+
+      if (!isPathImported(path, albumTree)) {
+        toast.info(
+          i18n.t('library.rightPanel.developNotImported' as any, {
+            defaultValue: 'Importez cette photo pour l’ouvrir dans Develop.',
+          }),
+        );
+        return;
+      }
+
+      enterDevelop();
 
       // LR "Previous": remember develop settings from the photo we are leaving
       if (selectedImage?.path) {
@@ -136,22 +171,7 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
         });
       }
 
-      // Entering Develop from Library (no prior selection): open Adjustments + left stack.
-      // When already developing and switching photos, keep the current right tool (Crop/Masks/…).
       if (!selectedImage) {
-        const ui = useUIStore.getState();
-        setUI({
-          activeView: 'develop',
-          activeRightPanel: Panel.Adjustments,
-          renderedRightPanel: Panel.Adjustments,
-          uiVisibility: {
-            ...ui.uiVisibility,
-            developLeft: true,
-            filmstrip: ui.uiVisibility?.filmstrip ?? true,
-            folderTree: ui.uiVisibility?.folderTree ?? true,
-          },
-        });
-        // Classic Develop opens with histogram/waveform visible
         useEditorStore.getState().setEditor({ isWaveformVisible: true });
       }
 
@@ -165,18 +185,8 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
 
       const cached = globalImageCache.get(path);
       const isFrontendCached = Boolean(cached && cached.selectedImage?.isReady);
-      const isCachedInBackend = isFrontendCached
-        ? await invoke<boolean>('is_image_cached', { path }).catch(() => false)
-        : false;
 
-      const hasDifferentResolution =
-        cached &&
-        (useEditorStore.getState().originalSize.width !== cached.originalSize.width ||
-          useEditorStore.getState().originalSize.height !== cached.originalSize.height);
-
-      if (!isCachedInBackend || hasDifferentResolution) {
-        setEditor({ hasRenderedFirstFrame: false });
-      }
+      setEditor({ hasRenderedFirstFrame: false });
 
       selectedImagePathRef.current = path;
 
@@ -440,6 +450,7 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
         } else {
           files = await invoke(command, { path });
         }
+        files = filterRemovedFromCatalog(files);
 
         const initialRatings: Record<string, number> = {};
         files.forEach((f) => {
@@ -508,7 +519,9 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
       });
 
       try {
-        const files: ImageFile[] = await invoke(Invokes.GetAlbumImages, { paths: imagePaths });
+        const files: ImageFile[] = filterRemovedFromCatalog(
+          await invoke(Invokes.GetAlbumImages, { paths: imagePaths }),
+        );
 
         const initialRatings: Record<string, number> = {};
         files.forEach((f) => {

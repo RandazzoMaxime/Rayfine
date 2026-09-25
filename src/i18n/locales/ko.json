@@ -369,12 +369,15 @@
       },
       "sections": {
         "basic": "기본",
-        "color": "색상",
+        "color": "색상 믹서",
+        "colorGrading": "컬러 그레이딩",
         "curves": "커브",
         "details": "디테일",
         "effects": "효과",
-        "optics": "Optics",
-        "geometry": "Transform"
+        "optics": "렌즈 보정",
+        "geometry": "변형",
+        "lensBlur": "렌즈 블러",
+        "calibration": "캘리브레이션"
       },
       "title": "조정",
       "tooltips": {
@@ -1094,7 +1097,7 @@
     },
     "splash": {
       "addFolder": "폴더 추가",
-      "brand": "RapidRAW",
+      "brand": "Rayfine",
       "continueSession": "세션 계속하기",
       "contribute": "GitHub에서 기여하기",
       "descriptionAndroid": "매우 빠른 GPU 가속 RAW 이미지 편집기입니다. 라이브러리를 열어 시작하세요.",

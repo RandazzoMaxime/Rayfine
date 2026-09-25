@@ -1,5 +1,5 @@
 import { memo, useState, useEffect, useRef, useMemo } from 'react';
-import { Eye, EyeOff, ArrowLeft, Maximize, Loader2, Undo, Redo, Columns2, Printer } from 'lucide-react';
+import { Eye, EyeOff, ArrowLeft, Maximize, Loader2, Undo, Redo, Columns2, Printer, Info } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import clsx from 'clsx';
 import { useTranslation } from 'react-i18next';
@@ -9,6 +9,7 @@ import Text from '../../ui/Text';
 import { TextColors, TextVariants, TextWeights } from '../../../types/typography';
 import { useLibraryStore } from '../../../store/useLibraryStore';
 import { useSettingsStore } from '../../../store/useSettingsStore';
+import { useUIStore } from '../../../store/useUIStore';
 import { findGroupVariants, findVirtualCopyStack, getVariantLabel, virtualCopyLabel } from '../../../utils/imageGrouping';
 
 interface EditorToolbarProps {
@@ -419,6 +420,17 @@ const EditorToolbar = memo(
             }}
           >
             <div className="flex items-center justify-center max-w-full h-5 shrink-0">
+              <button
+                type="button"
+                className="mr-1.5 p-0.5 rounded text-text-secondary hover:text-text-primary hover:bg-white/10 shrink-0"
+                data-tooltip="Infos image"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  useUIStore.getState().setUI({ isImageInfoModalOpen: true });
+                }}
+              >
+                <Info size={12} />
+              </button>
               <Text
                 as="span"
                 variant={TextVariants.small}

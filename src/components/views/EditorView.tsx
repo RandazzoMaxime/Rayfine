@@ -1,4 +1,4 @@
-import { type RefObject, type PointerEvent as ReactPointerEvent } from 'react';
+import { type RefObject, type PointerEvent as ReactPointerEvent, useMemo } from 'react';
 import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
 import { useShallow } from 'zustand/react/shallow';
 import clsx from 'clsx';
@@ -18,6 +18,7 @@ import ExportPanel from '../panel/right/ExportPanel';
 import DevelopLeftPanel, { DevelopLeftRail } from '../panel/DevelopLeftPanel';
 import DevelopToolsBar from '../panel/editor/DevelopToolsBar';
 import DevelopHistogram from '../panel/right/DevelopHistogram';
+import DevelopFooterBar from '../panel/right/DevelopFooterBar';
 import SoftProofBar from '../panel/editor/SoftProofBar';
 
 import { useEditorStore } from '../../store/useEditorStore';
@@ -27,6 +28,7 @@ import { useProcessStore } from '../../store/useProcessStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
 
 import { ImageFile, Orientation, Panel, ThumbnailAspectRatio } from '../ui/AppProperties';
+import { importedPathSet } from '../../utils/catalogMembership';
 
 const panelVariants: any = {
   animate: (direction: number) => ({
@@ -130,13 +132,19 @@ export default function EditorView({
     })),
   );
 
-  const { multiSelectedPaths, imageRatings, isViewLoading, rootPaths } = useLibraryStore(
+  const { multiSelectedPaths, imageRatings, isViewLoading, rootPaths, albumTree } = useLibraryStore(
     useShallow((state) => ({
       multiSelectedPaths: state.multiSelectedPaths,
       imageRatings: state.imageRatings,
       isViewLoading: state.isViewLoading,
       rootPaths: state.rootPaths,
+      albumTree: state.albumTree,
     })),
+  );
+
+  const developImageList = useMemo(
+    () => sortedImageList.filter((img) => importedPathSet(albumTree).has(img.path)),
+    [sortedImageList, albumTree],
   );
 
   const { exportState, isCopied, isPasted, setExportState } = useProcessStore(
@@ -167,7 +175,7 @@ export default function EditorView({
   const editorBottomBarComponent = (
     <BottomBar
       filmstripHeight={bottomPanelHeight}
-      imageList={sortedImageList}
+      imageList={developImageList}
       imageRatings={imageRatings}
       isCopied={isCopied}
       isCopyDisabled={!selectedImage}
@@ -362,6 +370,7 @@ export default function EditorView({
                     isInstantTransition={isInstantTransition}
                   />
                   <div className="flex-1 min-h-0">{editorRightPanelContent}</div>
+                  <DevelopFooterBar />
                 </div>
               </div>
             </div>

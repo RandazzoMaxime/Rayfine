@@ -369,12 +369,15 @@
       },
       "sections": {
         "basic": "基础",
-        "color": "颜色",
+        "color": "颜色混合器",
+        "colorGrading": "颜色分级",
         "curves": "曲线",
         "details": "细节",
         "effects": "效果",
-        "optics": "Optics",
-        "geometry": "Transform"
+        "optics": "镜头校正",
+        "geometry": "变换",
+        "lensBlur": "镜头模糊",
+        "calibration": "校准"
       },
       "title": "调整",
       "tooltips": {
@@ -1094,7 +1097,7 @@
     },
     "splash": {
       "addFolder": "添加文件夹",
-      "brand": "RapidRAW",
+      "brand": "Rayfine",
       "continueSession": "继续会话",
       "contribute": "在 GitHub 上贡献",
       "descriptionAndroid": "一款极速、GPU 加速的 RAW 图像编辑器。打开图库以开始。",

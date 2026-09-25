@@ -697,20 +697,13 @@ export function ViewOptionsDropdown({
                     id: LibraryDisplayMode.Loupe,
                     label: t('library.header.viewOptions.loupe' as any, { defaultValue: 'Loupe' }),
                   },
-                  {
-                    id: LibraryDisplayMode.Compare,
-                    label: t('library.header.viewOptions.compare' as any, { defaultValue: 'Compare' }),
-                  },
-                  {
-                    id: LibraryDisplayMode.Survey,
-                    label: t('library.header.viewOptions.survey' as any, { defaultValue: 'Survey' }),
-                  },
-                  {
-                    id: LibraryDisplayMode.Cull,
-                    label: t('library.header.viewOptions.cull' as any, { defaultValue: 'Cull' }),
-                  },
                 ]}
-                value={appSettings?.libraryDisplayMode || LibraryDisplayMode.Grid}
+                value={
+                  appSettings?.libraryDisplayMode === LibraryDisplayMode.List ||
+                  appSettings?.libraryDisplayMode === LibraryDisplayMode.Loupe
+                    ? appSettings.libraryDisplayMode
+                    : LibraryDisplayMode.Grid
+                }
                 onChange={async (val) => {
                   if (!appSettings) return;
                   await handleSettingsChange({

@@ -13,11 +13,13 @@ const RIGHT_PANEL_ORDER = [
 export interface CollapsibleSectionsState {
   basic: boolean;
   color: boolean;
+  colorGrading: boolean;
   curves: boolean;
   details: boolean;
   effects: boolean;
   optics: boolean;
   geometry: boolean;
+  lensBlur: boolean;
   calibration: boolean;
 }
 
@@ -88,7 +90,10 @@ interface UIState {
   isLayoutReady: boolean;
   uiVisibility: UiVisibility;
   isLibraryExportPanelVisible: boolean;
+  isExportModalOpen: boolean;
+  isImageInfoModalOpen: boolean;
   isSettingsOpen: boolean;
+  isCustomizeModalOpen: boolean;
 
   /** Map module: images the filmstrip should show (collection + GPS filter). null = normal list. */
   mapImageList: ImageFile[] | null;
@@ -115,6 +120,7 @@ interface UIState {
   isCopyPasteSettingsModalOpen: boolean;
   /** Develop "Preset Browser" modal (grid of presets not yet in the user list). */
   isPresetBrowserOpen: boolean;
+  isProfileBrowserOpen: boolean;
   importTargetFolder: string | null;
   importSourcePaths: Array<string>;
   folderActionTarget: string | null;
@@ -154,20 +160,34 @@ export const useUIStore = create<UIState>((set, get) => ({
   isLayoutReady: false,
   uiVisibility: { folderTree: true, filmstrip: true, developLeft: true, libraryRight: true },
   isLibraryExportPanelVisible: false,
+  isExportModalOpen: false,
+  isImageInfoModalOpen: false,
   isSettingsOpen: false,
+  isCustomizeModalOpen: false,
 
   mapImageList: null,
 
   leftPanelWidth: 240,
   developLeftPanelWidth: 220,
   rightPanelWidth: 340,
-  bottomPanelHeight: 128,
+  bottomPanelHeight: 88,
   compactEditorPanelHeightOverride: null,
 
   activeRightPanel: Panel.Adjustments,
   renderedRightPanel: Panel.Adjustments,
   slideDirection: 1,
-  collapsibleSectionsState: { basic: true, color: false, curves: false, details: false, effects: false, optics: false, geometry: false, calibration: false },
+  collapsibleSectionsState: {
+    basic: true,
+    color: false,
+    colorGrading: false,
+    curves: false,
+    details: false,
+    effects: false,
+    optics: false,
+    geometry: false,
+    lensBlur: false,
+    calibration: false,
+  },
 
   isCreateFolderModalOpen: false,
   isRenameFolderModalOpen: false,
@@ -176,6 +196,7 @@ export const useUIStore = create<UIState>((set, get) => ({
   isImportModalOpen: false,
   isCopyPasteSettingsModalOpen: false,
   isPresetBrowserOpen: false,
+  isProfileBrowserOpen: false,
   importTargetFolder: null,
   importSourcePaths: [],
   folderActionTarget: null,

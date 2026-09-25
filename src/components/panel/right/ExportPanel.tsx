@@ -226,8 +226,10 @@ export default function ExportPanel({
     setResolutionDpi,
     limitFileSizeKb,
     setLimitFileSizeKb,
+    bitDepth,
     enableWatermark,
     setEnableWatermark,
+    watermarkMode,
     watermarkPath,
     setWatermarkPath,
     watermarkText,
@@ -404,6 +406,7 @@ export default function ExportPanel({
       outputSharpening,
       resolutionDpi,
       limitFileSizeKb: limitFileSizeKb || undefined,
+      bitDepth,
       exportMasks: !isLibraryContext ? exportMasks : undefined,
       watermark:
         enableWatermark && (watermarkPath || (watermarkText && watermarkText.trim()))
@@ -415,6 +418,7 @@ export default function ExportPanel({
             scale: watermarkScale,
             spacing: watermarkSpacing,
             opacity: watermarkOpacity,
+            mode: watermarkMode,
           }
           : null,
     };
@@ -446,6 +450,7 @@ export default function ExportPanel({
     stripGps,
     filenameTemplate,
     enableWatermark,
+    watermarkMode,
     watermarkPath,
     watermarkAnchor,
     watermarkScale,
@@ -500,6 +505,7 @@ export default function ExportPanel({
       outputSharpening,
       resolutionDpi,
       limitFileSizeKb: limitFileSizeKb || undefined,
+      bitDepth,
       exportMasks: !isLibraryContext ? exportMasks : undefined,
       watermark:
         enableWatermark && (watermarkPath || (watermarkText && watermarkText.trim()))
@@ -511,6 +517,7 @@ export default function ExportPanel({
             scale: watermarkScale,
             spacing: watermarkSpacing,
             opacity: watermarkOpacity,
+            mode: watermarkMode,
           }
           : null,
     };
@@ -654,6 +661,7 @@ export default function ExportPanel({
         outputSharpening,
         resolutionDpi,
         limitFileSizeKb: limitFileSizeKb || undefined,
+      bitDepth,
         exportMasks: !isLibraryContext ? exportMasks : undefined,
         watermark:
           enableWatermark && (watermarkPath || (watermarkText && watermarkText.trim()))

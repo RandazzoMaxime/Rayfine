@@ -3,9 +3,9 @@ import { useTranslation } from 'react-i18next';
 import {
   Globe,
   Images,
-  LayoutTemplate,
   Frame,
   Map as MapIcon,
+  Settings,
   SlidersHorizontal,
 } from 'lucide-react';
 import { useEditorStore } from '../../store/useEditorStore';
@@ -91,7 +91,7 @@ export default function ModuleBar({ onBackToLibrary, onOpenDevelop, isInstantTra
   // Prefer explicit module views; otherwise Develop when an image is open, else Library.
   const activeModule: AppModule = (STUB_MODULES as string[]).includes(activeView)
     ? (activeView as AppModule)
-    : selectedImage
+    : activeView === 'develop' || selectedImage
       ? 'develop'
       : 'library';
 
@@ -114,21 +114,25 @@ export default function ModuleBar({ onBackToLibrary, onOpenDevelop, isInstantTra
   return (
     <div
       className={clsx(
-        'relative flex items-center justify-center h-9 px-3 shrink-0 border-b border-black/40',
-        'bg-[#4a4a4a] text-white/90 select-none',
+        'relative flex items-center justify-between h-9 px-3 shrink-0 border-b border-border-color/50',
+        'bg-bg-secondary text-text-primary select-none',
         !isInstantTransition && 'transition-colors duration-200',
       )}
       role="navigation"
       aria-label="Modules"
     >
-      {/* Identity — left, like catalog/identity plate zone */}
-      <div className="absolute left-3 flex items-center gap-2 text-white/65">
-        <LayoutTemplate size={13} strokeWidth={1.8} />
-        <span className="text-[10px] font-semibold tracking-[0.2em] uppercase">RustROOM</span>
-      </div>
+      <span className="text-[10px] font-semibold tracking-[0.2em] uppercase text-text-secondary">Rayfine</span>
 
-      {/* Center module picker — text-first like LR Classic, icons as accent */}
-      <div className="flex items-stretch h-full">
+      <div className="flex items-stretch h-full ml-auto">
+        <button
+          type="button"
+          className="relative flex items-center px-2 h-full text-text-secondary hover:text-text-primary"
+          data-tooltip={t('ui.moduleBar.tooltips.settings' as any, { defaultValue: 'Paramètres' })}
+          aria-label={t('ui.moduleBar.tooltips.settings' as any, { defaultValue: 'Paramètres' })}
+          onClick={() => setUI({ isCustomizeModalOpen: true })}
+        >
+          <Settings size={14} strokeWidth={1.8} />
+        </button>
         {MODULES.map((mod) => {
           const Icon = mod.icon;
           const isActive = activeModule === mod.id;
@@ -142,35 +146,17 @@ export default function ModuleBar({ onBackToLibrary, onOpenDevelop, isInstantTra
               className={clsx(
                 'relative flex items-center gap-1.5 px-3 h-full text-[11px] font-semibold tracking-[0.08em] uppercase',
                 'transition-colors duration-150',
-                isActive ? 'text-white' : 'text-white/50 hover:text-white/85',
+                isActive ? 'text-text-primary' : 'text-text-secondary hover:text-text-primary',
               )}
             >
               <Icon size={12} strokeWidth={isActive ? 2.3 : 1.6} className="opacity-90" />
               <span>{t(mod.labelKey as any)}</span>
               {isActive && (
-                <span className="absolute left-2 right-2 bottom-0 h-[2px] bg-[#d0d0d0]" aria-hidden />
-              )}
-              {mod.kind === 'shell' && !isActive && (
-                <span className="sr-only">shell</span>
+                <span className="absolute left-2 right-2 bottom-0 h-[2px] bg-accent" aria-hidden />
               )}
             </button>
           );
         })}
-      </div>
-
-      <div className="absolute right-3 flex items-center gap-2 text-[10px] uppercase tracking-wider text-white/35">
-        {activeView === 'community' ? (
-          t('ui.moduleBar.community' as any)
-        ) : (
-          <>
-            <span>{t(`ui.moduleBar.${activeModule}` as any)}</span>
-            {STUB_MODULES.includes(activeModule) && (
-              <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/10 text-white/50 normal-case tracking-normal">
-                {t('ui.moduleShell.shellBadge' as any, { defaultValue: 'shell' })}
-              </span>
-            )}
-          </>
-        )}
       </div>
     </div>
   );

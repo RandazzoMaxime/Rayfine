@@ -22,6 +22,30 @@ function saveQuickCollection(paths: string[]) {
 }
 
 const TARGET_COLLECTION_KEY = 'rustroom.targetCollection.v1';
+const IMPORT_APPLY_KEY = 'rustroom.importApply.v1';
+
+function loadImportApply(): { develop: string | null; metadata: string | null; keywords: string } {
+  try {
+    const raw = localStorage.getItem(IMPORT_APPLY_KEY);
+    if (!raw) return { develop: null, metadata: null, keywords: '' };
+    const p = JSON.parse(raw);
+    return {
+      develop: typeof p.develop === 'string' ? p.develop : null,
+      metadata: typeof p.metadata === 'string' ? p.metadata : null,
+      keywords: typeof p.keywords === 'string' ? p.keywords : '',
+    };
+  } catch {
+    return { develop: null, metadata: null, keywords: '' };
+  }
+}
+
+function saveImportApply(develop: string | null, metadata: string | null, keywords: string) {
+  try {
+    localStorage.setItem(IMPORT_APPLY_KEY, JSON.stringify({ develop, metadata, keywords }));
+  } catch {
+    /* ignore */
+  }
+}
 
 function loadTargetCollectionId(): string | null {
   try {
@@ -114,6 +138,12 @@ interface LibraryState {
    * Keys match RapidRAW exif map (Artist, Copyright, ImageDescription, City, …).
    */
   copiedMetadata: Record<string, string> | null;
+  /** Apply-during-import: existing develop preset id, or null = none. */
+  importApplyDevelopPresetId: string | null;
+  /** Apply-during-import: metadata preset id, or null = none. */
+  importApplyMetadataPresetId: string | null;
+  /** Apply-during-import keywords (comma or newline separated). */
+  importApplyKeywords: string;
   /**
    * Manual / auto stack ids currently expanded (not collapsed in grid).
    * Values are effective group keys: "stack:<id>" or RAW/JPEG group_id.
@@ -170,6 +200,9 @@ export const useLibraryStore = create<LibraryState>((set) => ({
   libraryPainter: null,
   keywordPaintTag: null,
   copiedMetadata: null,
+  importApplyDevelopPresetId: typeof window !== 'undefined' ? loadImportApply().develop : null,
+  importApplyMetadataPresetId: typeof window !== 'undefined' ? loadImportApply().metadata : null,
+  importApplyKeywords: typeof window !== 'undefined' ? loadImportApply().keywords : '',
   expandedStackIds: [],
   folderHistory: [],
   folderHistoryIndex: -1,
@@ -215,6 +248,21 @@ export const useLibraryStore = create<LibraryState>((set) => ({
       }
       if ('targetCollectionId' in patch) {
         saveTargetCollectionId(patch.targetCollectionId ?? null);
+      }
+      if (
+        'importApplyDevelopPresetId' in patch ||
+        'importApplyMetadataPresetId' in patch ||
+        'importApplyKeywords' in patch
+      ) {
+        saveImportApply(
+          patch.importApplyDevelopPresetId !== undefined
+            ? patch.importApplyDevelopPresetId
+            : state.importApplyDevelopPresetId,
+          patch.importApplyMetadataPresetId !== undefined
+            ? patch.importApplyMetadataPresetId
+            : state.importApplyMetadataPresetId,
+          patch.importApplyKeywords !== undefined ? patch.importApplyKeywords : state.importApplyKeywords,
+        );
       }
       return patch;
     }),

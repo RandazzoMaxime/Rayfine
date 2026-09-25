@@ -237,6 +237,8 @@ pub struct ExportPreset {
     pub watermark_spacing: u32,
     pub watermark_opacity: u32,
     #[serde(default)]
+    pub watermark_mode: Option<String>,
+    #[serde(default)]
     pub export_masks: Option<bool>,
     #[serde(default)]
     pub preserve_folders: Option<bool>,
@@ -264,6 +266,7 @@ pub fn default_export_presets() -> Vec<ExportPreset> {
             watermark_scale: 10,
             watermark_spacing: 5,
             watermark_opacity: 75,
+            watermark_mode: Some("unique".to_string()),
             export_masks: Some(false),
             preserve_folders: Some(false),
             last_export_path: None,
@@ -286,6 +289,7 @@ pub fn default_export_presets() -> Vec<ExportPreset> {
             watermark_scale: 10,
             watermark_spacing: 5,
             watermark_opacity: 75,
+            watermark_mode: Some("unique".to_string()),
             export_masks: Some(false),
             preserve_folders: Some(false),
             last_export_path: None,
@@ -453,6 +457,9 @@ pub struct AppSettings {
     #[serde(default, skip_serializing)] // legacy
     #[allow(dead_code)]
     pub group_preferred_type: Option<String>,
+    /** User data folder (catalog, watermarks, settings copy). None = app data `albums/`. */
+    #[serde(default, alias = "catalogDir")]
+    pub data_dir: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -474,7 +481,7 @@ impl Default for AppSettings {
             filter_criteria: None,
             theme: Some("dark".to_string()),
             font_family: None,
-            decorations: Some(false),
+            decorations: Some(true),
             ai_connector_address: None,
             last_folder_state: None,
             ui_visibility: None,
@@ -543,6 +550,7 @@ impl Default for AppSettings {
             group_edited_files: Some(true),
             group_associated_files: Some(false),
             group_preferred_type: Some("raw".to_string()),
+            data_dir: None,
         }
     }
 }
@@ -631,7 +639,10 @@ pub fn load_settings(app_handle: AppHandle) -> Result<AppSettings, String> {
 pub fn save_settings(settings: AppSettings, app_handle: AppHandle) -> Result<(), String> {
     let path = get_settings_path(&app_handle)?;
     let json_string = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
-    fs::write(path, json_string).map_err(|e| e.to_string())?;
+    fs::write(&path, &json_string).map_err(|e| e.to_string())?;
+    if let Ok(data_dir) = crate::catalog::albums_dir(&app_handle) {
+        let _ = fs::write(data_dir.join("settings.json"), &json_string);
+    }
 
     let state = app_handle.state::<AppState>();
     let cache_size = settings.image_cache_size.unwrap_or(5) as usize;

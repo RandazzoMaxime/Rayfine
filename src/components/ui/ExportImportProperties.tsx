@@ -4,6 +4,7 @@ export const EXPORT_TIMEOUT = 4000;
 export const IMPORT_TIMEOUT = 5000;
 
 export enum FileFormats {
+  Original = 'original',
   Jpeg = 'jpeg',
   Png = 'png',
   Tiff = 'tiff',
@@ -14,6 +15,7 @@ export enum FileFormats {
 }
 
 export const FILE_FORMATS: Array<FileFormat> = [
+  { id: FileFormats.Original, name: 'Original', extensions: ['original'] },
   { id: FileFormats.Jpeg, name: 'JPEG', extensions: ['jpg', 'jpeg'] },
   { id: FileFormats.Png, name: 'PNG', extensions: ['png'] },
   { id: FileFormats.Tiff, name: 'TIFF', extensions: ['tiff'] },
@@ -64,6 +66,8 @@ export interface ExportSettings {
   resolutionDpi?: number;
   /** When set, iteratively lower quality so file stays under this many KB (JPEG/WebP/JXL). */
   limitFileSizeKb?: number | null;
+  /** 8 or 16. 16-bit is PNG/TIFF only. */
+  bitDepth?: 8 | 16;
 }
 
 export enum WatermarkAnchor {
@@ -86,6 +90,8 @@ export interface WatermarkSettings {
   opacity: number;
   text?: string | null;
   textColor?: string | null;
+  /** unique = one stamp; multiple = tiled grid */
+  mode?: 'unique' | 'multiple' | null;
 }
 
 export interface ExportState {
@@ -120,6 +126,16 @@ export enum Status {
 export interface ExportPreset {
   id: string;
   name: string;
+  /** User folder / group in the export dialog (e.g. EXPORT). */
+  folder?: string;
+  /** Destination folder for this preset. */
+  exportFolder?: string;
+  putInSubfolder?: boolean;
+  subfolderName?: string;
+  existingFiles?: 'overwrite' | 'skip' | 'ask';
+  renameEnabled?: boolean;
+  extensionCase?: 'upper' | 'lower';
+  metadataInclude?: 'all' | 'copyright' | 'copyrightContact' | 'allExceptCamera' | 'none';
   fileFormat: string;
   jpegQuality: number;
   enableResize: boolean;
@@ -144,5 +160,7 @@ export interface ExportPreset {
   watermarkScale: number;
   watermarkSpacing: number;
   watermarkOpacity: number;
+  watermarkMode?: 'unique' | 'multiple';
+  bitDepth?: 8 | 16;
   lastExportPath?: string;
 }

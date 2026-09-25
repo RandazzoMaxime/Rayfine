@@ -13,7 +13,10 @@ mod android_integration;
 mod app_settings;
 mod app_state;
 mod cache_utils;
+mod catalog;
+mod watermarks;
 mod culling;
+mod lrcat;
 mod demosaic;
 mod denoising;
 mod exif_processing;
@@ -1223,7 +1226,7 @@ async fn fetch_community_presets() -> Result<Vec<CommunityPreset>, String> {
 
     let response = client
         .get(url)
-        .header("User-Agent", "RapidRAW-App")
+        .header("User-Agent", "Rayfine-App")
         .send()
         .await
         .map_err(|e| format!("Failed to fetch manifest from GitHub: {}", e))?;
@@ -2370,11 +2373,6 @@ pub fn run() {
             file_management::start_metadata_workers(app_handle.clone());
             jxl_oxide::integration::register_image_decoding_hook();
 
-            let window_cfg = app.config().app.windows.first().unwrap().clone();
-            let decorations = settings.decorations.unwrap_or(window_cfg.decorations);
-            #[cfg(target_os = "android")]
-            let _ = decorations;
-
             let main_window_cfg = app
                 .config()
                 .app
@@ -2390,10 +2388,49 @@ pub fn run() {
 
             #[cfg(not(target_os = "android"))]
             {
-                window_builder = window_builder.decorations(decorations).visible(false);
+                window_builder = window_builder
+                    .decorations(true)
+                    .transparent(true)
+                    .visible(false);
             }
 
             let window = window_builder.build().expect("Failed to build window");
+
+            #[cfg(not(target_os = "android"))]
+            {
+                use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+                let export_item = MenuItemBuilder::with_id("file_export", "Exporter…")
+                    .accelerator("CmdOrCtrl+Shift+E")
+                    .build(app.handle());
+                let import_lr_item = MenuItemBuilder::with_id(
+                    "file_import_lrcat",
+                    "Importer un catalogue Lightroom…",
+                )
+                .build(app.handle());
+                if let (Ok(export_item), Ok(import_lr_item)) = (export_item, import_lr_item) {
+                    if let Ok(file_menu) = SubmenuBuilder::new(app.handle(), "Fichier")
+                        .item(&import_lr_item)
+                        .separator()
+                        .item(&export_item)
+                        .build()
+                    {
+                        if let Ok(menu) = MenuBuilder::new(app.handle()).item(&file_menu).build() {
+                            let _ = window.set_menu(menu);
+                        }
+                    }
+                }
+                app.on_menu_event(|app, event| {
+                    match event.id().as_ref() {
+                        "file_export" => {
+                            let _ = app.emit("menu-export", ());
+                        }
+                        "file_import_lrcat" => {
+                            let _ = app.emit("menu-import-lrcat", ());
+                        }
+                        _ => {}
+                    }
+                });
+            }
 
             #[cfg(target_os = "android")]
             android_integration::initialize_android(&window);
@@ -2677,6 +2714,12 @@ pub fn run() {
             file_management::get_albums,
             file_management::save_albums,
             file_management::add_to_album,
+            catalog::get_catalog_location,
+            catalog::set_catalog_location,
+            watermarks::list_watermarks,
+            watermarks::import_watermarks,
+            watermarks::remove_watermark,
+            lrcat::import_lightroom_catalog,
             file_management::get_album_images,
             tagging::start_background_indexing,
             tagging::clear_ai_tags,

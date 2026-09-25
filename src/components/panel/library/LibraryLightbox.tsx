@@ -1,70 +1,140 @@
-import { useEffect, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 import { useProcessStore } from '../../../store/useProcessStore';
-import { Invokes } from '../../ui/AppProperties';
+import { ImageFile } from '../../ui/AppProperties';
+import { generateLibraryPreview } from '../../../utils/libraryPreview';
 
-/** Double-click viewer: one photo, larger, nothing else (no Develop, no folder navigation). */
-export default function LibraryLightbox({ path, onClose }: { path: string; onClose: () => void }) {
+/**
+ * Library lightbox: one photo in the center pane (sidebars stay).
+ * Wheel zoom, drag pan, ←/→ via parent active path.
+ */
+export default function LibraryLightbox({
+  path,
+  imageList,
+  onNavigate,
+}: {
+  path: string;
+  imageList: ImageFile[];
+  onNavigate: (path: string) => void;
+}) {
   const thumbUrl = useProcessStore((s) => s.thumbnails[path]);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const dragging = useRef(false);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+
+  const index = imageList.findIndex((img) => img.path === path);
+  const prev = index > 0 ? imageList[index - 1] : null;
+  const next = index >= 0 && index < imageList.length - 1 ? imageList[index + 1] : null;
+
+  useEffect(() => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }, [path]);
 
   useEffect(() => {
     let active = true;
-    let url: string | null = null;
-    (async () => {
-      try {
-        const metadata: any = await invoke(Invokes.LoadMetadata, { path });
-        const adjustments = metadata?.adjustments && !metadata.adjustments.is_null ? metadata.adjustments : {};
-        const bytes = await invoke<Uint8Array>(Invokes.GeneratePreviewForPath, { path, jsAdjustments: adjustments });
-        if (!active) return;
-        url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' }));
-        setPreviewUrl(url);
-      } catch (err) {
-        console.error('Lightbox preview failed:', err);
-      }
-    })();
+    setPreviewUrl(null);
+    generateLibraryPreview(path).then((url) => {
+      if (active && url) setPreviewUrl(url);
+    });
     return () => {
       active = false;
-      if (url) URL.revokeObjectURL(url);
     };
   }, [path]);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' || e.key === ' ') {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        onClose();
-      }
+    const el = stageRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? -0.12 : 0.12;
+      setZoom((z) => {
+        const nextZ = Math.min(6, Math.max(1, Math.round((z + delta) * 100) / 100));
+        if (nextZ <= 1) setPan({ x: 0, y: 0 });
+        return nextZ;
+      });
     };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [onClose]);
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+
+  const onMouseDown = (e: React.MouseEvent) => {
+    if (zoom <= 1 || e.button !== 0) return;
+    e.preventDefault();
+    dragging.current = true;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const origin = { ...pan };
+    const onMove = (ev: MouseEvent) => {
+      setPan({ x: origin.x + (ev.clientX - startX), y: origin.y + (ev.clientY - startY) });
+    };
+    const onUp = () => {
+      dragging.current = false;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
 
   const src = previewUrl || thumbUrl;
   const name = path.split(/[\\/]/).pop()?.split('?')[0];
 
   return (
-    <div className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-8" onClick={onClose}>
-      <button
-        type="button"
-        onClick={onClose}
-        className="absolute top-4 right-4 p-2 rounded-full text-white/70 hover:text-white hover:bg-white/10"
-        aria-label="Close"
-      >
-        <X size={20} />
-      </button>
+    <div
+      ref={stageRef}
+      className="flex-1 min-h-0 relative flex items-center justify-center bg-[#121212] overflow-hidden"
+    >
       {src && (
         <img
           src={src}
           alt={name}
-          className="max-w-full max-h-full object-contain shadow-2xl"
-          onClick={(e) => e.stopPropagation()}
+          draggable={false}
+          className="select-none will-change-transform max-w-full max-h-full object-contain"
+          style={
+            zoom > 1
+              ? {
+                  transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                  transformOrigin: 'center center',
+                  maxWidth: 'none',
+                  maxHeight: 'none',
+                  cursor: 'grab',
+                }
+              : { cursor: 'default' }
+          }
+          onMouseDown={onMouseDown}
+          onDoubleClick={() => {
+            setZoom((z) => (z > 1 ? 1 : 2));
+            setPan({ x: 0, y: 0 });
+          }}
         />
       )}
-      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 text-xs text-white/60">{name}</div>
+      <button
+        type="button"
+        disabled={!prev}
+        onClick={() => prev && onNavigate(prev.path)}
+        className="absolute left-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/45 text-white/80 hover:bg-black/70 disabled:opacity-20 flex items-center justify-center"
+        aria-label="Previous"
+      >
+        <ChevronLeft size={18} />
+      </button>
+      <button
+        type="button"
+        disabled={!next}
+        onClick={() => next && onNavigate(next.path)}
+        className="absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/45 text-white/80 hover:bg-black/70 disabled:opacity-20 flex items-center justify-center"
+        aria-label="Next"
+      >
+        <ChevronRight size={18} />
+      </button>
+      {zoom > 1 && (
+        <div className="absolute bottom-2 right-3 text-[10px] tabular-nums text-white/50 pointer-events-none">
+          {Math.round(zoom * 100)}%
+        </div>
+      )}
     </div>
   );
 }

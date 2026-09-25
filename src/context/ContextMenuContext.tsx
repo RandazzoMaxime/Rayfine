@@ -1,6 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, FC } from 'react';
 import { createPortal } from 'react-dom';
-import { AnimatePresence, motion } from 'framer-motion';
 import { ChevronRight } from 'lucide-react';
 import { Option as AppOption, OPTION_SEPARATOR } from '../components/ui/AppProperties';
 import clsx from 'clsx';
@@ -115,11 +114,8 @@ function SubMenu({ cancelCloseSubmenu, closeSubmenu, hideContextMenu, options, p
         </svg>
       )}
 
-      <motion.div
-        animate={{ opacity: 1, scale: 1 }}
+      <div
         className="fixed z-101"
-        exit={{ opacity: 0, scale: 0.95 }}
-        initial={{ opacity: 0, scale: 0.95 }}
         onContextMenu={(e: any) => e.preventDefault()}
         onMouseEnter={cancelCloseSubmenu}
         onMouseLeave={() => {
@@ -129,7 +125,6 @@ function SubMenu({ cancelCloseSubmenu, closeSubmenu, hideContextMenu, options, p
         }}
         ref={menuRef}
         style={style}
-        transition={{ duration: 0.1, ease: 'easeOut' }}
       >
         <div
           className={clsx('backdrop-blur-md rounded-lg shadow-xl', !CustomComponent && 'bg-surface/95 p-2 w-56')}
@@ -143,7 +138,7 @@ function SubMenu({ cancelCloseSubmenu, closeSubmenu, hideContextMenu, options, p
             ))
           )}
         </div>
-      </motion.div>
+      </div>
     </>
   );
 
@@ -232,18 +227,16 @@ function MenuItem({ option, path, hideContextMenu }: MenuItemProps) {
         {option.submenu && <ChevronRight size={16} />}
       </button>
 
-      <AnimatePresence>
-        {isSubmenuOpen && (
-          <SubMenu
-            cancelCloseSubmenu={cancelCloseSubmenu}
-            closeSubmenu={closeSubmenu}
-            hideContextMenu={hideContextMenu}
-            options={option.submenu}
-            parentRef={itemRef}
-            parentPath={path}
-          />
-        )}
-      </AnimatePresence>
+      {isSubmenuOpen && (
+        <SubMenu
+          cancelCloseSubmenu={cancelCloseSubmenu}
+          closeSubmenu={closeSubmenu}
+          hideContextMenu={hideContextMenu}
+          options={option.submenu}
+          parentRef={itemRef}
+          parentPath={path}
+        />
+      )}
     </div>
   );
 }
@@ -252,28 +245,21 @@ function ContextMenu() {
   const { menuState, hideContextMenu, menuRef, menuId } = useContextMenu();
   const { isVisible, x, y, options } = menuState;
 
+  if (!isVisible) return null;
+
   return (
-    <AnimatePresence>
-      {isVisible && (
-        <motion.div
-          animate={{ opacity: 1, scale: 1 }}
-          className="fixed z-50"
-          exit={{ opacity: 0, scale: 0.95 }}
-          initial={{ opacity: 0, scale: 0.95 }}
-          key={menuId}
-          onContextMenu={(e: any) => e.preventDefault()}
-          ref={menuRef}
-          style={{ top: y, left: x }}
-          transition={{ duration: 0.1, ease: 'easeOut' }}
-        >
-          <div className="bg-surface/95 backdrop-blur-md rounded-lg shadow-xl p-2 w-64" role="menu">
-            {options.map((option: any, index: number) => (
-              <MenuItem hideContextMenu={hideContextMenu} key={index} option={option} path={[index]} />
-            ))}
-          </div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+    <div
+      className="fixed z-50"
+      onContextMenu={(e: any) => e.preventDefault()}
+      ref={menuRef}
+      style={{ top: y, left: x }}
+    >
+      <div className="bg-surface/95 backdrop-blur-md rounded-lg shadow-xl p-2 w-64" role="menu">
+        {options.map((option: any, index: number) => (
+          <MenuItem hideContextMenu={hideContextMenu} key={index} option={option} path={[index]} />
+        ))}
+      </div>
+    </div>
   );
 }
 

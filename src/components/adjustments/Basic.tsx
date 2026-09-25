@@ -1,8 +1,14 @@
 import clsx from 'clsx';
-import { Pipette } from 'lucide-react';
+import { LayoutGrid, Pipette } from 'lucide-react';
 import Slider from '../ui/Slider';
+import PanelSelect from '../ui/PanelSelect';
 import { Adjustments, BasicAdjustment, ColorAdjustment, DetailsAdjustment } from '../../utils/adjustments';
 import { useTranslation } from 'react-i18next';
+import { useEditorActions } from '../../hooks/useEditorActions';
+import { useUIStore } from '../../store/useUIStore';
+import { useEditorStore } from '../../store/useEditorStore';
+import { ALL_CAMERA_PROFILES } from '../../utils/cameraProfiles';
+import { asShotKelvinFrom, kelvinToRelativeTemp, relativeTempToKelvin } from '../../utils/whiteBalance';
 
 interface BasicAdjustmentsProps {
   adjustments: Adjustments;
@@ -27,52 +33,11 @@ const WB_PRESETS: Record<string, { temperature: number; tint: number } | null> =
   Custom: null,
 };
 
-const CAMERA_PROFILES = [
-  'Adobe Standard',
-  'Camera Standard',
-  'Camera Landscape',
-  'Camera Portrait',
-  'Camera Vivid',
-  'Camera Neutral',
-  'Camera Faithful',
-  'Embedded',
-];
-
-function RowSelect({
-  label,
-  value,
-  options,
-  onChange,
-  children,
-}: {
-  label: string;
-  value: string;
-  options: string[];
-  onChange: (value: string) => void;
-  children?: React.ReactNode;
-}) {
-  return (
-    <div className="flex items-center gap-2 mb-1.5">
-      <span className="w-16 shrink-0 text-xs text-text-secondary">{label}</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="flex-1 min-w-0 h-7 px-1.5 rounded bg-surface border border-border-color/40 text-xs text-text-primary outline-none focus:border-white/30"
-      >
-        {options.map((o) => (
-          <option key={o} value={o}>
-            {o}
-          </option>
-        ))}
-      </select>
-      {children}
-    </div>
-  );
-}
+const CAMERA_PROFILES = ALL_CAMERA_PROFILES.map((p) => p.name);
 
 function SubHeading({ children }: { children: React.ReactNode }) {
   return (
-    <div className="mt-2 mb-0.5 text-[10px] uppercase tracking-wider text-text-secondary font-semibold">{children}</div>
+    <div className="mt-1.5 mb-0.5 pt-1 border-t border-border-color/40 text-[10px] font-medium text-text-primary/80">{children}</div>
   );
 }
 
@@ -86,6 +51,9 @@ export default function BasicAdjustments({
   toggleWbPicker,
 }: BasicAdjustmentsProps) {
   const { t } = useTranslation();
+  const { handleAutoAdjustments } = useEditorActions();
+  const setUI = useUIStore((s) => s.setUI);
+  const histogramToneRegion = useEditorStore((s) => s.histogramToneRegion);
 
   const handleAdjustmentChange = (key: BasicAdjustment | ColorAdjustment | string, value: any) => {
     const numericValue = parseFloat(value);
@@ -106,6 +74,7 @@ export default function BasicAdjustments({
 
   const isWgpuEnabled = appSettings?.useWgpuRenderer !== false;
   const isBlackAndWhite = !!(adjustments as any).convertToGrayscale;
+  const asShotK = asShotKelvinFrom(adjustments as any);
   const setTreatment = (bw: boolean) =>
     setAdjustments((prev: Partial<Adjustments>) => ({
       ...prev,
@@ -116,82 +85,117 @@ export default function BasicAdjustments({
   const currentWb = String((adjustments as any).whiteBalance || 'As Shot');
   const wbValue = Object.keys(WB_PRESETS).find((k) => k.toLowerCase() === currentWb.toLowerCase()) || 'Custom';
   const currentProfile = String((adjustments as any).cameraProfile || 'Adobe Standard');
+  const isHdr = !!(adjustments as any).hdrEditMode;
 
   return (
     <div>
-      {/* Lightroom Classic Basic: Treatment · Profile · WB → Tone → Presence */}
+      {/* LR Classic Basic: Auto / B&W / HDR · Profile · WB → Tone → Presence */}
       {!isForMask && (
         <>
-          <div className="flex items-center gap-2 mb-2">
-            <span className="w-16 shrink-0 text-xs text-text-secondary">
-              {t('adjustments.basic.treatment' as any, { defaultValue: 'Treatment' })}
-            </span>
-            <div className="flex flex-1 rounded bg-surface border border-border-color/40 p-0.5">
-              {[
-                [false, t('adjustments.basic.treatmentColor' as any, { defaultValue: 'Color' })],
-                [true, t('adjustments.basic.blackAndWhite' as any)],
-              ].map(([bw, label]) => (
-                <button
-                  key={String(bw)}
-                  type="button"
-                  onClick={() => setTreatment(bw as boolean)}
-                  className={clsx(
-                    'flex-1 h-6 rounded text-[11px] transition-colors',
-                    isBlackAndWhite === bw
-                      ? 'bg-card-active text-text-primary'
-                      : 'text-text-secondary hover:text-text-primary',
-                  )}
-                >
-                  {label as string}
-                </button>
-              ))}
-            </div>
+          <div className="flex items-center justify-end gap-px mb-1">
+            <button
+              type="button"
+              onClick={() => handleAutoAdjustments()}
+              className={clsx(
+                'h-5 px-1.5 rounded text-[10px]',
+                (adjustments as any).autoTone
+                  ? 'bg-card-active text-text-primary'
+                  : 'text-text-secondary hover:text-text-primary hover:bg-surface',
+              )}
+            >
+              {t('adjustments.basic.auto' as any, { defaultValue: 'Auto' })}
+            </button>
+            <button
+              type="button"
+              onClick={() => setTreatment(!isBlackAndWhite)}
+              className={clsx(
+                'h-5 px-1.5 rounded text-[10px]',
+                isBlackAndWhite
+                  ? 'bg-card-active text-text-primary'
+                  : 'text-text-secondary hover:text-text-primary hover:bg-surface',
+              )}
+            >
+              {t('adjustments.basic.blackAndWhite' as any, { defaultValue: 'N&B' })}
+            </button>
+            <span className="w-px h-3 mx-0.5 bg-border-color/50" />
+            <button
+              type="button"
+              onClick={() =>
+                setAdjustments((prev: any) => ({ ...prev, hdrEditMode: prev.hdrEditMode ? 0 : 1 }))
+              }
+              className={clsx(
+                'h-5 px-1.5 rounded text-[10px]',
+                isHdr
+                  ? 'bg-card-active text-text-primary'
+                  : 'text-text-secondary hover:text-text-primary hover:bg-surface',
+              )}
+            >
+              HDR
+            </button>
           </div>
 
-          <RowSelect
-            label={t('adjustments.color.cameraProfile' as any, { defaultValue: 'Profile' })}
-            value={CAMERA_PROFILES.find((p) => p.toLowerCase() === currentProfile.toLowerCase()) || CAMERA_PROFILES[0]}
-            options={CAMERA_PROFILES}
-            onChange={(name) => setAdjustments((prev: Partial<Adjustments>) => ({ ...prev, cameraProfile: name }))}
-          />
+          <div className="grid grid-cols-[7rem_minmax(0,1fr)_2.35rem] items-center gap-x-1 mb-1">
+            <span className="text-[11px] font-medium text-text-primary text-right leading-none truncate">
+              {t('adjustments.color.cameraProfile' as any, { defaultValue: 'Profil' })}
+            </span>
+            <PanelSelect
+              value={CAMERA_PROFILES.find((p) => p.toLowerCase() === currentProfile.toLowerCase()) || CAMERA_PROFILES[0]}
+              options={CAMERA_PROFILES.map((o) => ({ label: o, value: o }))}
+              onChange={(v) => setAdjustments((prev: Partial<Adjustments>) => ({ ...prev, cameraProfile: v }))}
+            />
+            <button
+              type="button"
+              className="h-6 w-full flex items-center justify-center rounded text-text-primary/80 hover:text-text-primary hover:bg-card-active"
+              data-tooltip={t('adjustments.profile.explorer' as any, { defaultValue: 'Explorateur de profils' })}
+              onClick={() => setUI({ isProfileBrowserOpen: true })}
+            >
+              <LayoutGrid size={13} />
+            </button>
+          </div>
 
-          <RowSelect
-            label={t('adjustments.color.wbShort' as any, { defaultValue: 'WB' })}
-            value={wbValue}
-            options={Object.keys(WB_PRESETS)}
-            onChange={(name) =>
-              setAdjustments((prev: Partial<Adjustments>) => {
-                const off = WB_PRESETS[name];
-                return {
-                  ...prev,
-                  whiteBalance: name,
-                  temperature: off ? off.temperature : (prev.temperature ?? 0),
-                  tint: off ? off.tint : (prev.tint ?? 0),
-                };
-              })
-            }
-          >
-            {toggleWbPicker && (
-              <button
-                type="button"
-                onClick={toggleWbPicker}
-                disabled={isWgpuEnabled}
-                className={clsx(
-                  'h-7 w-7 shrink-0 flex items-center justify-center rounded transition-colors',
-                  isWgpuEnabled
-                    ? 'cursor-not-allowed text-text-secondary/40'
-                    : isWbPickerActive
-                      ? 'bg-accent text-button-text'
-                      : 'text-text-secondary hover:bg-surface hover:text-text-primary',
-                )}
-                data-tooltip={
-                  isWgpuEnabled ? t('adjustments.color.wbPickerWgpuDisabled') : t('adjustments.color.wbPickerTooltip')
-                }
-              >
-                <Pipette size={14} />
-              </button>
-            )}
-          </RowSelect>
+          <div className="grid grid-cols-[7rem_minmax(0,1fr)_2.35rem] items-center gap-x-1 mb-1">
+            <div className="flex items-center justify-end gap-0.5 min-w-0">
+              {toggleWbPicker && (
+                <button
+                  type="button"
+                  onClick={toggleWbPicker}
+                  disabled={isWgpuEnabled}
+                  className={clsx(
+                    'h-5 w-5 shrink-0 flex items-center justify-center rounded transition-colors',
+                    isWgpuEnabled
+                      ? 'cursor-not-allowed text-text-secondary/40'
+                      : isWbPickerActive
+                        ? 'bg-accent text-button-text'
+                        : 'text-text-primary/80 hover:bg-card-active hover:text-text-primary',
+                  )}
+                  data-tooltip={
+                    isWgpuEnabled ? t('adjustments.color.wbPickerWgpuDisabled') : t('adjustments.color.wbPickerTooltip')
+                  }
+                >
+                  <Pipette size={12} />
+                </button>
+              )}
+              <span className="text-[11px] font-medium text-text-primary text-right leading-none truncate">
+                {t('adjustments.color.wbShort' as any, { defaultValue: 'BB' })}
+              </span>
+            </div>
+            <PanelSelect
+              className="col-span-2"
+              value={wbValue}
+              options={Object.keys(WB_PRESETS).map((o) => ({ label: o, value: o }))}
+              onChange={(name) => {
+                setAdjustments((prev: Partial<Adjustments>) => {
+                  const off = WB_PRESETS[name];
+                  return {
+                    ...prev,
+                    whiteBalance: name,
+                    temperature: off ? off.temperature : (prev.temperature ?? 0),
+                    tint: off ? off.tint : (prev.tint ?? 0),
+                  };
+                });
+              }}
+            />
+          </div>
           <Slider
             label={t('adjustments.color.temperature')}
             max={100}
@@ -201,6 +205,12 @@ export default function BasicAdjustments({
             value={adjustments.temperature || 0}
             onDragStateChange={onDragStateChange}
             trackClassName="temperature-gradient-track"
+            formatValue={(n) => String(relativeTempToKelvin(n, asShotK))}
+            parseValue={(text) => {
+              const k = parseFloat(String(text).replace(',', '.').replace('+', ''));
+              if (isNaN(k)) return null;
+              return kelvinToRelativeTemp(k, asShotK);
+            }}
           />
           <Slider
             label={t('adjustments.color.tint')}
@@ -224,6 +234,7 @@ export default function BasicAdjustments({
         step={0.01}
         value={adjustments.brightness}
         onDragStateChange={onDragStateChange}
+        emphasized={histogramToneRegion === 'exposure'}
       />
       <Slider
         label={t('adjustments.basic.contrast')}
@@ -242,6 +253,7 @@ export default function BasicAdjustments({
         step={1}
         value={adjustments.highlights}
         onDragStateChange={onDragStateChange}
+        emphasized={histogramToneRegion === 'highlights'}
       />
       <Slider
         label={t('adjustments.basic.shadows')}
@@ -251,6 +263,7 @@ export default function BasicAdjustments({
         step={1}
         value={adjustments.shadows}
         onDragStateChange={onDragStateChange}
+        emphasized={histogramToneRegion === 'shadows'}
       />
       <Slider
         label={t('adjustments.basic.whites')}
@@ -260,6 +273,7 @@ export default function BasicAdjustments({
         step={1}
         value={adjustments.whites}
         onDragStateChange={onDragStateChange}
+        emphasized={histogramToneRegion === 'whites'}
       />
       <Slider
         label={t('adjustments.basic.blacks')}
@@ -269,6 +283,7 @@ export default function BasicAdjustments({
         step={1}
         value={adjustments.blacks}
         onDragStateChange={onDragStateChange}
+        emphasized={histogramToneRegion === 'blacks'}
       />
 
       {!isForMask && (

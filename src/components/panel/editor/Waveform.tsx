@@ -1,17 +1,38 @@
-import { useEffect, useRef } from 'react';
-import { AlertOctagon } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { WaveformData } from '../../ui/AppProperties';
 import { DisplayMode } from '../../../utils/adjustments';
+
+export type HistogramToneRegion = 'blacks' | 'shadows' | 'exposure' | 'highlights' | 'whites';
 
 interface WaveformProps {
   waveformData: WaveformData | null;
   histogram?: any;
   displayMode: string;
   setDisplayMode: (mode: string) => void;
-  showClipping?: boolean;
-  onToggleClipping?: () => void;
+  showShadowClipping?: boolean;
+  showHighlightClipping?: boolean;
+  onToggleShadowClipping?: () => void;
+  onToggleHighlightClipping?: () => void;
+  onHistogramDrag?: (region: HistogramToneRegion, deltaX: number, dragging: boolean) => void;
+  onHistogramRegionChange?: (region: HistogramToneRegion | null) => void;
   theme?: string;
+}
+
+const TONE_REGIONS: { id: HistogramToneRegion; start: number; end: number }[] = [
+  { id: 'blacks', start: 0, end: 0.12 },
+  { id: 'shadows', start: 0.12, end: 0.32 },
+  { id: 'exposure', start: 0.32, end: 0.68 },
+  { id: 'highlights', start: 0.68, end: 0.88 },
+  { id: 'whites', start: 0.88, end: 1 },
+];
+
+function regionAt(xNorm: number): HistogramToneRegion {
+  const x = Math.min(1, Math.max(0, xNorm));
+  for (const r of TONE_REGIONS) {
+    if (x < r.end || r.id === 'whites') return r.id;
+  }
+  return 'whites';
 }
 
 const modeButtons = [
@@ -52,7 +73,13 @@ const modeButtons = [
   },
 ];
 
-const HistogramView = ({ histogram }: { histogram: any }) => {
+const HistogramView = ({
+  histogram,
+  activeRegion,
+}: {
+  histogram: any;
+  activeRegion: HistogramToneRegion | null;
+}) => {
   if (!histogram || !histogram.red || !histogram.green || !histogram.blue) return null;
 
   const redMax = Math.max(...(histogram.red || [0]));
@@ -75,12 +102,23 @@ const HistogramView = ({ histogram }: { histogram: any }) => {
     { key: 'blue', color: '#4D96FF', data: histogram.blue },
   ];
 
+  const zone = TONE_REGIONS.find((r) => r.id === activeRegion);
+
   return (
     <svg
       viewBox="0 0 255 255"
       className="w-full h-full overflow-visible pointer-events-none"
       preserveAspectRatio="none"
     >
+      {zone && (
+        <rect
+          x={zone.start * 255}
+          y={0}
+          width={(zone.end - zone.start) * 255}
+          height={255}
+          fill="rgba(255,255,255,0.08)"
+        />
+      )}
       {channels.map((ch) => {
         if (!ch.data || ch.data.length === 0) return null;
         return (
@@ -99,6 +137,55 @@ const HistogramView = ({ histogram }: { histogram: any }) => {
         );
       })}
     </svg>
+  );
+};
+
+function histogramHasClip(histogram: any, side: 'shadow' | 'highlight'): boolean {
+  if (!histogram) return false;
+  const channels = [histogram.red, histogram.green, histogram.blue, histogram.luma].filter(
+    (d: any) => Array.isArray(d) && d.length > 0,
+  );
+  if (!channels.length) return false;
+  for (const data of channels) {
+    if (side === 'shadow') {
+      if ((data[0] || 0) + (data[1] || 0) > 0) return true;
+    } else {
+      const n = data.length;
+      if ((data[n - 1] || 0) + (data[n - 2] || 0) > 0) return true;
+    }
+  }
+  return false;
+}
+
+const ClipTriangle = ({
+  side,
+  active,
+  hasClip,
+  onClick,
+  tooltip,
+}: {
+  side: 'left' | 'right';
+  active: boolean;
+  hasClip: boolean;
+  onClick: () => void;
+  tooltip: string;
+}) => {
+  const fill = active ? (side === 'left' ? '#60a5fa' : '#f87171') : hasClip ? '#e5e7eb' : 'transparent';
+  const stroke = active ? (side === 'left' ? '#93c5fd' : '#fca5a5') : hasClip ? '#e5e7eb' : 'rgba(255,255,255,0.45)';
+  return (
+    <button
+      type="button"
+      className={`absolute top-0 z-20 w-4 h-4 flex items-center justify-center ${side === 'left' ? 'left-0' : 'right-0'}`}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      data-tooltip={tooltip}
+    >
+      <svg width="10" height="8" viewBox="0 0 10 8" className="block">
+        <path d="M5 0 L10 8 L0 8 Z" fill={fill} stroke={stroke} strokeWidth="1" />
+      </svg>
+    </button>
   );
 };
 
@@ -195,8 +282,12 @@ export default function Waveform({
   histogram,
   displayMode,
   setDisplayMode,
-  showClipping,
-  onToggleClipping,
+  showShadowClipping,
+  showHighlightClipping,
+  onToggleShadowClipping,
+  onToggleHighlightClipping,
+  onHistogramDrag,
+  onHistogramRegionChange,
   theme,
 }: WaveformProps) {
   const { t } = useTranslation();
@@ -205,6 +296,9 @@ export default function Waveform({
   const isVectorscope = displayMode === DisplayMode.Vectorscope;
   const width = waveformData?.width || 256;
   const height = waveformData?.height || 256;
+  const plotRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{ region: HistogramToneRegion; lastX: number } | null>(null);
+  const [hoverRegion, setHoverRegion] = useState<HistogramToneRegion | null>(null);
 
   const activeData = waveformData
     ? {
@@ -216,9 +310,61 @@ export default function Waveform({
       }[displayMode as DisplayMode]
     : '';
 
+  const shadowClip = histogramHasClip(histogram, 'shadow');
+  const highlightClip = histogramHasClip(histogram, 'highlight');
+  const hoverZone = hoverRegion ? TONE_REGIONS.find((r) => r.id === hoverRegion) : undefined;
+  const hoverLabelLeft = hoverZone
+    ? Math.min(88, Math.max(12, ((hoverZone.start + hoverZone.end) / 2) * 100))
+    : 50;
+
+  const xNormFromEvent = (e: React.PointerEvent) => {
+    const el = plotRef.current;
+    if (!el) return 0;
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0) return 0;
+    return (e.clientX - rect.left) / rect.width;
+  };
+
+  const handlePointerDown = (e: React.PointerEvent) => {
+    if (!isHistogram || !onHistogramDrag) return;
+    e.preventDefault();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    const region = regionAt(xNormFromEvent(e));
+    dragRef.current = { region, lastX: e.clientX };
+    setHoverRegion(region);
+    onHistogramRegionChange?.(region);
+    onHistogramDrag(region, 0, true);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent) => {
+    if (!isHistogram) return;
+    if (dragRef.current && onHistogramDrag) {
+      const dx = e.clientX - dragRef.current.lastX;
+      dragRef.current.lastX = e.clientX;
+      onHistogramDrag(dragRef.current.region, dx, true);
+      return;
+    }
+    const region = regionAt(xNormFromEvent(e));
+    if (region !== hoverRegion) {
+      setHoverRegion(region);
+      onHistogramRegionChange?.(region);
+    }
+  };
+
+  const endDrag = (e: React.PointerEvent) => {
+    if (dragRef.current && onHistogramDrag) {
+      onHistogramDrag(dragRef.current.region, 0, false);
+    }
+    dragRef.current = null;
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+  };
+
   return (
     <div className="w-full h-full flex flex-col gap-1">
-      {/* Scope selector — always visible, no animation */}
       <div className="shrink-0 flex items-center gap-0.5">
         {modeButtons.map(({ mode, label, tooltip }) => (
           <button
@@ -233,30 +379,58 @@ export default function Waveform({
             {label}
           </button>
         ))}
-        {onToggleClipping && (
-          <button
-            type="button"
-            onClick={onToggleClipping}
-            data-tooltip={
-              showClipping ? t('ui.waveform.tooltips.hideClipping') : t('ui.waveform.tooltips.showClipping')
-            }
-            className={`w-6 h-5 flex items-center justify-center rounded ${
-              showClipping ? 'bg-accent text-button-text' : 'text-text-secondary hover:text-text-primary'
-            }`}
-          >
-            <AlertOctagon size={12} />
-          </button>
-        )}
       </div>
       <div
         className="relative flex-1 min-h-0 bg-black rounded overflow-hidden border border-border-color/40"
         style={{ filter: isLightTheme ? 'invert(1) hue-rotate(180deg)' : undefined }}
       >
-        {/* Plot area inset so the top (100 %) line and peaks are never clipped. */}
+        {isHistogram && (
+          <>
+            <ClipTriangle
+              side="left"
+              active={!!showShadowClipping}
+              hasClip={shadowClip}
+              onClick={() => onToggleShadowClipping?.()}
+              tooltip={t('ui.waveform.tooltips.shadowClipping' as any, {
+                defaultValue: 'Shadow clipping',
+              })}
+            />
+            <ClipTriangle
+              side="right"
+              active={!!showHighlightClipping}
+              hasClip={highlightClip}
+              onClick={() => onToggleHighlightClipping?.()}
+              tooltip={t('ui.waveform.tooltips.highlightClipping' as any, {
+                defaultValue: 'Highlight clipping',
+              })}
+            />
+          </>
+        )}
         <div className="absolute inset-x-1.5 top-3 bottom-1.5">
           {isHistogram ? (
-            <div className="absolute inset-0">
-              <HistogramView histogram={histogram} />
+            <div
+              ref={plotRef}
+              className="absolute inset-0 cursor-ew-resize"
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={endDrag}
+              onPointerCancel={endDrag}
+              onPointerLeave={() => {
+                if (!dragRef.current) {
+                  setHoverRegion(null);
+                  onHistogramRegionChange?.(null);
+                }
+              }}
+            >
+              <HistogramView histogram={histogram} activeRegion={hoverRegion} />
+              {hoverRegion && (
+                <div
+                  className="absolute bottom-1 z-10 pointer-events-none -translate-x-1/2 px-1.5 py-0.5 rounded bg-black/75 text-[10px] leading-none text-white whitespace-nowrap"
+                  style={{ left: `${hoverLabelLeft}%` }}
+                >
+                  {t(`adjustments.basic.${hoverRegion}` as any)}
+                </div>
+              )}
             </div>
           ) : activeData ? (
             <div className="absolute inset-0">

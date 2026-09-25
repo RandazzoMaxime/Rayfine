@@ -6,7 +6,6 @@ import { ClerkProvider } from '@clerk/react';
 import { ToastContainer, toast, Slide } from 'react-toastify';
 import clsx from 'clsx';
 
-import TitleBar from './window/TitleBar';
 import ModuleBar from './components/panel/ModuleBar';
 import FolderTree from './components/panel/FolderTree';
 import SettingsPanel from './components/panel/SettingsPanel';
@@ -15,6 +14,9 @@ import LibraryRightPanel from './components/panel/library/LibraryRightPanel';
 import Resizer from './components/ui/Resizer';
 import GlobalTooltip from './components/ui/GlobalTooltip';
 import AppModals from './components/modals/AppModals';
+import ExportModal from './components/modals/ExportModal';
+import ImageInfoModal from './components/modals/ImageInfoModal';
+import ExportProgressBar from './components/ui/ExportProgressBar';
 
 import EditorView from './components/views/EditorView';
 import LibraryView from './components/views/LibraryView';
@@ -44,6 +46,8 @@ import { useAppNavigation } from './hooks/useAppNavigation';
 import { useExternalEditSession } from './hooks/useExternalEditSession';
 import ExternalEditBar from './components/ui/ExternalEditBar';
 import { Status } from './components/ui/ExportImportProperties';
+import i18n from './i18n';
+import { pickDevelopPath } from './utils/catalogMembership';
 
 import { useEditorActions } from './hooks/useEditorActions';
 import { useLibraryActions } from './hooks/useLibraryActions';
@@ -389,6 +393,7 @@ function App() {
     executeDelete,
     handleTogglePinFolder,
     handleSelectSubfolder,
+    handleSelectAlbum,
   });
 
   useTauriListeners({
@@ -534,7 +539,7 @@ function App() {
         setUI({ rightPanelWidth: Math.round(Math.max(280, Math.min(startSize - (moveEvent.clientX - startX), 600))) });
       } else if (stateKey === 'bottom') {
         setUI({
-          bottomPanelHeight: Math.round(Math.max(100, Math.min(startSize - (moveEvent.clientY - startY), 400))),
+          bottomPanelHeight: Math.round(Math.max(64, Math.min(startSize - (moveEvent.clientY - startY), 280))),
         });
       } else if (stateKey === 'compact') {
         setUI({
@@ -575,9 +580,38 @@ function App() {
       setUI({ isWindowFullScreen: await appWindow.isFullscreen() });
     };
     checkFullscreen();
+    appWindow.setDecorations(true).catch(() => {});
     const unlistenPromise = appWindow.onResized(checkFullscreen);
+    const unlistenMenu = listen('menu-export', () => {
+      setUI({ isExportModalOpen: true });
+    });
+    const unlistenImportLr = listen('menu-import-lrcat', async () => {
+      try {
+        const { open } = await import('@tauri-apps/plugin-dialog');
+        const selected = await open({
+          multiple: false,
+          filters: [{ name: 'Lightroom Catalog', extensions: ['lrcat'] }],
+        });
+        if (!selected || Array.isArray(selected)) return;
+        const result = await invoke<{ collections: number; photos: number; missing: number }>(
+          Invokes.ImportLightroomCatalog,
+          { path: selected },
+        );
+        const albums = await invoke(Invokes.GetAlbums);
+        useLibraryStore.getState().setLibrary({ albumTree: albums as any });
+        toast.success(
+          `Catalogue Lightroom importé : ${result.photos} photo(s), ${result.collections} collection(s)` +
+            (result.missing ? ` (${result.missing} fichier(s) introuvable(s))` : ''),
+        );
+      } catch (err) {
+        console.error(err);
+        toast.error(`Import Lightroom impossible : ${err}`);
+      }
+    });
     return () => {
       unlistenPromise.then((unlisten: any) => unlisten());
+      unlistenMenu.then((unlisten: any) => unlisten());
+      unlistenImportLr.then((unlisten: any) => unlisten());
     };
   }, [setUI]);
 
@@ -623,7 +657,7 @@ function App() {
 
   const hasRoots = rootPaths && rootPaths.length > 0;
   // No welcome screen: Library (with its panels and Import bar) is always the landing view.
-  const hasMainContent = hasRoots || !!selectedImage || activeView === 'library';
+  const hasMainContent = hasRoots || !!selectedImage || activeView === 'library' || activeView === 'develop';
 
   // Land straight in the last session on launch (replaces the "Continue session" splash).
   const autoContinuedRef = useRef(false);
@@ -667,7 +701,7 @@ function App() {
   };
 
   const shouldHideFolderTree =
-    isAndroid || !!selectedImage || STUB_MODULES.includes(activeView as any); // Develop + stub modules have own left rail
+    isAndroid || !!selectedImage || activeView === 'develop' || STUB_MODULES.includes(activeView as any);
   const isWgpuActive = appSettings?.useWgpuRenderer !== false && selectedImage?.isReady && hasRenderedFirstFrame;
   const useMacWindowShell = osPlatform === 'macos' && !appSettings?.decorations && !isWindowFullScreen && !isFullScreen;
 
@@ -694,32 +728,30 @@ function App() {
                 : 'bg-bg-primary',
         )}
       >
-        <div
-          className={clsx(
-            'shrink-0 overflow-hidden z-50',
-            !isInstantTransition && 'transition-all duration-300 ease-in-out',
-            isFullScreen ? 'max-h-0 opacity-0 pointer-events-none' : 'max-h-[60px] opacity-100',
-          )}
-        >
-          {appSettings?.decorations || (!isWindowFullScreen && <TitleBar />)}
-        </div>
+        <ExportProgressBar />
         {!isFullScreen && hasMainContent && (
           <ModuleBar
             isInstantTransition={isInstantTransition}
             onBackToLibrary={handleBackToLibrary}
             onOpenDevelop={(path) => {
-              // handleImageSelect already forces Adjustments open
-              if (path) {
-                handleImageSelect(path);
-                return;
-              }
-              const { libraryActivePath, multiSelectedPaths } = useLibraryStore.getState();
-              const target = libraryActivePath || multiSelectedPaths[0];
-              if (target) {
-                handleImageSelect(target);
-              } else {
-                toast.info('Select a photo in the Library to open Develop');
-              }
+              const { libraryActivePath, multiSelectedPaths, imageList, albumTree } = useLibraryStore.getState();
+              const target = pickDevelopPath(albumTree, [
+                path,
+                libraryActivePath,
+                ...(multiSelectedPaths || []),
+                ...imageList.map((img) => img.path),
+              ]);
+              setUI({
+                activeView: 'develop',
+                activeRightPanel: useUIStore.getState().activeRightPanel || Panel.Adjustments,
+                renderedRightPanel: useUIStore.getState().renderedRightPanel || Panel.Adjustments,
+                uiVisibility: {
+                  ...useUIStore.getState().uiVisibility,
+                  developLeft: true,
+                  filmstrip: true,
+                },
+              });
+              if (target) handleImageSelect(target);
             }}
           />
         )}
@@ -779,7 +811,7 @@ function App() {
                   />
                   )}
                 </div>
-              ) : selectedImage ? (
+              ) : selectedImage || activeView === 'develop' ? (
                 <EditorView
                   transformWrapperRef={transformWrapperRef}
                   isResizing={isResizing}
@@ -852,8 +884,9 @@ function App() {
                 </div>
               )}
             </div>
-            {/* Library right rail (LR public structure): always on in Library; Export overlays same slot */}
-            {!selectedImage &&
+            {/* Library right rail: Library module only (never Develop / empty Develop). */}
+            {activeView === 'library' &&
+              !selectedImage &&
               !STUB_MODULES.includes(activeView as any) &&
               !isFullScreen &&
               hasMainContent &&
@@ -867,6 +900,7 @@ function App() {
               )}
               style={{
                 width:
+                  activeView === 'library' &&
                   !selectedImage &&
                   !STUB_MODULES.includes(activeView as any) &&
                   !isFullScreen &&
@@ -890,6 +924,7 @@ function App() {
                     onClose={() => setUI({ isLibraryExportPanelVisible: false })}
                   />
                 ) : (
+                  activeView === 'library' &&
                   !selectedImage &&
                   !STUB_MODULES.includes(activeView as any) &&
                   hasMainContent &&
@@ -899,6 +934,8 @@ function App() {
             </div>
           </div>
         </div>
+        <ExportModal />
+        <ImageInfoModal />
         <AppModals
           handleImageSelect={handleImageSelect}
           handleSavePanorama={handleSavePanorama}
