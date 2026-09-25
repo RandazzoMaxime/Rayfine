@@ -214,14 +214,16 @@ pub fn downscale_f32_image(image: &DynamicImage, nwidth: u32, nheight: u32) -> D
         return image.clone();
     }
 
+    // Read RGB32F or RGBA32F in place (no full-resolution conversion copy); other formats convert.
     let tmp_img;
-    let img_ref = if let Some(rgb) = image.as_rgb32f() {
-        rgb
+    let (src, ch): (&[f32], usize) = if let Some(rgb) = image.as_rgb32f() {
+        (rgb.as_raw(), 3)
+    } else if let Some(rgba) = image.as_rgba32f() {
+        (rgba.as_raw(), 4)
     } else {
         tmp_img = image.to_rgb32f();
-        &tmp_img
+        (tmp_img.as_raw(), 3)
     };
-    let src: &[f32] = img_ref.as_raw();
 
     let x_ratio = width as f32 / new_w as f32;
     let y_ratio = height as f32 / new_h as f32;
@@ -323,13 +325,13 @@ pub fn downscale_f32_image(image: &DynamicImage, nwidth: u32, nheight: u32) -> D
 
                 for (dy, &w_y) in y_wts.iter().enumerate() {
                     let y_in = y_in_start + dy;
-                    let row_offset = y_in * width_usize * 3;
+                    let row_offset = y_in * width_usize * ch;
 
-                    let src_start = row_offset + x_in_start * 3;
-                    let src_end = row_offset + x_in_end * 3;
+                    let src_start = row_offset + x_in_start * ch;
+                    let src_end = row_offset + x_in_end * ch;
                     let src_slice = &src[src_start..src_end];
 
-                    for (&w_x, chunk) in x_wts.iter().zip(src_slice.chunks_exact(3)) {
+                    for (&w_x, chunk) in x_wts.iter().zip(src_slice.chunks_exact(ch)) {
                         let w = w_x * w_y;
 
                         let r = chunk[0].max(0.0);

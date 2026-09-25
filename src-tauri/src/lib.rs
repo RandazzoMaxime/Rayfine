@@ -212,7 +212,12 @@ fn compute_full_transformed_res(
     };
 
     let (transformed_img, offset) = apply_all_transformations(patched_original_image, adjustments);
-    Ok((Arc::new(transformed_img.into_owned()), offset))
+    // No geometry edits and no patches: share the loaded image instead of copying it (~500 MB).
+    let arc = match transformed_img {
+        Cow::Borrowed(_) if !has_patches => Arc::clone(&loaded_image.image),
+        other => Arc::new(other.into_owned()),
+    };
+    Ok((arc, offset))
 }
 
 #[tauri::command]

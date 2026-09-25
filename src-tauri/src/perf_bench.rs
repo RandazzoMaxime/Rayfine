@@ -2440,3 +2440,231 @@ fn perf_gpu_demosaic() {
         );
     }
 }
+
+#[test]
+#[ignore]
+fn perf_gpu_demosaic_tiled() {
+    let dir = std::env::var("RUSTROOM_BENCH_DIR").unwrap_or_else(|_| {
+        "/Volumes/Extreme SSD/PHOTOGRAPHIE_VIDEOS/2026_08_12_ECLIPSE_SOLAIRE/RAW".to_string()
+    });
+    let Ok(rd) = fs::read_dir(&dir) else { return };
+    let mut arws: Vec<PathBuf> = rd
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().map(|e| e.eq_ignore_ascii_case("arw")).unwrap_or(false))
+        .collect();
+    arws.sort();
+    let files = pick_spread(&arws, env_usize("RUSTROOM_BENCH_ARWS", 2));
+    let reps = env_usize("RUSTROOM_BENCH_REPS", 5);
+    let Some((ctx, gpu_name)) = make_headless_gpu_context() else { return };
+    let device = &ctx.device;
+    let queue = &ctx.queue;
+
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("demosaic"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("shaders/demosaic_tiled.wgsl").into()),
+    });
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("demosaic"),
+        layout: None,
+        module: &module,
+        entry_point: Some("main"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    println!("\n=== GPU-resident tiled MHC (u16 upload, in-shader scaling, no readback timed) on {} ({} reps) ===", gpu_name, reps);
+
+    for p in &files {
+        let bytes = fs::read(p).unwrap();
+        let (raw0, rescale) = decode_like_production(&bytes);
+
+        // CPU reference (scaling + MHC + calibration + crop), same entry as production.
+        let (cpu_samples, cpu_out) = bench(reps, || {
+            let mut r = raw0.clone();
+            crate::demosaic::develop_bayer(&mut r).unwrap()
+        });
+        let rawler::imgop::develop::Intermediate::ThreeColor(cpu_px) = cpu_out else { panic!() };
+
+        // Inputs for the GPU path: raw u16 CFA, scaling done in-shader.
+        let black = raw0.blacklevel.as_bayer_array();
+        let inv_range = [0usize, 1, 2, 3].map(|i| rescale / (u32::MAX as f32 - black[i]));
+        let u16data: Vec<u16> = match &raw0.data {
+            rawler::rawimage::RawImageData::Integer(v) => v.clone(),
+            _ => panic!("expected integer CFA data"),
+        };
+        let mut raw = raw0.clone();
+        let t = Instant::now();
+        raw.apply_scaling().unwrap();
+        let d_scale = ms(t.elapsed());
+        let data = raw.data.as_f32().into_owned();
+        let (width, height) = (raw.width as u32, raw.height as u32);
+        let roi = raw.active_area.unwrap_or(rawler::imgop::Rect {
+            p: rawler::imgop::Point { x: 0, y: 0 },
+            d: rawler::imgop::Dim2 { w: raw.width, h: raw.height },
+        });
+        let mut out_rect = rawler::imgop::Rect { p: rawler::imgop::Point { x: 0, y: 0 }, d: roi.d };
+        if let Some(mut crop) = raw.crop_area {
+            if let Some(active) = raw.active_area {
+                crop = crop.intersection(&active).adapt(&active);
+            }
+            if !crop.is_empty() && crop.d != roi.d {
+                out_rect = crop;
+            }
+        }
+        let cfa = match &raw.photometric {
+            RawPhotometricInterpretation::Cfa(c) => c.cfa.shift(roi.p.x, roi.p.y),
+            _ => panic!("not CFA"),
+        };
+        let m = crate::demosaic::camera_to_srgb(&raw).unwrap();
+        let wb = if raw.wb_coeffs[0].is_nan() { [1.0; 4] } else { raw.wb_coeffs };
+        // rescale folded into WB so f16 output lands in 0..1 (production applies it after).
+        let params: Vec<f32> = {
+            let u = |v: usize| f32::from_bits(v as u32);
+            vec![
+                u(roi.p.x), u(roi.p.y), u(roi.d.w), u(roi.d.h),
+                u(out_rect.p.x), u(out_rect.p.y), u(out_rect.d.w), u(out_rect.d.h),
+                u(cfa.color_at(0, 0)), u(cfa.color_at(0, 1)), u(cfa.color_at(1, 0)), u(cfa.color_at(1, 1)),
+                wb[0], wb[1], wb[2], 0.0,
+                m[0][0], m[0][1], m[0][2], 0.0,
+                m[1][0], m[1][1], m[1][2], 0.0,
+                m[2][0], m[2][1], m[2][2], 0.0,
+                black[0], black[1], black[2], black[3],
+                inv_range[0], inv_range[1], inv_range[2], inv_range[3],
+            ]
+        };
+        let ubuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let (ow, oh) = (out_rect.d.w as u32, out_rect.d.h as u32);
+        let dst = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d { width: ow, height: oh, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let dst_view = dst.create_view(&Default::default());
+
+        let mut s_up = Vec::new();
+        let mut s_run = Vec::new();
+        let mut s_back = Vec::new();
+        let mut gpu_rgb: Vec<f32> = Vec::new();
+        for it in 0..=reps {
+            let t = Instant::now();
+            let src = device.create_texture_with_data(
+                queue,
+                &wgpu::TextureDescriptor {
+                    label: None,
+                    size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::R16Uint,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                },
+                TextureDataOrder::MipMajor,
+                bytemuck::cast_slice(&u16data),
+            );
+            gpu_wait(&ctx);
+            let d_up = ms(t.elapsed());
+            let src_view = src.create_view(&Default::default());
+            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &pipeline.get_bind_group_layout(0),
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&src_view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&dst_view) },
+                    wgpu::BindGroupEntry { binding: 2, resource: ubuf.as_entire_binding() },
+                ],
+            });
+            let t = Instant::now();
+            let mut enc = device.create_command_encoder(&Default::default());
+            {
+                let mut pass = enc.begin_compute_pass(&Default::default());
+                pass.set_pipeline(&pipeline);
+                pass.set_bind_group(0, &bg, &[]);
+                pass.dispatch_workgroups(ow.div_ceil(16), oh.div_ceil(16), 1);
+            }
+            queue.submit(Some(enc.finish()));
+            gpu_wait(&ctx);
+            let d_run = ms(t.elapsed());
+
+            // Readback in row bands (keeps each staging buffer well under buffer limits).
+            let t = Instant::now();
+            let bpr = ow * 8;
+            let padded_bpr = bpr.div_ceil(256) * 256;
+            let band = 512u32;
+            let mut out = vec![0f32; (ow * oh * 3) as usize];
+            let mut y0 = 0;
+            while y0 < oh {
+                let rows = band.min(oh - y0);
+                let buf = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: None,
+                    size: (padded_bpr * rows) as u64,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                });
+                let mut enc = device.create_command_encoder(&Default::default());
+                enc.copy_texture_to_buffer(
+                    wgpu::TexelCopyTextureInfo { texture: &dst, mip_level: 0, origin: wgpu::Origin3d { x: 0, y: y0, z: 0 }, aspect: wgpu::TextureAspect::All },
+                    wgpu::TexelCopyBufferInfo { buffer: &buf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded_bpr), rows_per_image: Some(rows) } },
+                    wgpu::Extent3d { width: ow, height: rows, depth_or_array_layers: 1 },
+                );
+                queue.submit(Some(enc.finish()));
+                let slice = buf.slice(..);
+                slice.map_async(wgpu::MapMode::Read, |_| {});
+                gpu_wait(&ctx);
+                {
+                    let mapped = slice.get_mapped_range().expect("map range");
+                    let halves: &[f16] = bytemuck::cast_slice(&mapped);
+                    out.par_chunks_mut((ow * 3) as usize)
+                        .skip(y0 as usize)
+                        .take(rows as usize)
+                        .enumerate()
+                        .for_each(|(r, dst_row)| {
+                            let src_row = &halves[(r as u32 * padded_bpr / 2) as usize..];
+                            for x in 0..ow as usize {
+                                dst_row[x * 3] = src_row[x * 4].to_f32();
+                                dst_row[x * 3 + 1] = src_row[x * 4 + 1].to_f32();
+                                dst_row[x * 3 + 2] = src_row[x * 4 + 2].to_f32();
+                            }
+                        });
+                }
+                buf.unmap();
+                y0 += rows;
+            }
+            let d_back = ms(t.elapsed());
+            if it > 0 {
+                s_up.push(d_up);
+                s_run.push(d_run);
+                s_back.push(d_back);
+            }
+            gpu_rgb = out;
+        }
+
+        // Agreement vs CPU (CPU values x rescale; skip the CPU's gamut clip by comparing in-gamut only).
+        let (mut se, mut n, mut maxd) = (0f64, 0f64, 0f32);
+        for (i, cp) in cpu_px.data.iter().enumerate().step_by(7) {
+            for c in 0..3 {
+                let a = (cp[c] * rescale).clamp(0.0, 1.0);
+                let b = gpu_rgb[i * 3 + c].clamp(0.0, 1.0);
+                let d = srgb8_from_linear(a) - srgb8_from_linear(b);
+                maxd = maxd.max(d.abs());
+                se += (d as f64) * (d as f64);
+                n += 1.0;
+            }
+        }
+        println!(
+            "{:<16} {}x{}  CPU MHC {:>6.1}  |  GPU-resident: upload u16 {:>5.1} + kernel {:>5.1} = {:>5.1} (readback only for check: {:>6.1})  |  PSNR vs CPU {:.1} dB (max diff {:.3})",
+            p.file_name().unwrap().to_string_lossy(), ow, oh,
+            stats(&cpu_samples).0, stats(&s_up).0, stats(&s_run).0,
+            stats(&s_up).0 + stats(&s_run).0, stats(&s_back).0,
+            10.0 * (n / se.max(1e-12)).log10(), maxd
+        );
+    }
+}
