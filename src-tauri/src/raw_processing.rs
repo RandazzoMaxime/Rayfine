@@ -1,7 +1,7 @@
 use rayon::prelude::*;
 use crate::image_processing::apply_orientation;
 use anyhow::{Result, anyhow};
-use image::{DynamicImage, ImageBuffer, Rgba};
+use image::{DynamicImage, ImageBuffer, Rgb};
 use rawler::{
     decoders::{Orientation, RawDecodeParams},
     imgop::develop::{DemosaicAlgorithm, Intermediate, ProcessingStep, RawDevelop},
@@ -188,23 +188,25 @@ fn develop_internal(
     check_cancel()?;
 
     let dynamic_image = match developed_intermediate {
+        // RGB (no alpha): 25% less memory for every cached full-resolution image, and the
+        // RAW enhance pass and downscaler read RGB32F without a conversion copy.
         Intermediate::ThreeColor(pixels) => {
-            let mut raw = vec![0f32; pixels.data.len() * 4];
-            raw.par_chunks_mut(4)
+            let mut raw = vec![0f32; pixels.data.len() * 3];
+            raw.par_chunks_mut(3)
                 .zip(pixels.data.par_iter())
-                .for_each(|(dst, p)| dst.copy_from_slice(&[p[0], p[1], p[2], 1.0]));
-            let buffer = ImageBuffer::<Rgba<f32>, _>::from_raw(width, height, raw)
-                .ok_or_else(|| anyhow!("Failed to build RGBA buffer"))?;
-            DynamicImage::ImageRgba32F(buffer)
+                .for_each(|(dst, p)| dst.copy_from_slice(p));
+            let buffer = ImageBuffer::<Rgb<f32>, _>::from_raw(width, height, raw)
+                .ok_or_else(|| anyhow!("Failed to build RGB buffer"))?;
+            DynamicImage::ImageRgb32F(buffer)
         }
         Intermediate::Monochrome(pixels) => {
-            let mut raw = vec![0f32; pixels.data.len() * 4];
-            raw.par_chunks_mut(4)
+            let mut raw = vec![0f32; pixels.data.len() * 3];
+            raw.par_chunks_mut(3)
                 .zip(pixels.data.par_iter())
-                .for_each(|(dst, &p)| dst.copy_from_slice(&[p, p, p, 1.0]));
-            let buffer = ImageBuffer::<Rgba<f32>, _>::from_raw(width, height, raw)
-                .ok_or_else(|| anyhow!("Failed to build RGBA buffer"))?;
-            DynamicImage::ImageRgba32F(buffer)
+                .for_each(|(dst, &p)| dst.copy_from_slice(&[p, p, p]));
+            let buffer = ImageBuffer::<Rgb<f32>, _>::from_raw(width, height, raw)
+                .ok_or_else(|| anyhow!("Failed to build RGB buffer"))?;
+            DynamicImage::ImageRgb32F(buffer)
         }
         _ => {
             return Err(anyhow!("Unsupported intermediate format for conversion"));
