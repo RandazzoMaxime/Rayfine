@@ -2030,7 +2030,9 @@ fn perf_shader_profile() {
 
     // (label, adjustments, patches applied to the shader source)
     let default_edit = serde_json::json!({ "exposure": 0.3, "contrast": 12.0, "highlights": -25.0, "shadows": 20.0 });
+    let local_edit = serde_json::json!({ "exposure": 0.3, "clarity": 15.0, "structure": 20.0, "sharpness": 25.0, "dehaze": 10.0 });
     let zero_edit = serde_json::json!({});
+    let only_full = std::env::var("RUSTROOM_PROFILE_FULL_ONLY").is_ok();
     let ablations: Vec<(&str, Vec<(&str, &str)>)> = vec![
         ("full shader", vec![]),
         ("- noise reduction", vec![(
@@ -2062,6 +2064,9 @@ fn perf_shader_profile() {
     println!("\n=== Main shader ablation @ {}x{} on {} ({} reps, median ms, display path) ===", w, h, gpu_name, reps);
     let mut baseline_default = 0.0;
     for (label, patches) in &ablations {
+        if only_full && *label != "full shader" {
+            continue;
+        }
         let mut src = base_src.clone();
         let mut ok = true;
         for (find, repl) in patches {
@@ -2078,7 +2083,7 @@ fn perf_shader_profile() {
         *crate::gpu_processing::MAIN_SHADER_OVERRIDE.lock().unwrap() = Some(src);
         let p = GpuProcessor::new(ctx.clone(), padded(w), padded(h), true).expect("processor");
         let mut row = Vec::new();
-        for adj in [&zero_edit, &default_edit] {
+        for adj in [&zero_edit, &default_edit, &local_edit] {
             render_display(&ctx, &p, &view, w, h, adj, None, None); // warmup / pipeline compile
             let (samples, _) = bench(reps, || render_display(&ctx, &p, &view, w, h, adj, None, None));
             row.push(stats(&samples).0);
@@ -2087,8 +2092,8 @@ fn perf_shader_profile() {
             baseline_default = row[1];
         }
         println!(
-            "{:<32} zero-edit {:>7.2}   default-edit {:>7.2}   saving vs full {:>6.2}",
-            label, row[0], row[1], baseline_default - row[1]
+            "{:<32} zero-edit {:>7.2}   default-edit {:>7.2}   local-contrast-edit {:>7.2}   saving vs full {:>6.2}",
+            label, row[0], row[1], row[2], baseline_default - row[1]
         );
         drop(p);
         gpu_wait(&ctx);
@@ -2666,5 +2671,40 @@ fn perf_gpu_demosaic_tiled() {
             stats(&s_up).0 + stats(&s_run).0, stats(&s_back).0,
             10.0 * (n / se.max(1e-12)).log10(), maxd
         );
+    }
+}
+
+/// Renders the synthetic 1920x1280 image with local-contrast edits and dumps raw RGBA8 to
+/// $RUSTROOM_DUMP (for before/after comparisons of shader changes).
+#[test]
+#[ignore]
+fn perf_render_dump() {
+    let Some((ctx, _)) = make_headless_gpu_context() else { return };
+    let (w, h) = (1920u32, 1280u32);
+    let img = DynamicImage::ImageRgba32F(ImageBuffer::from_fn(w, h, |x, y| {
+        let n = ((x.wrapping_mul(73856093) ^ y.wrapping_mul(19349663)) % 1000) as f32 / 1000.0;
+        let edge = if (x / 40 + y / 40) % 2 == 0 { 0.2 } else { 0.0 };
+        Rgba([x as f32 / w as f32 * 0.8 + n * 0.1 + edge, y as f32 / h as f32 * 0.7 + n * 0.1, 0.4 + n * 0.2, 1.0])
+    }));
+    let data = to_rgba_f16(&img);
+    let (_tex, view) = create_input_texture(&ctx, &data, w, h);
+    let p = GpuProcessor::new(ctx.clone(), padded(w), padded(h), false).unwrap();
+    let adj = serde_json::json!({ "exposure": 0.3, "clarity": 15.0, "structure": 20.0, "sharpness": 25.0, "dehaze": 10.0, "shadows": 20.0 });
+    let (px, _, _, _, _) = p
+        .run(&view, w, h, RenderRequest { adjustments: get_all_adjustments_from_json(&adj, true, None), mask_bitmaps: &[], lut: None, roi: None }, false, false)
+        .unwrap();
+    let out = std::env::var("RUSTROOM_DUMP").unwrap();
+    if let Ok(prev) = fs::read(&out) {
+        let (mut se, mut maxd) = (0f64, 0u8);
+        for (a, b) in prev.iter().zip(px.iter()) {
+            let d = (*a as i32 - *b as i32).unsigned_abs() as u8;
+            maxd = maxd.max(d);
+            se += (d as f64) * (d as f64);
+        }
+        let mse = se / px.len() as f64;
+        println!("COMPARE vs previous dump: PSNR {:.1} dB, max diff {} /255", 10.0 * (255.0f64 * 255.0 / mse.max(1e-12)).log10(), maxd);
+    } else {
+        fs::write(&out, &px).unwrap();
+        println!("dumped {} bytes to {}", px.len(), out);
     }
 }

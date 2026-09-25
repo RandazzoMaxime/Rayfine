@@ -15,69 +15,70 @@ struct BlurParams {
 
 const F16_MAX = 65504.0;
 
-fn gaussian(x: f32, sigma: f32) -> f32 {
-    return exp(-(x * x) / (2.0 * sigma * sigma));
-}
+// Separable Gaussian. Weights use the recurrence g(k+1) = g(k) * a^(2k+1), a = exp(-1/(2 sigma^2)),
+// so there is one exp() per pixel instead of one per tap; taps are taken symmetrically in pairs.
 
 @compute @workgroup_size(256, 1, 1)
 fn horizontal_blur(@builtin(global_invocation_id) id: vec3<u32>) {
-    let dims = vec2<i32>(textureDimensions(output_texture));
-    if (id.x >= u32(dims.x)) {
+    if (id.x >= params.input_width || id.y >= params.input_height) {
         return;
     }
 
     let radius = i32(params.radius);
     let sigma = f32(radius) / 2.0;
+    let a = exp(-1.0 / (2.0 * sigma * sigma));
 
-    let absolute_coord = vec2<u32>(id.x + params.tile_offset_x, id.y + params.tile_offset_y);
-    let full_dims = vec2<i32>(textureDimensions(input_texture));
+    let ax = i32(id.x + params.tile_offset_x);
+    let ay = i32(id.y + params.tile_offset_y);
+    let max_x = i32(textureDimensions(input_texture).x) - 1;
 
-    let center_color = clamp(textureLoad(input_texture, absolute_coord, 0).rgb, vec3(0.0), vec3(F16_MAX));
+    var total_color = clamp(textureLoad(input_texture, vec2<i32>(ax, ay), 0).rgb, vec3(0.0), vec3(F16_MAX));
+    var total_weight = 1.0;
+    var g = 1.0;
+    var m = a;
+    let a2 = a * a;
 
-    var total_color = vec3<f32>(0.0);
-    var total_weight = 0.0;
-
-    for (var offset = -radius; offset <= radius; offset = offset + 1) {
-        let sample_x = clamp(i32(absolute_coord.x) + offset, 0, full_dims.x - 1);
-        let sample_coord = vec2<i32>(sample_x, i32(absolute_coord.y));
-
-        let sample_color = clamp(textureLoad(input_texture, vec2<u32>(sample_coord), 0).rgb, vec3(0.0), vec3(F16_MAX));
-        let weight = gaussian(f32(offset), sigma);
-
-        total_color += sample_color * weight;
-        total_weight += weight;
+    for (var k = 1; k <= radius; k = k + 1) {
+        g = g * m;
+        m = m * a2;
+        let left = clamp(textureLoad(input_texture, vec2<i32>(clamp(ax - k, 0, max_x), ay), 0).rgb, vec3(0.0), vec3(F16_MAX));
+        let right = clamp(textureLoad(input_texture, vec2<i32>(clamp(ax + k, 0, max_x), ay), 0).rgb, vec3(0.0), vec3(F16_MAX));
+        total_color += (left + right) * g;
+        total_weight += 2.0 * g;
     }
 
-    let final_color = total_color / total_weight;
-    textureStore(output_texture, id.xy, vec4<f32>(final_color, 1.0));
+    textureStore(output_texture, id.xy, vec4<f32>(total_color / total_weight, 1.0));
 }
 
-@compute @workgroup_size(1, 256, 1)
+// 16x16 workgroups so neighbouring threads read neighbouring columns (coalesced), unlike a
+// 1x256 column-per-workgroup layout.
+@compute @workgroup_size(16, 16, 1)
 fn vertical_blur(@builtin(global_invocation_id) id: vec3<u32>) {
-    if (id.y >= params.input_height) {
+    if (id.x >= params.input_width || id.y >= params.input_height) {
         return;
     }
 
     let radius = i32(params.radius);
     let sigma = f32(radius) / 2.0;
-
-    let local_coord = vec2<i32>(id.xy);
+    let a = exp(-1.0 / (2.0 * sigma * sigma));
     let max_y = i32(params.input_height) - 1;
+    let x = i32(id.x);
+    let y = i32(id.y);
 
-    var total_color = vec3<f32>(0.0);
-    var total_weight = 0.0;
+    var total_color = clamp(textureLoad(input_texture, vec2<i32>(x, y), 0).rgb, vec3(0.0), vec3(F16_MAX));
+    var total_weight = 1.0;
+    var g = 1.0;
+    var m = a;
+    let a2 = a * a;
 
-    for (var offset = -radius; offset <= radius; offset = offset + 1) {
-        let sample_y = clamp(local_coord.y + offset, 0, max_y);
-        let sample_coord = vec2<i32>(local_coord.x, sample_y);
-
-        let sample_color = clamp(textureLoad(input_texture, vec2<u32>(sample_coord), 0).rgb, vec3(0.0), vec3(F16_MAX));
-        let weight = gaussian(f32(offset), sigma);
-
-        total_color += sample_color * weight;
-        total_weight += weight;
+    for (var k = 1; k <= radius; k = k + 1) {
+        g = g * m;
+        m = m * a2;
+        let up = clamp(textureLoad(input_texture, vec2<i32>(x, clamp(y - k, 0, max_y)), 0).rgb, vec3(0.0), vec3(F16_MAX));
+        let down = clamp(textureLoad(input_texture, vec2<i32>(x, clamp(y + k, 0, max_y)), 0).rgb, vec3(0.0), vec3(F16_MAX));
+        total_color += (up + down) * g;
+        total_weight += 2.0 * g;
     }
 
-    let final_color = total_color / total_weight;
-    textureStore(output_texture, id.xy, vec4<f32>(final_color, 1.0));
+    textureStore(output_texture, id.xy, vec4<f32>(total_color / total_weight, 1.0));
 }

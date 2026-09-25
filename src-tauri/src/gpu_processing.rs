@@ -553,6 +553,13 @@ pub struct GpuProcessor {
     pub output_texture_view: wgpu::TextureView,
     /// Whether the full-size display textures (working/output) were allocated.
     pub has_display: bool,
+    /// Bumped whenever the input texture is replaced; blur results are only reused within
+    /// the same generation.
+    pub input_generation: std::sync::atomic::AtomicU64,
+    /// Per blur texture (sharpness, tonal, clarity, structure): the (generation, tile x, tile y,
+    /// tile w, tile h, radius) it currently holds. Blurs depend only on the input image, not
+    /// on slider values, so slider drags re-use them instead of recomputing.
+    blur_keys: std::sync::Mutex<[Option<(u64, u32, u32, u32, u32, u32)>; 4]>,
 }
 
 const FLARE_MAP_SIZE: u32 = 512;
@@ -1116,6 +1123,8 @@ impl GpuProcessor {
             output_texture,
             output_texture_view,
             has_display: with_display,
+            input_generation: std::sync::atomic::AtomicU64::new(0),
+            blur_keys: std::sync::Mutex::new([None; 4]),
         })
     }
 
@@ -1462,20 +1471,35 @@ impl GpuProcessor {
                         let mut cpass = blur_encoder.begin_compute_pass(&Default::default());
                         cpass.set_pipeline(&self.v_blur_pipeline);
                         cpass.set_bind_group(0, &v_blur_bg, &[]);
-                        cpass.dispatch_workgroups(input_width, input_height.div_ceil(256), 1);
+                        cpass.dispatch_workgroups(input_width.div_ceil(16), input_height.div_ceil(16), 1);
                     }
 
                     queue.submit(Some(blur_encoder.finish()));
                     true
                 };
 
+                let generation = self.input_generation.load(std::sync::atomic::Ordering::Relaxed);
+                let mut blur_keys = self.blur_keys.lock().unwrap();
+                let mut cached_blur = |slot: usize, base_radius: f32, view: &wgpu::TextureView| -> bool {
+                    let radius =
+                        ((base_radius * scale).ceil().max(1.0) as u32).min(MAX_BLUR_RADIUS);
+                    let key = (generation, input_x_start, input_y_start, input_width, input_height, radius);
+                    if blur_keys[slot] == Some(key) {
+                        return true;
+                    }
+                    let ok = run_blur(base_radius, view);
+                    blur_keys[slot] = if ok { Some(key) } else { None };
+                    ok
+                };
                 let did_create_sharpness_blur =
-                    need_sharpness_blur && run_blur(1.0, &self.sharpness_blur_view);
-                let did_create_tonal_blur = need_tonal_blur && run_blur(3.5, &self.tonal_blur_view);
+                    need_sharpness_blur && cached_blur(0, 1.0, &self.sharpness_blur_view);
+                let did_create_tonal_blur =
+                    need_tonal_blur && cached_blur(1, 3.5, &self.tonal_blur_view);
                 let did_create_clarity_blur =
-                    need_clarity_blur && run_blur(8.0, &self.clarity_blur_view);
+                    need_clarity_blur && cached_blur(2, 8.0, &self.clarity_blur_view);
                 let did_create_structure_blur =
-                    need_structure_blur && run_blur(40.0, &self.structure_blur_view);
+                    need_structure_blur && cached_blur(3, 40.0, &self.structure_blur_view);
+                drop(blur_keys);
 
                 let mut main_encoder = device.create_command_encoder(&Default::default());
 
@@ -1810,6 +1834,9 @@ fn process_and_get_dynamic_image_inner(
             height,
             transform_hash,
         });
+        processor
+            .input_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     let cache = cache_lock.as_ref().unwrap();
