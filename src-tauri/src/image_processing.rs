@@ -2523,7 +2523,11 @@ pub fn remove_raw_artifacts_and_enhance(
     color_nr_inv_sigma: f32,
     sharpening_amount: f32,
 ) {
-    let mut buffer = image.to_rgb32f();
+    // Take the RGB32F buffer out of the image when possible (no 400 MB copy); convert otherwise.
+    let mut buffer = match std::mem::replace(image, DynamicImage::new_rgb8(0, 0)) {
+        DynamicImage::ImageRgb32F(buf) => buf,
+        other => other.to_rgb32f(),
+    };
     let w = buffer.width() as usize;
     let h = buffer.height() as usize;
 

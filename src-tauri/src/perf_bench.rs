@@ -2708,3 +2708,4 @@ fn perf_render_dump() {
         println!("dumped {} bytes to {}", px.len(), out);
     }
 }
+
