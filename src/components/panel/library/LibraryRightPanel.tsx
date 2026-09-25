@@ -92,7 +92,7 @@ function MiniHistogram({ path }: { path: string | null }) {
 
   if (!path) {
     return (
-      <div className="h-24 rounded bg-black/40 border border-border-color/30 flex items-center justify-center text-[10px] text-text-secondary/60 uppercase tracking-wider">
+      <div className="h-24 rounded bg-surface border border-border-color/30 flex items-center justify-center text-[10px] text-text-secondary/60 uppercase tracking-wider">
         No photo
       </div>
     );
@@ -100,7 +100,7 @@ function MiniHistogram({ path }: { path: string | null }) {
 
   if (!bins) {
     return (
-      <div className="h-24 rounded bg-black/40 border border-border-color/30 flex items-center justify-center text-[10px] text-text-secondary/50">
+      <div className="h-24 rounded bg-surface border border-border-color/30 flex items-center justify-center text-[10px] text-text-secondary/50">
         …
       </div>
     );
@@ -119,7 +119,7 @@ function MiniHistogram({ path }: { path: string | null }) {
   };
 
   return (
-    <div className="h-24 rounded bg-black/50 border border-border-color/30 overflow-hidden relative">
+    <div className="h-24 rounded bg-bg-primary border border-border-color/30 overflow-hidden relative">
       <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="absolute inset-0 w-full h-full">
         <path d={pathD(bins.r)} fill="#FF6B6B" opacity={0.45} />
         <path d={pathD(bins.g)} fill="#6BCB77" opacity={0.45} />

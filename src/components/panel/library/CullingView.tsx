@@ -448,7 +448,7 @@ function CullingPreview({
       <div
         className="absolute inset-0 opacity-20 pointer-events-none z-0"
         style={{
-          backgroundImage: 'radial-gradient(#444 1px, transparent 1px)',
+          backgroundImage: 'radial-gradient(var(--app-border-color) 1px, transparent 1px)',
           backgroundSize: '24px 24px',
         }}
       />
@@ -487,18 +487,18 @@ function CullingPreview({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 10, scale: 0.95 }}
             transition={{ duration: 0.15 }}
-            className="absolute bottom-[4.5rem] left-1/2 -translate-x-1/2 flex flex-col gap-4 bg-bg-primary/70 backdrop-blur-md p-4 rounded-xl border border-white/10 shadow-xl z-30 pointer-events-auto w-64 max-h-[70%] overflow-y-auto custom-scrollbar"
+            className="absolute bottom-[4.5rem] left-1/2 -translate-x-1/2 flex flex-col gap-4 bg-bg-primary/70 backdrop-blur-md p-4 rounded-xl border border-border-color/40 shadow-xl z-30 pointer-events-auto w-64 max-h-[70%] overflow-y-auto custom-scrollbar"
             onMouseDown={(e) => e.stopPropagation()}
             onWheel={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
-              <Text variant={TextVariants.small} weight={TextWeights.semibold} className="text-white">
+              <Text variant={TextVariants.small} weight={TextWeights.semibold} className="text-text-primary">
                 {t('library.culling.metadata')}
               </Text>
               <button
                 onClick={() => setShowInfoBar(false)}
-                className="text-white/50 hover:text-white transition-colors"
+                className="text-text-secondary hover:text-text-primary transition-colors"
               >
                 <X size={14} />
               </button>
@@ -509,11 +509,11 @@ function CullingPreview({
                 <div>
                   <Text
                     variant={TextVariants.small}
-                    className="text-white/50 text-[10px] uppercase tracking-wider mb-1.5 block"
+                    className="text-text-secondary text-[10px] uppercase tracking-wider mb-1.5 block"
                   >
                     {t('library.culling.dimensions')}
                   </Text>
-                  <Text variant={TextVariants.small} className="text-white">
+                  <Text variant={TextVariants.small} className="text-text-primary">
                     {imageWidth} × {imageHeight}
                   </Text>
                 </div>
@@ -523,14 +523,14 @@ function CullingPreview({
                 <div>
                   <Text
                     variant={TextVariants.small}
-                    className="text-white/50 text-[10px] uppercase tracking-wider mb-1.5 block"
+                    className="text-text-secondary text-[10px] uppercase tracking-wider mb-1.5 block"
                   >
                     {t('library.culling.cameraSettings')}
                   </Text>
                   <div className="grid grid-cols-2 gap-3">
                     {exifData.shutter && (
                       <div
-                        className="flex items-center gap-1.5 text-white/90"
+                        className="flex items-center gap-1.5 text-text-primary"
                         title={t('library.culling.shutterSpeed')}
                       >
                         <span className="opacity-70">
@@ -540,7 +540,7 @@ function CullingPreview({
                       </div>
                     )}
                     {exifData.fNumber && (
-                      <div className="flex items-center gap-1.5 text-white/90" title={t('library.culling.aperture')}>
+                      <div className="flex items-center gap-1.5 text-text-primary" title={t('library.culling.aperture')}>
                         <span className="opacity-70">
                           <IconAperture />
                         </span>
@@ -548,7 +548,7 @@ function CullingPreview({
                       </div>
                     )}
                     {exifData.iso && (
-                      <div className="flex items-center gap-1.5 text-white/90" title={t('library.culling.iso')}>
+                      <div className="flex items-center gap-1.5 text-text-primary" title={t('library.culling.iso')}>
                         <span className="opacity-70">
                           <IconIso />
                         </span>
@@ -556,7 +556,7 @@ function CullingPreview({
                       </div>
                     )}
                     {exifData.focal && (
-                      <div className="flex items-center gap-1.5 text-white/90" title={t('library.culling.focalLength')}>
+                      <div className="flex items-center gap-1.5 text-text-primary" title={t('library.culling.focalLength')}>
                         <span className="opacity-70">
                           <IconFocalLength />
                         </span>
@@ -570,7 +570,7 @@ function CullingPreview({
               )}
 
               {!hasExif && !imageWidth && !imageHeight && (
-                <Text variant={TextVariants.small} className="text-white/50 italic">
+                <Text variant={TextVariants.small} className="text-text-secondary italic">
                   {t('library.culling.noMetadataAvailable')}
                 </Text>
               )}
@@ -586,18 +586,18 @@ function CullingPreview({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 10, scale: 0.95 }}
             transition={{ duration: 0.15 }}
-            className="absolute bottom-[4.5rem] left-1/2 -translate-x-1/2 flex flex-col gap-4 bg-bg-primary/70 backdrop-blur-md p-4 rounded-xl border border-white/10 shadow-xl z-30 pointer-events-auto w-64 max-h-[70%] overflow-y-auto custom-scrollbar"
+            className="absolute bottom-[4.5rem] left-1/2 -translate-x-1/2 flex flex-col gap-4 bg-bg-primary/70 backdrop-blur-md p-4 rounded-xl border border-border-color/40 shadow-xl z-30 pointer-events-auto w-64 max-h-[70%] overflow-y-auto custom-scrollbar"
             onMouseDown={(e) => e.stopPropagation()}
             onWheel={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
-              <Text variant={TextVariants.small} weight={TextWeights.semibold} className="text-white">
+              <Text variant={TextVariants.small} weight={TextWeights.semibold} className="text-text-primary">
                 {t('library.culling.rateAndLabel')}
               </Text>
               <button
                 onClick={() => setShowRateBar(false)}
-                className="text-white/50 hover:text-white transition-colors"
+                className="text-text-secondary hover:text-text-primary transition-colors"
               >
                 <X size={14} />
               </button>
@@ -606,7 +606,7 @@ function CullingPreview({
             <div>
               <Text
                 variant={TextVariants.small}
-                className="text-white/50 text-[10px] uppercase tracking-wider mb-1.5 block"
+                className="text-text-secondary text-[10px] uppercase tracking-wider mb-1.5 block"
               >
                 {t('library.culling.rating')}
               </Text>
@@ -623,7 +623,7 @@ function CullingPreview({
                         'transition-colors duration-200',
                         star <= rating
                           ? 'fill-accent text-accent'
-                          : 'fill-transparent text-white/30 hover:text-white/80',
+                          : 'fill-transparent text-text-secondary/50 hover:text-text-primary',
                       )}
                     />
                   </button>
@@ -634,7 +634,7 @@ function CullingPreview({
             <div>
               <Text
                 variant={TextVariants.small}
-                className="text-white/50 text-[10px] uppercase tracking-wider mb-1.5 block"
+                className="text-text-secondary text-[10px] uppercase tracking-wider mb-1.5 block"
               >
                 {t('library.culling.colorLabel')}
               </Text>
@@ -649,7 +649,7 @@ function CullingPreview({
                   )}
                   data-tooltip={t('library.culling.none')}
                 >
-                  <X size={12} className="text-white/50" />
+                  <X size={12} className="text-text-secondary" />
                 </button>
                 {COLOR_LABELS.map((color: Color) => (
                   <button
@@ -673,7 +673,7 @@ function CullingPreview({
             <div>
               <Text
                 variant={TextVariants.small}
-                className="text-white/50 text-[10px] uppercase tracking-wider mb-1.5 block"
+                className="text-text-secondary text-[10px] uppercase tracking-wider mb-1.5 block"
               >
                 {t('library.culling.tags')}
               </Text>
@@ -686,35 +686,35 @@ function CullingPreview({
                       initial={{ opacity: 0, scale: 0.8 }}
                       animate={{ opacity: 1, scale: 1 }}
                       exit={{ opacity: 0, scale: 0.8 }}
-                      className="flex items-center gap-1 bg-white/10 px-2 py-0.5 rounded-md group cursor-pointer border border-transparent hover:border-white/20 transition-colors"
+                      className="flex items-center gap-1 bg-card-active px-2 py-0.5 rounded-md group cursor-pointer border border-transparent hover:border-border-color transition-colors"
                       onClick={() => handleRemoveTag(tagItem)}
                     >
-                      <Text as="span" variant={TextVariants.small} className="text-white/90 text-xs">
+                      <Text as="span" variant={TextVariants.small} className="text-text-primary text-xs">
                         {tagItem.tag}
                       </Text>
-                      <X size={10} className="text-white/50 group-hover:text-white" />
+                      <X size={10} className="text-text-secondary group-hover:text-text-primary" />
                     </motion.div>
                   ))}
                 </AnimatePresence>
                 {currentTags.length === 0 && (
-                  <Text variant={TextVariants.small} className="italic text-white/40 text-xs">
+                  <Text variant={TextVariants.small} className="italic text-text-secondary/70 text-xs">
                     {t('library.culling.noTagsAdded')}
                   </Text>
                 )}
               </div>
-              <div className="flex items-center bg-bg-primary/40 border border-white/10 rounded-md px-2 py-1.5 focus-within:border-accent/50 transition-colors">
+              <div className="flex items-center bg-bg-primary/40 border border-border-color/40 rounded-md px-2 py-1.5 focus-within:border-accent/50 transition-colors">
                 <input
                   type="text"
                   value={tagInputValue}
                   onChange={(e) => setTagInputValue(e.target.value)}
                   onKeyDown={handleTagInputKeyDown}
                   placeholder={t('library.culling.addTagPlaceholder')}
-                  className="bg-transparent border-none outline-hidden text-xs w-full text-white placeholder-white/40"
+                  className="bg-transparent border-none outline-hidden text-xs w-full text-text-primary placeholder:text-text-secondary/50"
                 />
                 <button
                   onClick={() => handleAddTag(tagInputValue)}
                   disabled={!tagInputValue.trim()}
-                  className="text-white/50 hover:text-white disabled:opacity-30 transition-colors"
+                  className="text-text-secondary hover:text-text-primary disabled:opacity-30 transition-colors"
                 >
                   <Plus size={14} />
                 </button>
@@ -726,7 +726,7 @@ function CullingPreview({
 
       <div
         className={clsx(
-          'absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-bg-primary/70 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10 shadow-xl z-20 pointer-events-auto transition-opacity duration-200 max-w-[calc(100%-1.5rem)]',
+          'absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-bg-primary/70 backdrop-blur-md px-3 py-1.5 rounded-full border border-border-color/40 shadow-xl z-20 pointer-events-auto transition-opacity duration-200 max-w-[calc(100%-1.5rem)]',
           isRateMenuVisible || isInfoMenuVisible ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
         )}
         onMouseDown={(e) => e.stopPropagation()}
@@ -740,21 +740,21 @@ function CullingPreview({
               exit={{ opacity: 0, width: 0 }}
               className="flex items-center justify-center overflow-hidden"
             >
-              <Loader2 className="w-4 h-4 animate-spin text-white mr-1" />
+              <Loader2 className="w-4 h-4 animate-spin text-text-primary mr-1" />
             </motion.div>
           )}
         </AnimatePresence>
 
         <Text
           variant={TextVariants.small}
-          className="text-white truncate shrink min-w-0 max-w-20 sm:max-w-28 md:max-w-37.5"
+          className="text-text-primary truncate shrink min-w-0 max-w-20 sm:max-w-28 md:max-w-37.5"
           data-tooltip={baseName}
         >
           {baseName}
         </Text>
 
         {isVirtualCopy && (
-          <div className="bg-white/20 text-white px-1.5 py-0.5 rounded-sm shrink-0 ml-1">
+          <div className="bg-card-active text-text-primary px-1.5 py-0.5 rounded-sm shrink-0 ml-1">
             <Text variant={TextVariants.small} weight={TextWeights.bold} className="text-[9px] leading-none">
               {t('library.culling.vc')}
             </Text>
@@ -764,7 +764,7 @@ function CullingPreview({
         {hasAnyOverlay && (
           <div className="rounded-full h-5 px-1.5 flex items-center justify-center gap-0 shadow-md bg-surface/30 pointer-events-auto shrink-0 ml-1">
             {showEditIcon && (
-              <div className="text-white flex items-center shrink-0">
+              <div className="text-text-primary flex items-center shrink-0">
                 <SlidersHorizontal size={12} />
               </div>
             )}
@@ -783,20 +783,20 @@ function CullingPreview({
                 <Text variant={TextVariants.small} color={TextColors.white}>
                   {rating}
                 </Text>
-                <StarIcon size={12} className="text-white fill-white" />
+                <StarIcon size={12} className="text-accent fill-accent" />
               </div>
             )}
           </div>
         )}
 
-        <div className="w-px h-5 bg-white/20 mx-1 shrink-0"></div>
+        <div className="w-px h-5 bg-border-color/50 mx-1 shrink-0"></div>
 
         <button
           onClick={(e) => {
             e.stopPropagation();
             onImageDoubleClick(image.path);
           }}
-          className="p-1.5 text-white/60 hover:bg-white/10 hover:text-white rounded-full transition-colors shrink-0"
+          className="p-1.5 text-text-secondary hover:bg-card-active hover:text-text-primary rounded-full transition-colors shrink-0"
           data-tooltip={t('library.culling.editImage')}
         >
           <SquarePen size={14} />
@@ -812,7 +812,7 @@ function CullingPreview({
           }}
           className={clsx(
             'p-1.5 rounded-full transition-colors shrink-0',
-            showInfoBar ? 'bg-accent text-button-text' : 'text-white/60 hover:bg-white/10 hover:text-white',
+            showInfoBar ? 'bg-accent text-button-text' : 'text-text-secondary hover:bg-card-active hover:text-text-primary',
           )}
           data-tooltip={t('library.culling.metadata')}
         >
@@ -829,20 +829,20 @@ function CullingPreview({
           }}
           className={clsx(
             'p-1.5 rounded-full transition-colors shrink-0',
-            showRateBar ? 'bg-accent text-button-text' : 'text-white/60 hover:bg-white/10 hover:text-white',
+            showRateBar ? 'bg-accent text-button-text' : 'text-text-secondary hover:bg-card-active hover:text-text-primary',
           )}
           data-tooltip={t('library.culling.rateAndLabel')}
         >
           <Tag size={14} />
         </button>
 
-        <div className="w-px h-5 bg-white/20 mx-1 shrink-0"></div>
+        <div className="w-px h-5 bg-border-color/50 mx-1 shrink-0"></div>
 
         <button
           onClick={toggleSync}
           className={clsx(
             'p-1.5 rounded-full transition-colors shrink-0',
-            syncViewport.isActive ? 'bg-accent text-button-text' : 'text-white/60 hover:bg-white/10 hover:text-white',
+            syncViewport.isActive ? 'bg-accent text-button-text' : 'text-text-secondary hover:bg-card-active hover:text-text-primary',
           )}
           data-tooltip={t('library.culling.syncZoomAndPan')}
         >
@@ -851,14 +851,14 @@ function CullingPreview({
 
         <button
           onClick={handleZoomOut}
-          className="p-1.5 text-white/60 hover:bg-white/10 hover:text-white rounded-full transition-colors shrink-0"
+          className="p-1.5 text-text-secondary hover:bg-card-active hover:text-text-primary rounded-full transition-colors shrink-0"
         >
           <ZoomOut size={16} />
         </button>
 
         <button
           onClick={handleToggle1to1}
-          className="text-xs font-mono text-white/90 w-8 text-center select-none shrink-0 hover:bg-white/10 hover:text-white rounded-md py-1 transition-colors cursor-pointer"
+          className="text-xs font-mono text-text-primary w-8 text-center select-none shrink-0 hover:bg-card-active hover:text-text-primary rounded-md py-1 transition-colors cursor-pointer"
           data-tooltip={t('library.culling.toggleFit')}
         >
           {fitScale ? Math.round(zoom * fitScale * 100) : Math.round(zoom * 100)}%
@@ -866,7 +866,7 @@ function CullingPreview({
 
         <button
           onClick={handleZoomIn}
-          className="p-1.5 text-white/60 hover:bg-white/10 hover:text-white rounded-full transition-colors shrink-0"
+          className="p-1.5 text-text-secondary hover:bg-card-active hover:text-text-primary rounded-full transition-colors shrink-0"
         >
           <ZoomIn size={16} />
         </button>

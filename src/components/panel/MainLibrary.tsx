@@ -1134,7 +1134,7 @@ export default function MainLibrary(props: MainLibraryProps) {
             onRate={props.onRate}
           />
         ) : libraryDisplayMode === LibraryDisplayMode.Loupe && !dualDisplayActive ? (
-          <LoupeView>
+          <LoupeView
             imageList={props.imageList}
             multiSelectedPaths={props.multiSelectedPaths}
             activePath={props.activePath}

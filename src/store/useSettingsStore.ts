@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { platform } from '@tauri-apps/plugin-os';
 import { AppSettings, SupportedTypes, Invokes } from '../components/ui/AppProperties';
 import { DEFAULT_THEME_ID } from '../utils/themes';
+import { applyAppearance, normalizeAppearanceState, saveAppearance } from '../utils/appearance';
 
 interface SettingsState {
   appSettings: AppSettings | null;
@@ -48,8 +49,25 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       set({ theme: newSettings.theme });
     }
 
-    const { searchCriteria: _searchCriteria, ...settingsToSave } = newSettings as any;
-    set({ appSettings: newSettings });
+    const prev = get().appSettings;
+    const merged: AppSettings = {
+      ...newSettings,
+      appearance: newSettings.appearance ?? prev?.appearance,
+    };
+    if (merged.theme === 'light' || merged.theme === 'dark') {
+      const prevAppearance = merged.appearance;
+      if (prevAppearance) {
+        merged.appearance = { ...prevAppearance, appearance: merged.theme };
+      }
+    }
+
+    const { searchCriteria: _searchCriteria, ...settingsToSave } = merged as any;
+    set({ appSettings: merged });
+    const appearanceState = normalizeAppearanceState(merged.appearance);
+    if (appearanceState) {
+      applyAppearance(appearanceState);
+      saveAppearance(appearanceState);
+    }
 
     try {
       await invoke(Invokes.SaveSettings, { settings: settingsToSave });

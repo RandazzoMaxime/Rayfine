@@ -3,9 +3,13 @@ import { createRoot } from 'react-dom/client';
 import App from './App';
 import DisplayWindow from './components/views/DisplayWindow';
 import { installFrontendLogBridge } from './utils/frontendLogBridge';
+import { applyAppearance, resolveAppearance } from './utils/appearance';
 import './styles.css';
 
 installFrontendLogBridge();
+
+const bootAppearance = resolveAppearance();
+if (bootAppearance) applyAppearance(bootAppearance);
 
 async function boot() {
   let isDisplayWindow =

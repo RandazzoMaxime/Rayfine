@@ -119,23 +119,34 @@ export function applyAppearance(state: AppearanceState) {
   applyCssVariables(paletteFromSeeds(seeds, state.appearance), state.appearance);
 }
 
+export function normalizeAppearanceState(parsed: Partial<AppearanceState> | null | undefined): AppearanceState | null {
+  if (!parsed) return null;
+  const base = defaultAppearanceState();
+  const appearance: AppearanceId = parsed.appearance === 'light' ? 'light' : 'dark';
+  const seedsIn = parsed.seeds;
+  if (!seedsIn && parsed.appearance == null) return null;
+  return {
+    appearance,
+    seeds: {
+      dark: { ...base.seeds.dark, ...(seedsIn?.dark || {}) },
+      light: { ...base.seeds.light, ...(seedsIn?.light || {}) },
+    },
+  };
+}
+
 export function loadAppearance(): AppearanceState | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<AppearanceState>;
-    const base = defaultAppearanceState();
-    const appearance: AppearanceId = parsed.appearance === 'light' ? 'light' : 'dark';
-    return {
-      appearance,
-      seeds: {
-        dark: { ...base.seeds.dark, ...(parsed.seeds?.dark || {}) },
-        light: { ...base.seeds.light, ...(parsed.seeds?.light || {}) },
-      },
-    };
+    return normalizeAppearanceState(JSON.parse(raw) as Partial<AppearanceState>);
   } catch {
     return null;
   }
+}
+
+/** Prefer settings.json (catalog data folder), then localStorage. */
+export function resolveAppearance(fromSettings?: Partial<AppearanceState> | null): AppearanceState | null {
+  return normalizeAppearanceState(fromSettings) || loadAppearance();
 }
 
 export function saveAppearance(state: AppearanceState) {

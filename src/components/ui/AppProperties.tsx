@@ -270,6 +270,14 @@ export interface AppSettings {
   hideRejectedPhotos?: boolean;
   /** Saved Library attribute filter presets (LR-style). */
   libraryFilterPresets?: Array<{ id: string; name: string; criteria: FilterCriteria }>;
+  /** Custom dark/light color seeds; persisted in settings.json. */
+  appearance?: {
+    appearance: 'dark' | 'light';
+    seeds: {
+      dark: { canvas: string; text: string; accent: string };
+      light: { canvas: string; text: string; accent: string };
+    };
+  };
   /** Last-used Library import dialog settings (LR-style remember). */
   lastImportSettings?: {
     filenameTemplate?: string;

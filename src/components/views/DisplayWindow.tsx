@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { listen, emit } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { generateLibraryPreview } from '../../utils/libraryPreview';
+import { applyAppearance, resolveAppearance } from '../../utils/appearance';
 
 type DisplayMode = 'library' | 'develop' | 'empty';
 
@@ -16,6 +17,8 @@ export default function DisplayWindow() {
   const [label, setLabel] = useState<string>('');
 
   useEffect(() => {
+    const stored = resolveAppearance();
+    if (stored) applyAppearance(stored);
     let cancelled = false;
     const unlistenShow = listen(
       'dual-display-show',

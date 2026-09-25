@@ -460,6 +460,9 @@ pub struct AppSettings {
     /** User data folder (catalog, watermarks, settings copy). None = app data `albums/`. */
     #[serde(default, alias = "catalogDir")]
     pub data_dir: Option<String>,
+    /// Custom UI appearance (dark/light seeds). Lives in settings.json next to the catalog.
+    #[serde(default)]
+    pub appearance: Option<Value>,
 }
 
 impl Default for AppSettings {
@@ -551,6 +554,7 @@ impl Default for AppSettings {
             group_associated_files: Some(false),
             group_preferred_type: Some("raw".to_string()),
             data_dir: None,
+            appearance: None,
         }
     }
 }

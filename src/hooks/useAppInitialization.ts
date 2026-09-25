@@ -7,7 +7,7 @@ import { useLibraryStore } from '../store/useLibraryStore';
 import { useEditorStore } from '../store/useEditorStore';
 import { useProcessStore } from '../store/useProcessStore';
 import { THEMES, DEFAULT_THEME_ID, ThemeProps } from '../utils/themes';
-import { applyAppearance, applyCssVariables, loadAppearance } from '../utils/appearance';
+import { applyAppearance, applyCssVariables, resolveAppearance, saveAppearance } from '../utils/appearance';
 import { COPYABLE_ADJUSTMENT_KEYS } from '../utils/adjustments';
 import {
   FilterCriteria,
@@ -176,6 +176,19 @@ export const useAppInitialization = ({
         }
 
         if (settings?.theme) setTheme(settings.theme);
+
+        const resolvedAppearance = resolveAppearance(settings?.appearance);
+        if (resolvedAppearance) {
+          applyAppearance(resolvedAppearance);
+          saveAppearance(resolvedAppearance);
+          if (!settings.appearance) {
+            handleSettingsChange({
+              ...settings,
+              appearance: resolvedAppearance,
+              theme: resolvedAppearance.appearance === 'light' ? Theme.Light : Theme.Dark,
+            });
+          }
+        }
 
         if (settings?.uiVisibility)
           setUI((state) => ({ uiVisibility: { ...state.uiVisibility, ...settings.uiVisibility } }));
@@ -423,9 +436,10 @@ export const useAppInitialization = ({
   }, [appSettings?.enableFolderImageCounts, appSettings?.folderTreeSort?.key]);
 
   useEffect(() => {
-    const stored = loadAppearance();
+    const stored = resolveAppearance(appSettings?.appearance);
     if (stored) {
       applyAppearance(stored);
+      saveAppearance(stored);
     } else {
       const currentThemeId = theme || DEFAULT_THEME_ID;
       const baseTheme =
@@ -445,5 +459,5 @@ export const useAppInitialization = ({
         ? '-apple-system, BlinkMacSystemFont, system-ui, sans-serif'
         : "'Poppins', system-ui, sans-serif";
     document.documentElement.style.setProperty('--font-family', fontStack);
-  }, [theme, appSettings?.fontFamily]);
+  }, [theme, appSettings?.appearance, appSettings?.fontFamily]);
 };

@@ -2087,7 +2087,7 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
               })}
             </div>
           ) : (
-          <ImageCanvas>
+          <ImageCanvas
             appSettings={appSettings}
             activeAiPatchContainerId={activeAiPatchContainerId}
             activeAiSubMaskId={activeAiSubMaskId}

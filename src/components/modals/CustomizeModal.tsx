@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
 import { FolderOpen, RotateCcw, X } from 'lucide-react';
@@ -15,8 +15,8 @@ import {
   DEFAULT_SEEDS,
   applyAppearance,
   defaultAppearanceState,
-  loadAppearance,
   normalizeHex,
+  resolveAppearance,
   saveAppearance,
 } from '../../utils/appearance';
 
@@ -114,13 +114,18 @@ export default function CustomizeModal({ isOpen, onClose }: CustomizeModalProps)
   const handleSettingsChange = useSettingsStore((s) => s.handleSettingsChange);
   const setAppSettings = useSettingsStore((s) => s.setAppSettings);
   const appSettings = useSettingsStore((s) => s.appSettings);
-  const [state, setState] = useState<AppearanceState>(() => loadAppearance() || defaultAppearanceState());
+  const [state, setState] = useState<AppearanceState>(
+    () => resolveAppearance(appSettings?.appearance) || defaultAppearanceState(),
+  );
   const [catalog, setCatalog] = useState<CatalogLoc | null>(null);
   const [catalogBusy, setCatalogBusy] = useState(false);
+  const persistTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stateRef = useRef(state);
+  stateRef.current = state;
 
   useEffect(() => {
     if (!isOpen) return;
-    setState(loadAppearance() || defaultAppearanceState());
+    setState(resolveAppearance(appSettings?.appearance) || defaultAppearanceState());
     invoke<CatalogLoc>(Invokes.GetCatalogLocation)
       .then(setCatalog)
       .catch(() => setCatalog(null));
@@ -181,14 +186,37 @@ export default function CustomizeModal({ isOpen, onClose }: CustomizeModalProps)
     }
   };
 
+  const persistToDisk = (next: AppearanceState) => {
+    saveAppearance(next);
+    const write = () => {
+      persistTimer.current = null;
+      const current = useSettingsStore.getState().appSettings;
+      if (!current) return;
+      const theme = next.appearance === 'light' ? Theme.Light : Theme.Dark;
+      handleSettingsChange({ ...current, theme, appearance: next });
+    };
+    if (persistTimer.current) clearTimeout(persistTimer.current);
+    persistTimer.current = setTimeout(write, 200);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (!persistTimer.current) return;
+      clearTimeout(persistTimer.current);
+      persistTimer.current = null;
+      const next = stateRef.current;
+      saveAppearance(next);
+      const current = useSettingsStore.getState().appSettings;
+      if (!current) return;
+      const theme = next.appearance === 'light' ? Theme.Light : Theme.Dark;
+      useSettingsStore.getState().handleSettingsChange({ ...current, theme, appearance: next });
+    };
+  }, []);
+
   const push = (next: AppearanceState) => {
     setState(next);
-    saveAppearance(next);
     applyAppearance(next);
-    const theme = next.appearance === 'light' ? Theme.Light : Theme.Dark;
-    if (appSettings && appSettings.theme !== theme) {
-      handleSettingsChange({ ...appSettings, theme });
-    }
+    persistToDisk(next);
   };
 
   const seeds = state.seeds[state.appearance];
