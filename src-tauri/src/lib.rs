@@ -14,6 +14,7 @@ mod app_settings;
 mod app_state;
 mod cache_utils;
 mod culling;
+mod demosaic;
 mod denoising;
 mod exif_processing;
 mod export_processing;

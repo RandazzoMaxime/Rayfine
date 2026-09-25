@@ -122,7 +122,17 @@ fn develop_internal(
         crate::multi_exposure::neutralize_wb_if_multiexposure(raw_image.wb_coeffs, file_bytes);
 
     check_cancel()?;
-    let mut developed_intermediate = developer.develop_intermediate(&raw_image)?;
+    // Custom fused MHC demosaic + calibration + crop for plain Bayer sensors (quality mode).
+    // Set RUSTROOM_DEMOSAIC=ppg to fall back to rawler's PPG path (A/B testing).
+    let use_custom_demosaic = !is_linear_format
+        && !fast_demosaic
+        && crate::demosaic::is_supported(&raw_image)
+        && std::env::var("RUSTROOM_DEMOSAIC").map(|v| v != "ppg").unwrap_or(true);
+    let mut developed_intermediate = if use_custom_demosaic {
+        crate::demosaic::develop_bayer(&mut raw_image)?
+    } else {
+        developer.develop_intermediate(&raw_image)?
+    };
 
     drop(raw_image);
 
