@@ -79,22 +79,25 @@ export default function CollapsibleSection({
   };
 
   return (
-    <div className="bg-surface rounded-lg overflow-hidden shrink-0" onContextMenu={onContextMenu}>
+    <div
+      className="bg-surface/90 rounded-md overflow-hidden shrink-0 border border-border-color/40"
+      onContextMenu={onContextMenu}
+    >
       <div
-        className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-card-active transition-colors duration-200"
-        onClick={onToggle}
+        className="w-full px-2.5 py-1 flex items-center justify-between text-left hover:bg-card-active transition-colors duration-150 cursor-pointer select-none"
+        onClick={(e) => onToggle(e)}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
       >
-        <div className="flex items-center gap-2">
-          <Text variant={TextVariants.title} weight={TextWeights.normal}>
+        <div className="flex items-center gap-1.5 min-w-0">
+          <Text variant={TextVariants.heading} weight={TextWeights.medium} className="truncate uppercase tracking-wide text-[11px]">
             {title}
           </Text>
           {canToggleVisibility && (
-            <div className="w-6 h-6 flex items-center justify-center">
+            <div className="w-5 h-5 flex items-center justify-center shrink-0">
               <button
                 className={clsx(
-                  'p-1 rounded-full text-text-secondary hover:bg-bg-primary z-10 transition-opacity duration-300',
+                  'p-0.5 rounded text-text-secondary hover:bg-bg-primary z-10 transition-opacity duration-200',
                   isHovering || !isContentVisible ? 'opacity-100' : 'opacity-0 pointer-events-none',
                 )}
                 onClick={handleVisibilityClick}
@@ -104,20 +107,20 @@ export default function CollapsibleSection({
                     : t('ui.collapsibleSection.enableSection')
                 }
               >
-                {isContentVisible ? <Eye size={16} /> : <EyeOff size={16} />}
+                {isContentVisible ? <Eye size={14} /> : <EyeOff size={14} />}
               </button>
             </div>
           )}
         </div>
         <ChevronDown
-          className={clsx('text-accent transition-transform duration-300', { 'rotate-180': isOpen })}
-          size={20}
+          className={clsx('text-text-secondary transition-transform duration-200 shrink-0', { 'rotate-180': isOpen })}
+          size={16}
         />
       </div>
-      <div ref={wrapperRef} className="overflow-hidden transition-all duration-300 ease-in-out">
+      <div ref={wrapperRef} className="overflow-hidden transition-all duration-200 ease-in-out">
         <div
           className={clsx(
-            'px-4 pb-4 transition-opacity duration-300',
+            'px-3 pb-2.5 pt-0.5 transition-opacity duration-200',
             !isContentVisible && 'opacity-30 pointer-events-none',
           )}
           ref={contentRef}

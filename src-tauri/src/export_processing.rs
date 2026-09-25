@@ -74,6 +74,18 @@ pub struct ExportSettings {
     pub export_masks: bool,
     #[serde(default)]
     pub preserve_folders: bool,
+    /// Output color space tag: "srgb" | "adobe-rgb" | "display-p3" | "prophoto"
+    #[serde(default)]
+    pub color_space: Option<String>,
+    /// Output sharpening: "none" | "screen" | "matte" | "glossy"
+    #[serde(default)]
+    pub output_sharpening: Option<String>,
+    /// Output resolution DPI for EXIF X/YResolution (e.g. 72, 240, 300)
+    #[serde(default)]
+    pub resolution_dpi: Option<u32>,
+    /// Soft limit in kilobytes for lossy formats (JPEG/WebP/JXL). Quality is lowered to fit.
+    #[serde(default)]
+    pub limit_file_size_kb: Option<u32>,
 }
 
 #[derive(Clone)]
@@ -102,46 +114,96 @@ pub enum WatermarkAnchor {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct WatermarkSettings {
-    pub path: String,
+    /// Image watermark path (optional if text is set)
+    #[serde(default)]
+    pub path: Option<String>,
     pub anchor: WatermarkAnchor,
     pub scale: f32,
     pub spacing: f32,
     pub opacity: f32,
+    /// Text watermark (LR-style). Drawn when Some and non-empty.
+    #[serde(default)]
+    pub text: Option<String>,
+    /// Text color as #RRGGBB or #RRGGBBAA (default white)
+    #[serde(default)]
+    pub text_color: Option<String>,
 }
 
 fn apply_watermark(
     base_image: &mut DynamicImage,
     watermark_settings: &WatermarkSettings,
 ) -> Result<(), String> {
-    let watermark_img = image::open(&watermark_settings.path)
-        .map_err(|e| format!("Failed to open watermark image: {}", e))?;
-
     let (base_w, base_h) = base_image.dimensions();
     let base_min_dim = base_w.min(base_h) as f32;
-
-    let watermark_scale_factor =
-        (base_min_dim * (watermark_settings.scale / 100.0)) / watermark_img.width().max(1) as f32;
-    let new_wm_w = (watermark_img.width() as f32 * watermark_scale_factor).round() as u32;
-    let new_wm_h = (watermark_img.height() as f32 * watermark_scale_factor).round() as u32;
-
-    if new_wm_w == 0 || new_wm_h == 0 {
-        return Ok(());
-    }
-
-    let scaled_watermark =
-        watermark_img.resize_exact(new_wm_w, new_wm_h, image::imageops::FilterType::Lanczos3);
-    let mut scaled_watermark_rgba = scaled_watermark.to_rgba8();
-
-    let opacity_factor = (watermark_settings.opacity / 100.0).clamp(0.0, 1.0);
-    for pixel in scaled_watermark_rgba.pixels_mut() {
-        pixel[3] = (pixel[3] as f32 * opacity_factor) as u8;
-    }
-    let final_watermark = DynamicImage::ImageRgba8(scaled_watermark_rgba);
-
     let spacing_pixels = (base_min_dim * (watermark_settings.spacing / 100.0)) as i64;
-    let (wm_w, wm_h) = final_watermark.dimensions();
+    let opacity_factor = (watermark_settings.opacity / 100.0).clamp(0.0, 1.0);
 
-    let x = match watermark_settings.anchor {
+    // Text watermark (optional)
+    if let Some(text) = watermark_settings
+        .text
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        apply_text_watermark(
+            base_image,
+            text,
+            watermark_settings.anchor.clone(),
+            watermark_settings.scale,
+            spacing_pixels,
+            opacity_factor,
+            watermark_settings.text_color.as_deref(),
+        )?;
+    }
+
+    // Image watermark (optional)
+    let path = watermark_settings
+        .path
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+    if let Some(path) = path {
+        let watermark_img =
+            image::open(path).map_err(|e| format!("Failed to open watermark image: {}", e))?;
+
+        let watermark_scale_factor =
+            (base_min_dim * (watermark_settings.scale / 100.0)) / watermark_img.width().max(1) as f32;
+        let new_wm_w = (watermark_img.width() as f32 * watermark_scale_factor).round() as u32;
+        let new_wm_h = (watermark_img.height() as f32 * watermark_scale_factor).round() as u32;
+
+        if new_wm_w > 0 && new_wm_h > 0 {
+            let scaled_watermark =
+                watermark_img.resize_exact(new_wm_w, new_wm_h, image::imageops::FilterType::Lanczos3);
+            let mut scaled_watermark_rgba = scaled_watermark.to_rgba8();
+            for pixel in scaled_watermark_rgba.pixels_mut() {
+                pixel[3] = (pixel[3] as f32 * opacity_factor) as u8;
+            }
+            let final_watermark = DynamicImage::ImageRgba8(scaled_watermark_rgba);
+            let (wm_w, wm_h) = final_watermark.dimensions();
+            let (x, y) = watermark_position(
+                base_w,
+                base_h,
+                wm_w,
+                wm_h,
+                spacing_pixels,
+                &watermark_settings.anchor,
+            );
+            image::imageops::overlay(base_image, &final_watermark, x, y);
+        }
+    }
+
+    Ok(())
+}
+
+fn watermark_position(
+    base_w: u32,
+    base_h: u32,
+    wm_w: u32,
+    wm_h: u32,
+    spacing_pixels: i64,
+    anchor: &WatermarkAnchor,
+) -> (i64, i64) {
+    let x = match anchor {
         WatermarkAnchor::TopLeft | WatermarkAnchor::CenterLeft | WatermarkAnchor::BottomLeft => {
             spacing_pixels
         }
@@ -152,8 +214,7 @@ fn apply_watermark(
             base_w as i64 - wm_w as i64 - spacing_pixels
         }
     };
-
-    let y = match watermark_settings.anchor {
+    let y = match anchor {
         WatermarkAnchor::TopLeft | WatermarkAnchor::TopCenter | WatermarkAnchor::TopRight => {
             spacing_pixels
         }
@@ -164,9 +225,110 @@ fn apply_watermark(
         | WatermarkAnchor::BottomCenter
         | WatermarkAnchor::BottomRight => base_h as i64 - wm_h as i64 - spacing_pixels,
     };
+    (x, y)
+}
 
-    image::imageops::overlay(base_image, &final_watermark, x, y);
+fn parse_hex_color(s: &str) -> [u8; 4] {
+    let h = s.trim().trim_start_matches('#');
+    let parse2 = |i: usize| u8::from_str_radix(h.get(i..i + 2).unwrap_or("ff"), 16).unwrap_or(255);
+    if h.len() >= 8 {
+        [parse2(0), parse2(2), parse2(4), parse2(6)]
+    } else if h.len() >= 6 {
+        [parse2(0), parse2(2), parse2(4), 255]
+    } else {
+        [255, 255, 255, 255]
+    }
+}
 
+fn load_system_font() -> Result<ab_glyph::FontVec, String> {
+    use ab_glyph::FontVec;
+    let candidates = [
+        // macOS
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        "/Library/Fonts/Arial.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+        // Linux
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        // Windows
+        "C:\\\\Windows\\\\Fonts\\\\arial.ttf",
+        "C:\\\\Windows\\\\Fonts\\\\segoeui.ttf",
+    ];
+    for path in candidates {
+        if let Ok(bytes) = std::fs::read(path) {
+            if let Ok(font) = FontVec::try_from_vec(bytes) {
+                return Ok(font);
+            }
+        }
+    }
+    Err("No system font found for text watermark (install Arial/DejaVu)".to_string())
+}
+
+fn apply_text_watermark(
+    base_image: &mut DynamicImage,
+    text: &str,
+    anchor: WatermarkAnchor,
+    scale_pct: f32,
+    spacing_pixels: i64,
+    opacity_factor: f32,
+    color_hex: Option<&str>,
+) -> Result<(), String> {
+    use ab_glyph::PxScale;
+    use image::{Rgba, RgbaImage};
+    use imageproc::drawing::{draw_text_mut, text_size};
+
+    let font = load_system_font()?;
+    let (base_w, base_h) = base_image.dimensions();
+    let base_min = base_w.min(base_h) as f32;
+    // scale_pct 1–50 maps to roughly 1.5%–12% of min dimension as font height
+    let font_px = (base_min * (scale_pct.clamp(1.0, 50.0) / 100.0) * 0.45)
+        .clamp(10.0, base_min * 0.25);
+    let scale = PxScale::from(font_px);
+
+    let (tw, th) = text_size(scale, &font, text);
+    if tw == 0 || th == 0 {
+        return Ok(());
+    }
+
+    // Draw onto a transparent RGBA buffer with padding for shadow-ish clarity
+    let pad = (font_px * 0.15).ceil() as u32;
+    let canvas_w = tw + pad * 2;
+    let canvas_h = th + pad * 2;
+    let mut canvas = RgbaImage::from_pixel(canvas_w, canvas_h, Rgba([0, 0, 0, 0]));
+
+    let mut rgba = parse_hex_color(color_hex.unwrap_or("#FFFFFF"));
+    rgba[3] = (rgba[3] as f32 * opacity_factor).round().clamp(0.0, 255.0) as u8;
+
+    // Soft dark outline for readability on light areas
+    let outline = Rgba([0, 0, 0, (120.0 * opacity_factor) as u8]);
+    for (dx, dy) in [(-1i32, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1), (-1, 1), (1, -1)] {
+        draw_text_mut(
+            &mut canvas,
+            outline,
+            pad as i32 + dx,
+            pad as i32 + dy,
+            scale,
+            &font,
+            text,
+        );
+    }
+    draw_text_mut(
+        &mut canvas,
+        Rgba(rgba),
+        pad as i32,
+        pad as i32,
+        scale,
+        &font,
+        text,
+    );
+
+    let wm = DynamicImage::ImageRgba8(canvas);
+    let (wm_w, wm_h) = wm.dimensions();
+    let (x, y) = watermark_position(base_w, base_h, wm_w, wm_h, spacing_pixels, &anchor);
+    image::imageops::overlay(base_image, &wm, x, y);
+    let _ = font; // keep font alive through draws
     Ok(())
 }
 
@@ -282,7 +444,139 @@ fn apply_export_resize_and_watermark(
     if let Some(watermark_settings) = &export_settings.watermark {
         apply_watermark(&mut image, watermark_settings)?;
     }
+
+    // LR-style output sharpening after resize (simple unsharp-ish detail boost)
+    if let Some(mode) = export_settings.output_sharpening.as_deref() {
+        let amount = match mode.to_ascii_lowercase().as_str() {
+            "screen" => 0.35,
+            "matte" => 0.55,
+            "glossy" => 0.75,
+            _ => 0.0,
+        };
+        if amount > 0.0 {
+            apply_export_output_sharpen(&mut image, amount);
+        }
+    }
+
+    // Approximate gamut conversion (working space assumed ~sRGB display). Full ICC deferred.
+    if let Some(cs) = export_settings.color_space.as_deref() {
+        apply_export_color_space(&mut image, cs);
+    }
     Ok(image)
+}
+
+/// Approximate export color-space transform from sRGB-like working RGB.
+/// Not a full ICC pipeline — matrix/tone approximations for Adobe RGB / P3 / ProPhoto / Gray.
+fn apply_export_color_space(image: &mut DynamicImage, color_space: &str) {
+    let cs = color_space.to_ascii_lowercase();
+    if cs == "srgb" || cs.is_empty() {
+        return;
+    }
+    let rgba = image.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    let src = rgba.as_raw();
+    let mut out = src.clone();
+
+    // Linearize approx (gamma 2.2), apply 3x3, re-encode gamma 2.2, clamp.
+    // Matrices map sRGB → target (approximate primaries; relative colorimetric intent shell).
+    let matrix: [[f32; 3]; 3] = if cs.contains("adobe") {
+        // sRGB → Adobe RGB (approx)
+        [
+            [0.715_117, 0.284_883, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.041_169, 0.958_831],
+        ]
+    } else if cs.contains("p3") || cs.contains("display") {
+        // sRGB → Display P3 (approx)
+        [
+            [0.822_462, 0.177_538, 0.0],
+            [0.033_194, 0.966_806, 0.0],
+            [0.017_083, 0.072_397, 0.910_520],
+        ]
+    } else if cs.contains("prophoto") {
+        // sRGB → ProPhoto-ish (very wide; soft matrix)
+        [
+            [0.529_317, 0.330_022, 0.140_661],
+            [0.098_368, 0.873_465, 0.028_167],
+            [0.016_875, 0.117_659, 0.865_466],
+        ]
+    } else if cs.contains("gray") || cs.contains("grey") {
+        // handled below as luminance
+        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+    } else {
+        return;
+    };
+
+    let to_linear = |c: f32| -> f32 {
+        let c = (c / 255.0).clamp(0.0, 1.0);
+        c.powf(2.2)
+    };
+    let to_gamma = |c: f32| -> u8 {
+        let c = c.clamp(0.0, 1.0).powf(1.0 / 2.2);
+        (c * 255.0).round().clamp(0.0, 255.0) as u8
+    };
+
+    let gray = cs.contains("gray") || cs.contains("grey");
+    for i in (0..src.len()).step_by(4) {
+        let r = to_linear(src[i] as f32);
+        let g = to_linear(src[i + 1] as f32);
+        let b = to_linear(src[i + 2] as f32);
+        if gray {
+            // Rec.709 luminance
+            let y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            let y8 = to_gamma(y);
+            out[i] = y8;
+            out[i + 1] = y8;
+            out[i + 2] = y8;
+        } else {
+            let nr = matrix[0][0] * r + matrix[0][1] * g + matrix[0][2] * b;
+            let ng = matrix[1][0] * r + matrix[1][1] * g + matrix[1][2] * b;
+            let nb = matrix[2][0] * r + matrix[2][1] * g + matrix[2][2] * b;
+            out[i] = to_gamma(nr);
+            out[i + 1] = to_gamma(ng);
+            out[i + 2] = to_gamma(nb);
+        }
+        // alpha unchanged
+    }
+    if let Some(buf) = image::RgbaImage::from_raw(w, h, out) {
+        *image = DynamicImage::ImageRgba8(buf);
+    }
+}
+
+/// Lightweight output sharpening for export (not full LR Print sharpening).
+fn apply_export_output_sharpen(image: &mut DynamicImage, amount: f32) {
+    let rgba = image.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    if w < 3 || h < 3 {
+        return;
+    }
+    let src = rgba.as_raw();
+    let mut out = src.clone();
+    let amount = amount.clamp(0.0, 1.5);
+    // 3x3 unsharp: center - average of neighbors
+    for y in 1..(h as usize - 1) {
+        for x in 1..(w as usize - 1) {
+            for c in 0..3 {
+                let idx = |xx: usize, yy: usize| (yy * w as usize + xx) * 4 + c;
+                let center = src[idx(x, y)] as f32;
+                let mut sum = 0.0f32;
+                for dy in 0..3u8 {
+                    for dx in 0..3u8 {
+                        if dx == 1 && dy == 1 {
+                            continue;
+                        }
+                        sum += src[idx(x + dx as usize - 1, y + dy as usize - 1)] as f32;
+                    }
+                }
+                let blur = sum / 8.0;
+                let v = (center + (center - blur) * amount).clamp(0.0, 255.0);
+                out[idx(x, y)] = v as u8;
+            }
+        }
+    }
+    if let Some(buf) = image::RgbaImage::from_raw(w, h, out) {
+        *image = DynamicImage::ImageRgba8(buf);
+    }
 }
 
 fn ensure_export_not_cancelled(cancellation_token: &AtomicBool) -> Result<(), String> {
@@ -486,7 +780,7 @@ fn save_image_with_metadata(
         .unwrap_or("")
         .to_lowercase();
 
-    let mut image_bytes = encode_image_to_bytes(image, &extension, export_settings.jpeg_quality)?;
+    let mut image_bytes = encode_with_optional_size_limit(image, &extension, export_settings)?;
 
     exif_processing::write_image_with_metadata(
         &mut image_bytes,
@@ -494,7 +788,35 @@ fn save_image_with_metadata(
         &extension,
         export_settings.keep_metadata,
         export_settings.strip_gps,
+        export_settings.color_space.as_deref(),
+        export_settings.resolution_dpi,
     )?;
+
+    // If metadata push exceeded the limit, re-encode at lower quality once more for lossy formats.
+    if let Some(limit_kb) = export_settings.limit_file_size_kb {
+        let limit = (limit_kb as usize).saturating_mul(1024).max(1024);
+        if image_bytes.len() > limit {
+            let lossy = matches!(
+                extension.as_str(),
+                "jpg" | "jpeg" | "webp" | "jxl"
+            );
+            if lossy {
+                // Binary search again targeting final size with a metadata headroom (~8–32KB)
+                let headroom = 24 * 1024;
+                let target = limit.saturating_sub(headroom).max(512);
+                image_bytes = encode_to_size_budget(image, &extension, export_settings.jpeg_quality, target)?;
+                exif_processing::write_image_with_metadata(
+                    &mut image_bytes,
+                    source_path_str,
+                    &extension,
+                    export_settings.keep_metadata,
+                    export_settings.strip_gps,
+                    export_settings.color_space.as_deref(),
+                    export_settings.resolution_dpi,
+                )?;
+            }
+        }
+    }
 
     #[cfg(target_os = "android")]
     {
@@ -577,6 +899,66 @@ fn encode_grayscale_to_png(bitmap: &GrayImage) -> Result<Vec<u8>, String> {
         .write_to(&mut cursor, ImageFormat::Png)
         .map_err(|e| e.to_string())?;
     Ok(buf)
+}
+
+/// Encode image, optionally binary-searching quality to stay under `limit_file_size_kb`.
+fn encode_with_optional_size_limit(
+    image: &DynamicImage,
+    extension: &str,
+    export_settings: &ExportSettings,
+) -> Result<Vec<u8>, String> {
+    let q = export_settings.jpeg_quality;
+    let lossy = matches!(extension, "jpg" | "jpeg" | "webp" | "jxl");
+    if let (true, Some(limit_kb)) = (lossy, export_settings.limit_file_size_kb) {
+        // Leave headroom for EXIF/XMP rewrite
+        let target = (limit_kb as usize)
+            .saturating_mul(1024)
+            .saturating_sub(24 * 1024)
+            .max(512);
+        encode_to_size_budget(image, extension, q, target)
+    } else {
+        encode_image_to_bytes(image, extension, q)
+    }
+}
+
+/// Binary-search quality so encoded bytes length <= `target_bytes` (best effort).
+fn encode_to_size_budget(
+    image: &DynamicImage,
+    extension: &str,
+    preferred_quality: u8,
+    target_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    let mut lo: u8 = 1;
+    let mut hi: u8 = preferred_quality.max(1).min(100);
+    let mut best = encode_image_to_bytes(image, extension, hi)?;
+    if best.len() <= target_bytes {
+        return Ok(best);
+    }
+    // Prefer the highest quality that still fits
+    let mut best_fit: Option<Vec<u8>> = None;
+    for _ in 0..8 {
+        if lo > hi {
+            break;
+        }
+        let mid = lo + (hi - lo) / 2;
+        let bytes = encode_image_to_bytes(image, extension, mid)?;
+        if bytes.len() <= target_bytes {
+            best_fit = Some(bytes);
+            lo = mid.saturating_add(1);
+        } else {
+            best = bytes;
+            if mid == 0 {
+                break;
+            }
+            hi = mid.saturating_sub(1);
+        }
+    }
+    if let Some(fit) = best_fit {
+        Ok(fit)
+    } else {
+        // Could not fit; return lowest quality attempt
+        encode_image_to_bytes(image, extension, 1).or(Ok(best))
+    }
 }
 
 fn encode_image_to_bytes(
@@ -1337,6 +1719,10 @@ pub async fn run_headless_export(
         watermark: None,
         export_masks: false,
         preserve_folders: true,
+        color_space: Some("srgb".to_string()),
+        output_sharpening: Some("none".to_string()),
+        resolution_dpi: Some(240),
+        limit_file_size_kb: None,
     };
 
     let mut custom_adjustments = None;

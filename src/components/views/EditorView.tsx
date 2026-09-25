@@ -2,6 +2,7 @@ import { type RefObject, type PointerEvent as ReactPointerEvent } from 'react';
 import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
 import { useShallow } from 'zustand/react/shallow';
 import clsx from 'clsx';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 import Editor from '../panel/Editor';
 import BottomBar from '../panel/BottomBar';
@@ -12,8 +13,12 @@ import MetadataPanel from '../panel/right/MetadataPanel';
 import CropPanel from '../panel/right/CropPanel';
 import MasksPanel from '../panel/right/MasksPanel';
 import AIPanel from '../panel/right/AIPanel';
-import PresetsPanel from '../panel/right/PresetsPanel';
+import PresetBrowserModal from '../modals/PresetBrowserModal';
 import ExportPanel from '../panel/right/ExportPanel';
+import DevelopLeftPanel, { DevelopLeftRail } from '../panel/DevelopLeftPanel';
+import DevelopToolsBar from '../panel/editor/DevelopToolsBar';
+import DevelopHistogram from '../panel/right/DevelopHistogram';
+import SoftProofBar from '../panel/editor/SoftProofBar';
 
 import { useEditorStore } from '../../store/useEditorStore';
 import { useUIStore } from '../../store/useUIStore';
@@ -57,7 +62,11 @@ interface EditorViewProps {
   handleClearSelection: () => void;
   handleCopyAdjustments: () => void;
   handlePasteAdjustments: () => void;
+  handleMatchPrevious?: () => void;
+  handleSyncSettings?: () => void;
   handleRate: (...args: any) => void;
+  handleSetColorLabel: (...args: any) => void;
+  handleSetFlag: (...args: any) => void;
   handleZoomChange: (zoom: number) => void;
   handleRightPanelSelect: (panelId: Panel) => void;
   requestThumbnails: any;
@@ -80,7 +89,11 @@ export default function EditorView({
   handleClearSelection,
   handleCopyAdjustments,
   handlePasteAdjustments,
+  handleMatchPrevious,
+  handleSyncSettings,
   handleRate,
+  handleSetColorLabel,
+  handleSetFlag,
   handleZoomChange,
   handleRightPanelSelect,
   requestThumbnails,
@@ -97,6 +110,7 @@ export default function EditorView({
     uiVisibility,
     bottomPanelHeight,
     rightPanelWidth,
+    developLeftPanelWidth,
     activeRightPanel,
     renderedRightPanel,
     slideDirection,
@@ -108,6 +122,7 @@ export default function EditorView({
       uiVisibility: state.uiVisibility,
       bottomPanelHeight: state.bottomPanelHeight,
       rightPanelWidth: state.rightPanelWidth,
+      developLeftPanelWidth: state.developLeftPanelWidth,
       activeRightPanel: state.activeRightPanel,
       renderedRightPanel: state.renderedRightPanel,
       slideDirection: state.slideDirection,
@@ -168,8 +183,15 @@ export default function EditorView({
       onCopy={handleCopyAdjustments}
       onOpenCopyPasteSettings={() => setUI({ isCopyPasteSettingsModalOpen: true })}
       onImageSelect={handleImageClick}
+      onImageDoubleClick={(path: string) => handleImageClick(path, { shiftKey: false, metaKey: false, ctrlKey: false })}
       onPaste={() => handlePasteAdjustments()}
+      onMatchPrevious={handleMatchPrevious}
+      isMatchPreviousDisabled={!useEditorStore.getState().previousDevelopAdjustments}
+      onSyncSettings={handleSyncSettings}
+      isSyncSettingsDisabled={(multiSelectedPaths?.length || 0) < 2}
       onRate={handleRate}
+      onSetColorLabel={handleSetColorLabel}
+      onSetFlag={handleSetFlag}
       onRequestThumbnails={requestThumbnails}
       onZoomChange={handleZoomChange}
       rating={imageRatings[selectedImage?.path || ''] || 0}
@@ -219,14 +241,6 @@ export default function EditorView({
             {renderedRightPanel === Panel.Metadata && <MetadataPanel />}
             {renderedRightPanel === Panel.Crop && <CropPanel />}
             {renderedRightPanel === Panel.Masks && <MasksPanel />}
-            {renderedRightPanel === Panel.Presets && (
-              <PresetsPanel
-                onNavigateToCommunity={() => {
-                  handleBackToLibrary();
-                  setUI({ activeView: 'community' });
-                }}
-              />
-            )}
             {renderedRightPanel === Panel.Export && (
               <ExportPanel
                 exportState={exportState}
@@ -246,8 +260,29 @@ export default function EditorView({
   );
 
   return (
-    <div className={clsx('flex grow h-full min-h-0', isCompactPortrait ? 'flex-col gap-2' : 'flex-row')}>
+    <div className={clsx('flex grow h-full min-h-0 gap-2', isCompactPortrait ? 'flex-col' : 'flex-row')}>
+      {!isCompactPortrait && !isFullScreen && (
+        uiVisibility.developLeft !== false ? (
+          <DevelopLeftPanel
+            isInstantTransition={isInstantTransition}
+            width={developLeftPanelWidth || 220}
+          />
+        ) : (
+          <DevelopLeftRail
+            onShow={() =>
+              setUI((state) => ({
+                uiVisibility: { ...state.uiVisibility, developLeft: true },
+              }))
+            }
+          />
+        )
+      )}
       <div className={clsx('flex-1 flex flex-col min-w-0', isCompactPortrait && 'min-h-0')}>
+        {!isFullScreen && (
+          <>
+            <SoftProofBar />
+          </>
+        )}
         {editorNode}
         {!isCompactPortrait && editorBottomBarNode}
       </div>
@@ -292,8 +327,20 @@ export default function EditorView({
           </>
         ) : (
           <>
-            <Resizer direction={Orientation.Vertical} onMouseDown={createResizeHandler('right', rightPanelWidth)} />
+            {activeRightPanel && (
+              <Resizer direction={Orientation.Vertical} onMouseDown={createResizeHandler('right', rightPanelWidth)} />
+            )}
             <div className="flex bg-bg-secondary rounded-lg h-full">
+              <button
+                type="button"
+                onClick={() =>
+                  activeRightPanel ? setUI({ activeRightPanel: null }) : handleRightPanelSelect(Panel.Adjustments)
+                }
+                className="h-full w-3 shrink-0 flex items-center justify-center text-text-secondary/50 hover:text-text-primary hover:bg-surface/50 rounded-l-lg"
+                aria-label={activeRightPanel ? 'Hide right panel' : 'Show right panel'}
+              >
+                {activeRightPanel ? <ChevronRight size={11} /> : <ChevronLeft size={11} />}
+              </button>
               <div
                 className={clsx(
                   'h-full overflow-hidden',
@@ -301,26 +348,27 @@ export default function EditorView({
                 )}
                 style={{ width: activeRightPanel ? `${rightPanelWidth}px` : '0px' }}
               >
-                <div style={{ width: `${rightPanelWidth}px` }} className="h-full">
-                  {editorRightPanelContent}
+                {/* Lightroom Classic right rail: histogram → tool strip → tool / panels */}
+                <div style={{ width: `${rightPanelWidth}px` }} className="h-full flex flex-col">
+                  <DevelopHistogram />
+                  <DevelopToolsBar
+                    onPanelSelect={(id) => {
+                      if (id === activeRightPanel) {
+                        if (id !== Panel.Adjustments) handleRightPanelSelect(Panel.Adjustments);
+                        return;
+                      }
+                      handleRightPanelSelect(id);
+                    }}
+                    isInstantTransition={isInstantTransition}
+                  />
+                  <div className="flex-1 min-h-0">{editorRightPanelContent}</div>
                 </div>
-              </div>
-              <div
-                className={clsx(
-                  'h-full border-l transition-colors',
-                  activeRightPanel ? 'border-surface' : 'border-transparent',
-                )}
-              >
-                <RightPanelSwitcher
-                  activePanel={activeRightPanel}
-                  onPanelSelect={handleRightPanelSelect}
-                  isInstantTransition={isInstantTransition}
-                />
               </div>
             </div>
           </>
         )}
       </div>
+      <PresetBrowserModal />
     </div>
   );
 }

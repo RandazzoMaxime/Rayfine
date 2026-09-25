@@ -158,6 +158,7 @@ const BrushTools = ({
       <Slider
         defaultValue={100}
         label={t('editor.masks.brush.size')}
+        data-tooltip={t('editor.masks.brush.sizeTip' as any, { defaultValue: '[ ] or Ctrl+↑/↓' })}
         max={200}
         min={1}
         onChange={(e: any) => onSettingsChange((s: any) => ({ ...s, size: Number(e.target.value) }))}
@@ -169,6 +170,7 @@ const BrushTools = ({
       <Slider
         defaultValue={50}
         label={t('editor.masks.brush.feather')}
+        data-tooltip={t('editor.masks.brush.featherTip' as any, { defaultValue: 'Ctrl+Shift+↑/↓' })}
         max={100}
         min={0}
         onChange={(e: any) => onSettingsChange((s: any) => ({ ...s, feather: Number(e.target.value) }))}
@@ -179,13 +181,17 @@ const BrushTools = ({
       />
       <div className="grid grid-cols-2 gap-2 pt-2">
         <button
+          type="button"
           className={`p-2 rounded-md text-sm font-medium transition-colors flex items-center justify-center gap-2 ${settings.tool === ToolType.Brush ? 'text-primary bg-surface' : 'bg-surface text-text-secondary hover:bg-card-active'}`}
+          data-tooltip={t('editor.masks.brush.brushTip' as any, { defaultValue: 'Brush (E)' })}
           onClick={() => onSettingsChange((s: any) => ({ ...s, tool: ToolType.Brush }))}
         >
           {t('editor.masks.brush.brush')}
         </button>
         <button
+          type="button"
           className={`p-2 rounded-md text-sm font-medium transition-colors flex items-center justify-center gap-2 ${settings.tool === ToolType.Eraser ? 'text-primary bg-surface' : 'bg-surface text-text-secondary hover:bg-card-active'}`}
+          data-tooltip={t('editor.masks.brush.eraserTip' as any, { defaultValue: 'Eraser (E)' })}
           onClick={() => onSettingsChange((s: any) => ({ ...s, tool: ToolType.Eraser }))}
         >
           {t('editor.masks.brush.eraser')}
@@ -258,6 +264,7 @@ export default function MasksPanel() {
     waveform,
     activeWaveformChannel,
     waveformHeight,
+    showMaskOverlay,
     setEditor,
   } = useEditorStore(
     useShallow((state) => ({
@@ -273,6 +280,7 @@ export default function MasksPanel() {
       waveform: state.waveform,
       activeWaveformChannel: state.activeWaveformChannel,
       waveformHeight: state.waveformHeight,
+      showMaskOverlay: state.showMaskOverlay !== false,
       setEditor: state.setEditor,
     })),
   );
@@ -747,6 +755,28 @@ export default function MasksPanel() {
     insertMaskContainer(pastedContainer, containerIndex >= 0 ? containerIndex + 1 : undefined);
   };
 
+  useEffect(() => {
+    const onCopy = () => {
+      if (!activeMaskContainerId) return;
+      const container = adjustments.masks?.find((m) => m.id === activeMaskContainerId);
+      if (container) copyMaskToClipboard(container);
+    };
+    const onPaste = () => handlePasteMask(activeMaskContainerId || undefined);
+    const onDup = () => {
+      if (!activeMaskContainerId) return;
+      const container = adjustments.masks?.find((m) => m.id === activeMaskContainerId);
+      if (container) handleDuplicateContainer(container);
+    };
+    window.addEventListener('rustroom:copy-mask', onCopy as EventListener);
+    window.addEventListener('rustroom:paste-mask', onPaste as EventListener);
+    window.addEventListener('rustroom:duplicate-mask', onDup as EventListener);
+    return () => {
+      window.removeEventListener('rustroom:copy-mask', onCopy as EventListener);
+      window.removeEventListener('rustroom:paste-mask', onPaste as EventListener);
+      window.removeEventListener('rustroom:duplicate-mask', onDup as EventListener);
+    };
+  }, [activeMaskContainerId, adjustments.masks, copiedMask]);
+
   const handleDuplicateSubMask = (containerId: string, subMask: SubMask, insertIndex?: number) => {
     const duplicatedSubMask = cloneSubMaskData(subMask, { rename: true });
 
@@ -945,9 +975,24 @@ export default function MasksPanel() {
       collisionDetection={pointerWithin}
     >
       <div className="flex flex-col h-full select-none overflow-hidden" onContextMenu={handlePanelContextMenu}>
-        <div className="p-4 flex justify-between items-center shrink-0 border-b border-surface">
+        <div className="px-3 py-2 flex justify-between items-center shrink-0 border-b border-border-color/40">
           <Text variant={TextVariants.title}>{t('editor.masks.maskingTitle')}</Text>
           <div className="flex items-center gap-1">
+            <button
+              type="button"
+              className={clsx(
+                'p-2 rounded-full transition-colors',
+                showMaskOverlay ? 'bg-surface hover:bg-card-active' : 'hover:bg-surface opacity-60',
+              )}
+              onClick={() => setEditor({ showMaskOverlay: !showMaskOverlay })}
+              data-tooltip={
+                showMaskOverlay
+                  ? t('editor.masks.hideOverlayTip' as any, { defaultValue: 'Hide mask overlay (O)' })
+                  : t('editor.masks.showOverlayTip' as any, { defaultValue: 'Show mask overlay (O)' })
+              }
+            >
+              {showMaskOverlay ? <Eye size={18} /> : <EyeOff size={18} />}
+            </button>
             <button
               className={clsx(
                 'p-2 rounded-full transition-colors',
@@ -968,34 +1013,6 @@ export default function MasksPanel() {
           </div>
         </div>
 
-        <AnimatePresence initial={false}>
-          {isWaveformVisible && (
-            <motion.div
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: waveformHeight || 256, opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              transition={{ duration: isResizingWaveform ? 0 : 0.2, ease: 'easeOut' }}
-              className="shrink-0 flex flex-col relative border-b border-surface overflow-hidden"
-            >
-              <div className="grow w-full h-full p-4 pb-2 min-h-0">
-                <Waveform
-                  waveformData={waveform || null}
-                  histogram={histogram}
-                  displayMode={activeWaveformChannel || 'luma'}
-                  setDisplayMode={setActiveWaveformChannel}
-                  showClipping={adjustments.showClipping || false}
-                  onToggleClipping={() => {
-                    setAdjustments((prev: Adjustments) => ({
-                      ...prev,
-                      showClipping: !prev.showClipping,
-                    }));
-                  }}
-                />
-              </div>
-              <Resizer direction={Orientation.Horizontal} onMouseDown={handleWaveformResize} />
-            </motion.div>
-          )}
-        </AnimatePresence>
 
         <div className="flex-1 overflow-y-auto overflow-x-hidden flex flex-col min-h-0 p-4">
           <AnimatePresence mode="wait">
@@ -1494,7 +1511,11 @@ function ContainerRow({
             className="p-1 hover:text-text-primary text-text-secondary"
             onMouseEnter={() => setIsMaskControlHovered(true)}
             onMouseLeave={() => setIsMaskControlHovered(false)}
-            data-tooltip={container.visible ? t('editor.masks.actions.hideMask') : t('editor.masks.actions.showMask')}
+            data-tooltip={
+              container.visible
+                ? t('editor.masks.actions.hideMaskTip' as any, { defaultValue: 'Hide mask (H)' })
+                : t('editor.masks.actions.showMaskTip' as any, { defaultValue: 'Show mask (H)' })
+            }
             onClick={(e) => {
               e.stopPropagation();
               updateContainer(container.id, { visible: !container.visible });
@@ -2082,6 +2103,7 @@ function SettingsPanel({
           <Switch
             checked={!!(isComponentMode ? activeSubMask.invert : displayContainer.invert)}
             label={isComponentMode ? t('editor.masks.settings.invertComponent') : t('editor.masks.settings.invertMask')}
+            data-tooltip={t('editor.masks.settings.invertTip' as any, { defaultValue: 'Invert mask (I)' })}
             onChange={(v) =>
               isComponentMode ? updateSubMask(activeSubMask.id, { invert: v }) : handleMaskPropertyChange('invert', v)
             }

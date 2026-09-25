@@ -73,7 +73,7 @@ const BokehShapeSwitch = ({ selectedShape, onShapeChange }: BokehShapeSwitchProp
   };
 
   return (
-    <div className="flex flex-col gap-2 mt-3">
+    <div className="flex flex-col gap-1.5 mt-2">
       <div
         className="grid w-fit cursor-pointer"
         onClick={handleReset}
@@ -195,9 +195,9 @@ export default function EffectsPanel({
   const adjustmentVisibility = appSettings?.adjustmentVisibility || {};
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-2">
       <div className="p-2 bg-bg-tertiary rounded-md">
-        <Text variant={TextVariants.heading} className="mb-2">
+        <Text variant={TextVariants.heading} className="mb-1">
           {t('adjustments.effects.creative')}
         </Text>
 
@@ -235,9 +235,9 @@ export default function EffectsPanel({
       </div>
 
       {!isForMask && (
-        <div className="space-y-4">
+        <div className="space-y-2">
           <div className="p-2 bg-bg-tertiary rounded-md">
-            <Text variant={TextVariants.heading} className="mb-2">
+            <Text variant={TextVariants.heading} className="mb-1">
               {t('adjustments.effects.lensBlur')}
             </Text>
 
@@ -253,7 +253,7 @@ export default function EffectsPanel({
               }`}
             >
               <div className="overflow-hidden">
-                <div className="space-y-4 pt-4 pb-1">
+                <div className="space-y-2 pt-2 pb-1">
                   {isGeneratingDepth ? (
                     <div className="flex flex-col items-center justify-center gap-1 p-4 text-text-secondary text-center">
                       <div className="flex items-center gap-2">
@@ -335,7 +335,7 @@ export default function EffectsPanel({
           </div>
 
           <div className="p-2 bg-bg-tertiary rounded-md">
-            <Text variant={TextVariants.heading} className="mb-2">
+            <Text variant={TextVariants.heading} className="mb-1">
               {t('adjustments.effects.lut')}
             </Text>
             <LUTControl
@@ -352,9 +352,39 @@ export default function EffectsPanel({
 
           {adjustmentVisibility.vignette !== false && (
             <div className="p-2 bg-bg-tertiary rounded-md">
-              <Text variant={TextVariants.heading} className="mb-2">
+              <Text variant={TextVariants.heading} className="mb-1">
                 {t('adjustments.effects.vignette')}
               </Text>
+              <div className="flex flex-wrap gap-0.5 mb-1.5">
+                {(
+                  [
+                    [0, t('adjustments.effects.vignetteStyleHighlight' as any)],
+                    [1, t('adjustments.effects.vignetteStyleColor' as any)],
+                    [2, t('adjustments.effects.vignetteStylePaint' as any)],
+                  ] as const
+                ).map(([value, label]) => {
+                  const active = Number((adjustments as any).vignetteStyle ?? 1) === value;
+                  return (
+                    <button
+                      key={value}
+                      type="button"
+                      className={`px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wide transition-colors ${
+                        active
+                          ? 'bg-card-active text-text-primary'
+                          : 'text-text-secondary hover:text-text-primary hover:bg-surface/80'
+                      }`}
+                      onClick={() =>
+                        setAdjustments((prev: Partial<Adjustments>) => ({
+                          ...prev,
+                          vignetteStyle: value,
+                        }))
+                      }
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
               <Slider
                 label={t('adjustments.effects.amount')}
                 max={100}
@@ -395,12 +425,21 @@ export default function EffectsPanel({
                 onDragStateChange={onDragStateChange}
                 fillOrigin="min"
               />
+              <Slider
+                label={t('adjustments.effects.highlights' as any)}
+                max={100}
+                min={-100}
+                onChange={(e: any) => handleAdjustmentChange('vignetteHighlightContrast', e.target.value)}
+                step={1}
+                value={(adjustments as any).vignetteHighlightContrast ?? 0}
+                onDragStateChange={onDragStateChange}
+              />
             </div>
           )}
 
           {adjustmentVisibility.grain !== false && (
             <div className="p-2 bg-bg-tertiary rounded-md">
-              <Text variant={TextVariants.heading} className="mb-2">
+              <Text variant={TextVariants.heading} className="mb-1">
                 {t('adjustments.effects.grain')}
               </Text>
               <Slider
@@ -434,6 +473,28 @@ export default function EffectsPanel({
                 onDragStateChange={onDragStateChange}
                 fillOrigin="min"
               />
+              <div className="flex items-center justify-between gap-2 mt-1">
+                <span className="text-[10px] text-text-secondary uppercase tracking-wide">
+                  {t('adjustments.effects.grainSeed' as any)}
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-text-secondary/80 tabular-nums max-w-[5.5rem] truncate">
+                    {(adjustments as any).grainSeed != null ? String((adjustments as any).grainSeed) : '—'}
+                  </span>
+                  <button
+                    type="button"
+                    className="px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wide bg-surface hover:bg-card-active text-text-secondary hover:text-text-primary"
+                    onClick={() =>
+                      setAdjustments((prev: Partial<Adjustments>) => ({
+                        ...prev,
+                        grainSeed: Math.floor(Math.random() * 2147483647),
+                      }))
+                    }
+                  >
+                    {t('adjustments.effects.randomize' as any)}
+                  </button>
+                </div>
+              </div>
             </div>
           )}
         </div>

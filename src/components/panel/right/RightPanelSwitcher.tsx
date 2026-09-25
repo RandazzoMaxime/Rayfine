@@ -5,7 +5,6 @@ import {
   Crop,
   Layers,
   Paintbrush,
-  SwatchBook,
   FileInput,
   type LucideIcon,
 } from 'lucide-react';
@@ -25,18 +24,16 @@ interface RightPanelSwitcherProps {
   layout?: 'horizontal' | 'vertical';
 }
 
+// Tool order loosely mirrors Develop workflow: adjust → geometry/local → metadata → export (presets live in the Develop left panel)
 const panelGroups: Array<Array<PanelOptions>> = [
-  [{ id: Panel.Metadata, icon: Info, title: 'editor.switcher.tooltips.info' }],
+  [{ id: Panel.Adjustments, icon: SlidersHorizontal, title: 'editor.switcher.tooltips.adjust' }],
   [
-    { id: Panel.Adjustments, icon: SlidersHorizontal, title: 'editor.switcher.tooltips.adjust' },
     { id: Panel.Crop, icon: Crop, title: 'editor.switcher.tooltips.crop' },
     { id: Panel.Masks, icon: Layers, title: 'editor.switcher.tooltips.masks' },
     { id: Panel.Ai, icon: Paintbrush, title: 'editor.switcher.tooltips.inpaint' },
   ],
-  [
-    { id: Panel.Presets, icon: SwatchBook, title: 'editor.switcher.tooltips.presets' },
-    { id: Panel.Export, icon: FileInput, title: 'editor.switcher.tooltips.export' },
-  ],
+  [{ id: Panel.Metadata, icon: Info, title: 'editor.switcher.tooltips.info' }],
+  [{ id: Panel.Export, icon: FileInput, title: 'editor.switcher.tooltips.export' }],
 ];
 
 export default function RightPanelSwitcher({
@@ -60,7 +57,7 @@ export default function RightPanelSwitcher({
           )}
           {group.map(({ id, icon: Icon, title }) => (
             <button
-              className={`relative rounded-md transition-colors duration-200 ${isHorizontal ? 'p-2 shrink-0' : 'p-2'} ${
+              className={`relative rounded-md transition-colors duration-150 ${isHorizontal ? 'p-1.5 shrink-0' : 'p-1.5'} ${
                 activePanel === id
                   ? 'text-text-primary'
                   : 'text-text-secondary hover:bg-surface hover:text-text-primary'

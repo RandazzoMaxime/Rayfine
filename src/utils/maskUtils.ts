@@ -50,3 +50,39 @@ export const createSubMask = (
       return { ...common, parameters: {} };
   }
 };
+
+
+/**
+ * Convert XMP-imported mask geometry from normalized 0–1 coords to image pixels.
+ * CRS CircularGradient/Gradient use 0–1; RapidRAW canvas expects pixel space.
+ */
+export function denormalizeMaskCoordinates<T extends { masks?: any[] }>(
+  adjustments: T,
+  width: number,
+  height: number,
+): T {
+  if (!adjustments?.masks?.length || !width || !height) return adjustments;
+  const masks = adjustments.masks.map((container: any) => {
+    if (!container?.subMasks?.length) return container;
+    const subMasks = container.subMasks.map((sub: any) => {
+      const p = sub?.parameters;
+      if (!p || !p.normalized) return sub;
+      const next = { ...p };
+      if (sub.type === 'radial' || sub.type === 'Radial') {
+        if (typeof next.centerX === 'number' && next.centerX <= 1.5) next.centerX = next.centerX * width;
+        if (typeof next.centerY === 'number' && next.centerY <= 1.5) next.centerY = next.centerY * height;
+        if (typeof next.radiusX === 'number' && next.radiusX <= 1.5) next.radiusX = next.radiusX * width;
+        if (typeof next.radiusY === 'number' && next.radiusY <= 1.5) next.radiusY = next.radiusY * height;
+      } else if (sub.type === 'linear' || sub.type === 'Linear') {
+        if (typeof next.startX === 'number' && next.startX <= 1.5) next.startX = next.startX * width;
+        if (typeof next.startY === 'number' && next.startY <= 1.5) next.startY = next.startY * height;
+        if (typeof next.endX === 'number' && next.endX <= 1.5) next.endX = next.endX * width;
+        if (typeof next.endY === 'number' && next.endY <= 1.5) next.endY = next.endY * height;
+      }
+      delete next.normalized;
+      return { ...sub, parameters: next };
+    });
+    return { ...container, subMasks };
+  });
+  return { ...adjustments, masks };
+}

@@ -1,0 +1,122 @@
+<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Adobe XMP Core 5.6-c140 79.160451, 2017/05/06-01:08:21        ">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+   crs:PresetType="Look"
+   crs:Cluster=""
+   crs:UUID="0B5C76F79F9742E9A963FACCC08A3AA4"
+   crs:SupportsAmount="True"
+   crs:SupportsColor="True"
+   crs:SupportsMonochrome="True"
+   crs:SupportsHighDynamicRange="True"
+   crs:SupportsNormalDynamicRange="True"
+   crs:SupportsSceneReferred="True"
+   crs:SupportsOutputReferred="True"
+   crs:CameraModelRestriction=""
+   crs:Copyright=""
+   crs:ContactInfo=""
+   crs:Version="13.2"
+   crs:ProcessVersion="11.0"
+   crs:Contrast2012="+50"
+   crs:Highlights2012="-17"
+   crs:Shadows2012="+43"
+   crs:Whites2012="-22"
+   crs:Blacks2012="+13"
+   crs:Clarity2012="+1"
+   crs:Vibrance="+5"
+   crs:Saturation="-5"
+   crs:ParametricShadows="+34"
+   crs:ParametricDarks="+13"
+   crs:ParametricLights="+2"
+   crs:ParametricHighlights="-21"
+   crs:ParametricShadowSplit="10"
+   crs:ParametricMidtoneSplit="51"
+   crs:ParametricHighlightSplit="90"
+   crs:HueAdjustmentRed="+3"
+   crs:HueAdjustmentOrange="+3"
+   crs:HueAdjustmentYellow="-2"
+   crs:HueAdjustmentGreen="-8"
+   crs:HueAdjustmentAqua="+23"
+   crs:HueAdjustmentBlue="-6"
+   crs:HueAdjustmentPurple="+14"
+   crs:HueAdjustmentMagenta="+15"
+   crs:SaturationAdjustmentRed="-3"
+   crs:SaturationAdjustmentOrange="+3"
+   crs:SaturationAdjustmentYellow="-22"
+   crs:SaturationAdjustmentGreen="-29"
+   crs:SaturationAdjustmentAqua="-27"
+   crs:SaturationAdjustmentBlue="-26"
+   crs:SaturationAdjustmentPurple="-15"
+   crs:SaturationAdjustmentMagenta="-10"
+   crs:LuminanceAdjustmentRed="-9"
+   crs:LuminanceAdjustmentOrange="+8"
+   crs:LuminanceAdjustmentYellow="+3"
+   crs:LuminanceAdjustmentGreen="-28"
+   crs:LuminanceAdjustmentAqua="+8"
+   crs:LuminanceAdjustmentBlue="-36"
+   crs:LuminanceAdjustmentPurple="+10"
+   crs:LuminanceAdjustmentMagenta="+10"
+   crs:ConvertToGrayscale="False"
+   crs:HasSettings="True">
+   <crs:Name>
+    <rdf:Alt>
+     <rdf:li xml:lang="x-default">PTL - Chicago 01</rdf:li>
+    </rdf:Alt>
+   </crs:Name>
+   <crs:ShortName>
+    <rdf:Alt>
+     <rdf:li xml:lang="x-default"/>
+    </rdf:Alt>
+   </crs:ShortName>
+   <crs:SortName>
+    <rdf:Alt>
+     <rdf:li xml:lang="x-default"/>
+    </rdf:Alt>
+   </crs:SortName>
+   <crs:Group>
+    <rdf:Alt>
+     <rdf:li xml:lang="x-default">-Pierre T. Lambert - 2021 - Classic Street</rdf:li>
+    </rdf:Alt>
+   </crs:Group>
+   <crs:Description>
+    <rdf:Alt>
+     <rdf:li xml:lang="x-default"/>
+    </rdf:Alt>
+   </crs:Description>
+   <crs:ToneCurvePV2012>
+    <rdf:Seq>
+     <rdf:li>0, 4</rdf:li>
+     <rdf:li>43, 28</rdf:li>
+     <rdf:li>75, 65</rdf:li>
+     <rdf:li>135, 134</rdf:li>
+     <rdf:li>186, 187</rdf:li>
+     <rdf:li>255, 253</rdf:li>
+    </rdf:Seq>
+   </crs:ToneCurvePV2012>
+   <crs:ToneCurvePV2012Red>
+    <rdf:Seq>
+     <rdf:li>0, 0</rdf:li>
+     <rdf:li>59, 47</rdf:li>
+     <rdf:li>163, 171</rdf:li>
+     <rdf:li>255, 255</rdf:li>
+    </rdf:Seq>
+   </crs:ToneCurvePV2012Red>
+   <crs:ToneCurvePV2012Green>
+    <rdf:Seq>
+     <rdf:li>0, 0</rdf:li>
+     <rdf:li>62, 55</rdf:li>
+     <rdf:li>183, 191</rdf:li>
+     <rdf:li>255, 255</rdf:li>
+    </rdf:Seq>
+   </crs:ToneCurvePV2012Green>
+   <crs:ToneCurvePV2012Blue>
+    <rdf:Seq>
+     <rdf:li>0, 0</rdf:li>
+     <rdf:li>59, 51</rdf:li>
+     <rdf:li>178, 189</rdf:li>
+     <rdf:li>255, 255</rdf:li>
+    </rdf:Seq>
+   </crs:ToneCurvePV2012Blue>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>

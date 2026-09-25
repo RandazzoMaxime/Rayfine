@@ -1,4 +1,7 @@
+import clsx from 'clsx';
 import { useState, useEffect, useRef, useCallback, memo, useMemo } from 'react';
+import { useEditorStore } from '../../../store/useEditorStore';
+import { softProofCssFilter } from '../../../utils/softProofProfiles';
 import ReactCrop from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
 import { Stage, Layer, Ellipse, Line, Transformer, Group, Circle, Rect } from 'react-konva';
@@ -45,6 +48,8 @@ interface ImageCanvasProps {
   isMasking: boolean;
   isSliderDragging: boolean;
   isStraightenActive: boolean;
+  /** Interactive Guided Upright guide drawing (PerspectiveUpright=5) */
+  isGuidedUprightActive?: boolean;
   isRotationActive?: boolean;
   maskOverlayUrl: string | null;
   onGenerateAiMask(id: string | null, start: Coord, end: Coord): void;
@@ -61,12 +66,15 @@ interface ImageCanvasProps {
   setIsMaskHovered(isHovered: boolean): void;
   setIsMaskTouchInteracting(isInteracting: boolean): void;
   showOriginal: boolean;
+  beforeAfterSplit?: boolean;
   transformedOriginalUrl: string | null;
   uncroppedAdjustedPreviewUrl: string | null;
   updateSubMask(id: string | null, subMask: Partial<SubMask>): void;
   interactivePatch?: { url: string; normX: number; normY: number; normW: number; normH: number } | null;
   isWbPickerActive?: boolean;
   onWbPicked?: () => void;
+  isPointColorPickerActive?: boolean;
+  onPointColorPicked?: () => void;
   setAdjustments(fn: (prev: Adjustments) => Adjustments): void;
   overlayMode?: OverlayMode;
   overlayRotation?: number;
@@ -1155,6 +1163,7 @@ const ImageCanvas = memo(
     isMasking,
     isSliderDragging,
     isStraightenActive,
+    isGuidedUprightActive = false,
     isRotationActive,
     maskOverlayUrl,
     onGenerateAiMask,
@@ -1171,11 +1180,14 @@ const ImageCanvas = memo(
     setIsMaskHovered,
     setIsMaskTouchInteracting,
     showOriginal,
+    beforeAfterSplit = false,
     transformedOriginalUrl,
     uncroppedAdjustedPreviewUrl,
     updateSubMask,
     isWbPickerActive = false,
     onWbPicked,
+    isPointColorPickerActive = false,
+    onPointColorPicked,
     setAdjustments,
     overlayRotation,
     overlayMode,
@@ -1185,10 +1197,23 @@ const ImageCanvas = memo(
     transformState,
     hasRenderedFirstFrame,
   }: ImageCanvasProps) => {
+    const beforeAfterOrientation = useEditorStore((s) => s.beforeAfterOrientation);
+    const softProofing = useEditorStore((s) => s.softProofing);
+    const showMaskOverlay = useEditorStore((s) => s.showMaskOverlay);
+    const softProofProfile = useEditorStore((s) => s.softProofProfile);
+    const softProofIntent = useEditorStore((s) => s.softProofIntent);
+    const softProofSimulatePaper = useEditorStore((s) => s.softProofSimulatePaper);
+    const softProofShowGamutWarning = useEditorStore((s) => s.softProofShowGamutWarning);
+    const softProofFilter = softProofing
+      ? softProofCssFilter(softProofProfile, softProofIntent || 'relative', !!softProofSimulatePaper)
+      : undefined;
+
     const [isCropViewVisible, setIsCropViewVisible] = useState(false);
     const cropImageRef = useRef<HTMLImageElement>(null);
     const [displayedMaskUrl, setDisplayedMaskUrl] = useState<string | null>(null);
     const [originalLoaded, setOriginalLoaded] = useState<boolean>(false);
+    const [baSplitRatio, setBaSplitRatio] = useState(0.5); // 0–1, left = before
+    const baDragRef = useRef(false);
     const [localInitialDrawParams, setLocalInitialDrawParams] = useState<any>(null);
     const [isMaskInteractionActive, setIsMaskInteractionActive] = useState(false);
     const [hoveredMarkerId, setHoveredMarkerId] = useState<string | null>(null);
@@ -1204,6 +1229,8 @@ const ImageCanvas = memo(
     const [cursorPreview, setCursorPreview] = useState<CursorPreview>({ x: 0, y: 0, visible: false });
     const [straightenLine, setStraightenLine] = useState<any>(null);
     const isStraightening = useRef(false);
+    const [guidedDraft, setGuidedDraft] = useState<{ start: { x: number; y: number }; end: { x: number; y: number } } | null>(null);
+    const isGuidedDrawing = useRef(false);
 
     const [displayState, setDisplayState] = useState({
       base: finalPreviewUrl || selectedImage.thumbnailUrl,
@@ -1734,6 +1761,114 @@ const ImageCanvas = memo(
       [isWbPickerActive, finalPreviewUrl, imageRenderSize, onWbPicked, setAdjustments, getCanvasPointer],
     );
 
+    const handlePointColorClick = useCallback(
+      (e: any) => {
+        if (!isPointColorPickerActive || !finalPreviewUrl || !onPointColorPicked) return;
+
+        const stage = e.target.getStage();
+        const pointerPos = getCanvasPointer(stage);
+        if (!pointerPos) return;
+
+        const x = pointerPos.x / imageRenderSize.scale;
+        const y = pointerPos.y / imageRenderSize.scale;
+
+        const imgLogicalWidth = imageRenderSize.width / imageRenderSize.scale;
+        const imgLogicalHeight = imageRenderSize.height / imageRenderSize.scale;
+
+        if (x < 0 || x > imgLogicalWidth || y < 0 || y > imgLogicalHeight) return;
+
+        const img = new Image();
+        img.crossOrigin = 'Anonymous';
+        img.src = finalPreviewUrl;
+
+        img.onload = () => {
+          const radius = 4;
+          const canvas = document.createElement('canvas');
+          const side = radius * 2 + 1;
+          canvas.width = side;
+          canvas.height = side;
+          const ctx = canvas.getContext('2d', { willReadFrequently: true });
+          if (!ctx) return;
+
+          const scaleX = img.width / imgLogicalWidth;
+          const scaleY = img.height / imgLogicalHeight;
+          const srcX = Math.floor(x * scaleX);
+          const srcY = Math.floor(y * scaleY);
+
+          const startX = Math.max(0, srcX - radius);
+          const startY = Math.max(0, srcY - radius);
+          const endX = Math.min(img.width, srcX + radius + 1);
+          const endY = Math.min(img.height, srcY + radius + 1);
+          const sw = endX - startX;
+          const sh = endY - startY;
+          if (sw <= 0 || sh <= 0) return;
+
+          ctx.drawImage(img, startX, startY, sw, sh, 0, 0, sw, sh);
+          const data = ctx.getImageData(0, 0, sw, sh).data;
+          let rTotal = 0,
+            gTotal = 0,
+            bTotal = 0,
+            count = 0;
+          for (let i = 0; i < data.length; i += 4) {
+            rTotal += data[i];
+            gTotal += data[i + 1];
+            bTotal += data[i + 2];
+            count++;
+          }
+          if (count === 0) return;
+          const r = rTotal / count / 255;
+          const g = gTotal / count / 255;
+          const b = bTotal / count / 255;
+          // RGB → HSL (H in -1..1 for LR-ish storage, S/L 0..1)
+          const max = Math.max(r, g, b);
+          const min = Math.min(r, g, b);
+          const l = (max + min) / 2;
+          let h = 0;
+          let s = 0;
+          if (max !== min) {
+            const d = max - min;
+            s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+            switch (max) {
+              case r:
+                h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+                break;
+              case g:
+                h = ((b - r) / d + 2) / 6;
+                break;
+              default:
+                h = ((r - g) / d + 4) / 6;
+                break;
+            }
+          }
+          // Map H 0..1 → -1..1 for row storage used by XMP PointColors
+          const srcH = h * 2 - 1;
+          const srcS = s;
+          const srcL = l;
+
+          setAdjustments((prev: Adjustments) => {
+            const rows = Array.isArray((prev as any).pointColors) ? [...(prev as any).pointColors] : [];
+            rows.push([srcH, srcS, srcL, 0, 0]);
+            const variance = Array.isArray((prev as any).colorVariance)
+              ? [...(prev as any).colorVariance]
+              : [];
+            variance.push(0);
+            return { ...prev, pointColors: rows, colorVariance: variance } as Adjustments;
+          });
+
+          onPointColorPicked();
+        };
+      },
+      [
+        isPointColorPickerActive,
+        finalPreviewUrl,
+        imageRenderSize,
+        onPointColorPicked,
+        setAdjustments,
+        getCanvasPointer,
+      ],
+    );
+
+
     const handleStart = useCallback(
       (e: any) => {
         if (e.evt && typeof e.evt.button === 'number' && e.evt.button !== 0) {
@@ -1744,6 +1879,10 @@ const ImageCanvas = memo(
 
         if (isWbPickerActive) {
           handleWbClick(e);
+          return;
+        }
+        if (isPointColorPickerActive) {
+          handlePointColorClick(e);
           return;
         }
 
@@ -1939,7 +2078,9 @@ const ImageCanvas = memo(
       },
       [
         isWbPickerActive,
+        isPointColorPickerActive,
         handleWbClick,
+        handlePointColorClick,
         isInitialDrawing,
         isBrushActive,
         isManualCleanupActive,
@@ -2478,9 +2619,132 @@ const ImageCanvas = memo(
       }
     };
 
+    /** Guided Upright: draw 1–2 lines; estimate vertical/horizontal/rotate from guides. */
+    const handleGuidedMouseDown = (e: any) => {
+      if (e.evt.button !== 0 && !e.evt.touches) return;
+      const existing = Array.isArray((adjustments as any).guidedUprightLines)
+        ? (adjustments as any).guidedUprightLines
+        : [];
+      if (existing.length >= 2) {
+        // Third click clears and restarts
+        setAdjustments((prev) => ({ ...prev, guidedUprightLines: [] }));
+      }
+      isGuidedDrawing.current = true;
+      const pos = e.target.getStage().getPointerPosition();
+      setGuidedDraft({ start: pos, end: pos });
+    };
+
+    const handleGuidedMouseMove = (e: any) => {
+      if (!isGuidedDrawing.current) return;
+      const pos = e.target.getStage().getPointerPosition();
+      setGuidedDraft((prev) => (prev ? { ...prev, end: pos } : prev));
+      if (e.evt && e.evt.cancelable) e.evt.preventDefault();
+    };
+
+    const handleGuidedMouseUp = () => {
+      if (!isGuidedDrawing.current) return;
+      isGuidedDrawing.current = false;
+      if (
+        !guidedDraft ||
+        (guidedDraft.start.x === guidedDraft.end.x && guidedDraft.start.y === guidedDraft.end.y)
+      ) {
+        setGuidedDraft(null);
+        return;
+      }
+      const w = uncroppedImageRenderSize?.width || imageRenderSize?.width || 1;
+      const h = uncroppedImageRenderSize?.height || imageRenderSize?.height || 1;
+      const norm = [
+        guidedDraft.start.x / w,
+        guidedDraft.start.y / h,
+        guidedDraft.end.x / w,
+        guidedDraft.end.y / h,
+      ];
+      setGuidedDraft(null);
+      setAdjustments((prev) => {
+        const prevLines = Array.isArray(prev.guidedUprightLines) ? [...prev.guidedUprightLines] : [];
+        // max 2 lines
+        const lines = (prevLines.length >= 2 ? [] : prevLines).concat([norm]).slice(0, 2);
+
+        // Estimate geometry from guides (LR-style shell: map angles → vertical/horizontal/rotate)
+        let transformVertical = prev.transformVertical ?? 0;
+        let transformHorizontal = prev.transformHorizontal ?? 0;
+        let transformRotate = prev.transformRotate ?? 0;
+
+        const angles: number[] = [];
+        for (const ln of lines) {
+          if (!ln || ln.length < 4) continue;
+          const dx = (ln[2] - ln[0]) * w;
+          const dy = (ln[3] - ln[1]) * h;
+          angles.push(Math.atan2(dy, dx) * (180 / Math.PI));
+        }
+
+        if (angles.length === 1) {
+          const a = angles[0];
+          // Snap toward nearest H/V
+          let target = 0;
+          if (a > -45 && a <= 45) target = 0;
+          else if (a > 45 && a <= 135) target = 90;
+          else if (a > 135 || a <= -135) target = 180;
+          else target = -90;
+          let corr = target - a;
+          if (corr > 180) corr -= 360;
+          if (corr < -180) corr += 360;
+          // Small rotate for near-horizontal; vertical bias for near-vertical
+          if (Math.abs(target) === 0 || Math.abs(target) === 180) {
+            transformRotate = Math.max(-10, Math.min(10, corr * 0.35));
+            transformHorizontal = Math.max(-100, Math.min(100, corr * 2.5));
+          } else {
+            transformVertical = Math.max(-100, Math.min(100, corr * 2.5));
+            transformRotate = Math.max(-10, Math.min(10, (corr > 90 ? corr - 90 : corr) * 0.2));
+          }
+        } else if (angles.length >= 2) {
+          // Two guides: one treated as H, one as V by closeness
+          const scored = angles.map((a) => {
+            const toH = Math.min(Math.abs(a), Math.abs(Math.abs(a) - 180));
+            const toV = Math.min(Math.abs(a - 90), Math.abs(a + 90));
+            return { a, toH, toV };
+          });
+          scored.sort((x, y) => x.toH - y.toH);
+          const hGuide = scored[0];
+          const vGuide = scored[1].toV <= scored[0].toV ? scored[1] : scored.find((s) => s !== hGuide) || scored[1];
+          // Horizontal correction → rotate + horizontal keystone
+          let hCorr = -hGuide.a;
+          if (hCorr > 90) hCorr -= 180;
+          if (hCorr < -90) hCorr += 180;
+          transformRotate = Math.max(-10, Math.min(10, hCorr * 0.4));
+          transformHorizontal = Math.max(-100, Math.min(100, hCorr * 3));
+          // Vertical correction → vertical keystone
+          let vA = vGuide.a;
+          // distance from ±90
+          let vCorr = vA > 0 ? 90 - vA : -90 - vA;
+          transformVertical = Math.max(-100, Math.min(100, vCorr * 3));
+        }
+
+        return {
+          ...prev,
+          guidedUprightLines: lines,
+          perspectiveUpright: 5,
+          transformVertical,
+          transformHorizontal,
+          transformRotate,
+        };
+      });
+    };
+
+    const handleGuidedMouseLeave = () => {
+      if (isGuidedDrawing.current) {
+        isGuidedDrawing.current = false;
+        setGuidedDraft(null);
+      }
+    };
+
+
     const cropPreviewUrl = uncroppedAdjustedPreviewUrl || selectedImage.thumbnailUrl;
     const originalSrc = transformedOriginalUrl;
     const isShowingOriginal = showOriginal && !!originalSrc;
+    const isSplitBA = !!beforeAfterSplit && !!originalSrc && originalLoaded;
+    const baHorizontal = isSplitBA && beforeAfterOrientation === 'horizontal';
+    const baTwoUp = isSplitBA && beforeAfterOrientation === 'two-up';
 
     useEffect(() => {
       if (!originalSrc) {
@@ -2558,7 +2822,7 @@ const ImageCanvas = memo(
     };
 
     const effectiveCursor = useMemo(() => {
-      if (isWbPickerActive) return 'crosshair';
+      if (isWbPickerActive || isPointColorPickerActive) return 'crosshair';
       if (isParametricActive) return 'crosshair';
       if (isInitialDrawing) return 'crosshair';
 
@@ -2624,7 +2888,7 @@ const ImageCanvas = memo(
 
     const currentActiveSubMaskId = activeAiSubMaskId || activeMaskId;
     const maskOpacity =
-      isShowingOriginal || isSliderDragging || isMaskInteractionActive
+      !showMaskOverlay || isShowingOriginal || isSliderDragging || isMaskInteractionActive
         ? 0
         : isCloneOrHealActive
           ? hoveredMarkerId === currentActiveSubMaskId || isMaskControlHovered
@@ -2663,6 +2927,8 @@ const ImageCanvas = memo(
                         width: `${imageRenderSize.width}px`,
                         height: `${imageRenderSize.height}px`,
                         overflow: 'visible',
+                        filter: softProofFilter,
+                        clipPath: baTwoUp ? 'inset(0 0 0 50%)' : undefined,
                       }
                     : {
                         position: 'absolute',
@@ -2670,6 +2936,8 @@ const ImageCanvas = memo(
                         width: '100%',
                         height: '100%',
                         overflow: 'visible',
+                        filter: softProofFilter,
+                        clipPath: baTwoUp ? 'inset(0 0 0 50%)' : undefined,
                       }
                 }
                 preserveAspectRatio={imageRenderSize.width > 0 && imageRenderSize.height > 0 ? 'none' : 'xMidYMid meet'}
@@ -2731,19 +2999,236 @@ const ImageCanvas = memo(
                           width: `${imageRenderSize.width}px`,
                           height: `${imageRenderSize.height}px`,
                           imageRendering: isMaxZoom ? 'pixelated' : 'auto',
-                          opacity: isShowingOriginal && originalLoaded ? 1 : 0,
-                          transition: originalLoaded ? 'opacity 150ms ease-in-out' : 'none',
+                          opacity: ((isSplitBA || isShowingOriginal) && originalLoaded) ? 1 : 0,
+                          transition: originalLoaded && !isSplitBA ? 'opacity 150ms ease-in-out' : 'none',
                           zIndex: 2,
+                          clipPath: isSplitBA
+                            ? baTwoUp
+                              ? 'inset(0 50% 0 0)'
+                              : baHorizontal
+                                ? `inset(0 0 ${(1 - baSplitRatio) * 100}% 0)`
+                                : `inset(0 ${(1 - baSplitRatio) * 100}% 0 0)`
+                            : undefined,
+                          // Original / Before never gets soft-proof CSS (Proof applies to developed layer only)
+                          filter: undefined,
                         }
                       : {
                           imageRendering: isMaxZoom ? 'pixelated' : 'auto',
-                          opacity: isShowingOriginal && originalLoaded ? 1 : 0,
-                          transition: originalLoaded ? 'opacity 150ms ease-in-out' : 'none',
+                          opacity: ((isSplitBA || isShowingOriginal) && originalLoaded) ? 1 : 0,
+                          transition: originalLoaded && !isSplitBA ? 'opacity 150ms ease-in-out' : 'none',
                           zIndex: 2,
+                          clipPath: isSplitBA
+                            ? baTwoUp
+                              ? 'inset(0 50% 0 0)'
+                              : baHorizontal
+                                ? `inset(0 0 ${(1 - baSplitRatio) * 100}% 0)`
+                                : `inset(0 ${(1 - baSplitRatio) * 100}% 0 0)`
+                            : undefined,
+                          filter: undefined,
                         }
                   }
                 />
               )}
+              {isSplitBA && !baTwoUp && imageRenderSize.width > 0 && (
+                <>
+                  <div
+                    className={clsx('absolute z-[4] bg-white/90 shadow pointer-events-auto', baHorizontal ? 'cursor-ns-resize' : 'cursor-ew-resize')}
+                    style={
+                      baHorizontal
+                        ? {
+                            left: `${imageRenderSize.offsetX}px`,
+                            top: `${imageRenderSize.offsetY + imageRenderSize.height * baSplitRatio - 1}px`,
+                            width: `${imageRenderSize.width}px`,
+                            height: '2px',
+                          }
+                        : {
+                            left: `${imageRenderSize.offsetX + imageRenderSize.width * baSplitRatio - 1}px`,
+                            top: `${imageRenderSize.offsetY}px`,
+                            width: '2px',
+                            height: `${imageRenderSize.height}px`,
+                          }
+                    }
+                    role="separator"
+                    aria-orientation={baHorizontal ? 'horizontal' : 'vertical'}
+                    aria-valuenow={Math.round(baSplitRatio * 100)}
+                    onPointerDown={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      baDragRef.current = true;
+                      (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+                      const startPos = baHorizontal ? e.clientY : e.clientX;
+                      const startRatio = baSplitRatio;
+                      const span = baHorizontal ? imageRenderSize.height : imageRenderSize.width;
+                      const onMove = (ev: PointerEvent) => {
+                        if (!baDragRef.current) return;
+                        const delta = (baHorizontal ? ev.clientY : ev.clientX) - startPos;
+                        const next = Math.min(0.92, Math.max(0.08, startRatio + delta / span));
+                        setBaSplitRatio(next);
+                      };
+                      const onUp = () => {
+                        baDragRef.current = false;
+                        window.removeEventListener('pointermove', onMove);
+                        window.removeEventListener('pointerup', onUp);
+                      };
+                      window.addEventListener('pointermove', onMove);
+                      window.addEventListener('pointerup', onUp);
+                    }}
+                  />
+                  {/* wider hit area */}
+                  <div
+                    className={clsx('absolute z-[4] pointer-events-auto', baHorizontal ? 'cursor-ns-resize' : 'cursor-ew-resize')}
+                    style={
+                      baHorizontal
+                        ? {
+                            left: `${imageRenderSize.offsetX}px`,
+                            top: `${imageRenderSize.offsetY + imageRenderSize.height * baSplitRatio - 6}px`,
+                            width: `${imageRenderSize.width}px`,
+                            height: '12px',
+                          }
+                        : {
+                            left: `${imageRenderSize.offsetX + imageRenderSize.width * baSplitRatio - 6}px`,
+                            top: `${imageRenderSize.offsetY}px`,
+                            width: '12px',
+                            height: `${imageRenderSize.height}px`,
+                          }
+                    }
+                    onPointerDown={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      baDragRef.current = true;
+                      const startPos = baHorizontal ? e.clientY : e.clientX;
+                      const startRatio = baSplitRatio;
+                      const span = baHorizontal ? imageRenderSize.height : imageRenderSize.width;
+                      const onMove = (ev: PointerEvent) => {
+                        if (!baDragRef.current) return;
+                        const delta = (baHorizontal ? ev.clientY : ev.clientX) - startPos;
+                        const next = Math.min(0.92, Math.max(0.08, startRatio + delta / span));
+                        setBaSplitRatio(next);
+                      };
+                      const onUp = () => {
+                        baDragRef.current = false;
+                        window.removeEventListener('pointermove', onMove);
+                        window.removeEventListener('pointerup', onUp);
+                      };
+                      window.addEventListener('pointermove', onMove);
+                      window.addEventListener('pointerup', onUp);
+                    }}
+                  />
+                  <div
+                    className="absolute pointer-events-none z-[4] text-[9px] font-bold uppercase tracking-wider text-white drop-shadow-md"
+                    style={{
+                      left: `${imageRenderSize.offsetX + 8}px`,
+                      top: `${imageRenderSize.offsetY + 8}px`,
+                    }}
+                  >
+                    Before
+                  </div>
+                  <div
+                    className="absolute pointer-events-none z-[4] text-[9px] font-bold uppercase tracking-wider text-white drop-shadow-md"
+                    style={
+                      baHorizontal
+                        ? {
+                            left: `${imageRenderSize.offsetX + 8}px`,
+                            top: `${imageRenderSize.offsetY + imageRenderSize.height * baSplitRatio + 8}px`,
+                          }
+                        : {
+                            left: `${imageRenderSize.offsetX + imageRenderSize.width * baSplitRatio + 8}px`,
+                            top: `${imageRenderSize.offsetY + 8}px`,
+                          }
+                    }
+                  >
+                    {softProofing ? 'Proof' : 'After'}
+                  </div>
+                </>
+              )}
+              
+              {softProofing && imageRenderSize.width > 0 && (
+                <div
+                  className="absolute pointer-events-none z-[5] border-2 border-amber-500/70 rounded-sm"
+                  style={{
+                    left: `${imageRenderSize.offsetX}px`,
+                    top: `${imageRenderSize.offsetY}px`,
+                    width: `${imageRenderSize.width}px`,
+                    height: `${imageRenderSize.height}px`,
+                    boxShadow: softProofSimulatePaper
+                      ? 'inset 0 0 60px rgba(245, 158, 11, 0.12), inset 0 0 0 9999px rgba(255,248,230,0.04)'
+                      : 'inset 0 0 48px rgba(245, 158, 11, 0.10)',
+                  }}
+                  aria-hidden
+                >
+                  <div className="absolute top-1 left-1 px-1.5 py-0.5 rounded bg-black/55 text-[9px] font-semibold uppercase tracking-wide text-amber-100/90 max-w-[90%] truncate">
+                    {softProofProfile || 'sRGB'}
+                    {softProofIntent ? ` · ${softProofIntent}` : ''}
+                    {softProofSimulatePaper ? ' · paper' : ''}
+                  </div>
+                </div>
+              )}
+              {softProofing && softProofShowGamutWarning && imageRenderSize.width > 0 && (
+                <div
+                  className="absolute pointer-events-none z-[6] mix-blend-multiply opacity-45"
+                  style={{
+                    left: `${imageRenderSize.offsetX}px`,
+                    top: `${imageRenderSize.offsetY}px`,
+                    width: `${imageRenderSize.width}px`,
+                    height: `${imageRenderSize.height}px`,
+                    // Profile-biased approx OOG shell (not true ICC gamut mapping)
+                    background: (() => {
+                      const pl = (softProofProfile || 'sRGB').toLowerCase();
+                      if (pl.includes('gray')) {
+                        return 'radial-gradient(ellipse at 50% 50%, rgba(255,40,40,0.4) 0%, transparent 60%)';
+                      }
+                      if (pl.includes('swop') || pl.includes('fogra') || pl.includes('japan') || pl.includes('cmyk')) {
+                        return 'radial-gradient(ellipse at 25% 35%, rgba(255,0,100,0.45) 0%, transparent 50%), radial-gradient(ellipse at 75% 60%, rgba(0,80,255,0.4) 0%, transparent 48%), radial-gradient(ellipse at 50% 80%, rgba(0,200,80,0.25) 0%, transparent 45%)';
+                      }
+                      if (pl.includes('p3') || pl.includes('2020') || pl.includes('prophoto')) {
+                        // Wide gamut: smaller warning regions
+                        return 'radial-gradient(ellipse at 20% 30%, rgba(255,0,80,0.22) 0%, transparent 40%), radial-gradient(ellipse at 80% 70%, rgba(0,100,255,0.18) 0%, transparent 38%)';
+                      }
+                      if (pl.includes('adobe')) {
+                        return 'radial-gradient(ellipse at 28% 38%, rgba(255,0,80,0.3) 0%, transparent 50%), radial-gradient(ellipse at 72% 68%, rgba(0,120,255,0.25) 0%, transparent 48%)';
+                      }
+                      return 'radial-gradient(ellipse at 30% 40%, rgba(255,0,80,0.35) 0%, transparent 55%), radial-gradient(ellipse at 70% 65%, rgba(0,120,255,0.3) 0%, transparent 50%)';
+                    })(),
+                  }}
+                  aria-hidden
+                  title={`Approx. out-of-gamut highlight (${softProofProfile || 'sRGB'})`}
+                />
+              )}
+
+              
+              {baTwoUp && imageRenderSize.width > 0 && (
+                <>
+                  <div
+                    className="absolute pointer-events-none z-[4] text-[9px] font-bold uppercase tracking-wider text-white drop-shadow-md"
+                    style={{
+                      left: `${imageRenderSize.offsetX + 8}px`,
+                      top: `${imageRenderSize.offsetY + 8}px`,
+                    }}
+                  >
+                    Before
+                  </div>
+                  <div
+                    className="absolute pointer-events-none z-[4] text-[9px] font-bold uppercase tracking-wider text-white drop-shadow-md"
+                    style={{
+                      left: `${imageRenderSize.offsetX + imageRenderSize.width / 2 + 8}px`,
+                      top: `${imageRenderSize.offsetY + 8}px`,
+                    }}
+                  >
+                    {softProofing ? 'Proof' : 'After'}
+                  </div>
+                  <div
+                    className="absolute z-[4] bg-white/50 pointer-events-none"
+                    style={{
+                      left: `${imageRenderSize.offsetX + imageRenderSize.width / 2 - 0.5}px`,
+                      top: `${imageRenderSize.offsetY}px`,
+                      width: '1px',
+                      height: `${imageRenderSize.height}px`,
+                    }}
+                    aria-hidden
+                  />
+                </>
+              )}
+
               {displayedMaskUrl && (
                 <img
                   alt="Mask Overlay"
@@ -2831,7 +3316,7 @@ const ImageCanvas = memo(
             </div>
           </div>
 
-          {(isMasking || isAiEditing || isWbPickerActive) && (
+          {(isMasking || isAiEditing || isWbPickerActive || isPointColorPickerActive) && (
             <div
               style={{
                 position: 'absolute',
@@ -2861,7 +3346,7 @@ const ImageCanvas = memo(
                 onMouseUp={handleUp}
                 onTouchEnd={handleUp}
               >
-                <Layer listening={!showOriginal}>
+                <Layer listening={!showOriginal || !!beforeAfterSplit}>
                   <Group scaleX={maxSafeScale} scaleY={maxSafeScale}>
                     <Group x={groupOffsetX} y={groupOffsetY}>
                       {(isMasking || isAiEditing) &&
@@ -3040,6 +3525,63 @@ const ImageCanvas = memo(
                           straightenLine.end.y,
                         ]}
                         stroke="#0ea5e9"
+                        strokeWidth={2}
+                      />
+                    )}
+                  </Layer>
+                </Stage>
+              )}
+
+              {isGuidedUprightActive && !isStraightenActive && (
+                <Stage
+                  height={uncroppedImageRenderSize.height}
+                  onMouseDown={handleGuidedMouseDown}
+                  onTouchStart={handleGuidedMouseDown}
+                  onMouseLeave={handleGuidedMouseLeave}
+                  onMouseMove={handleGuidedMouseMove}
+                  onTouchMove={handleGuidedMouseMove}
+                  onMouseUp={handleGuidedMouseUp}
+                  onTouchEnd={handleGuidedMouseUp}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    zIndex: 11,
+                    cursor: 'crosshair',
+                    touchAction: 'none',
+                  }}
+                  width={uncroppedImageRenderSize.width}
+                >
+                  <Layer>
+                    {(Array.isArray((adjustments as any).guidedUprightLines)
+                      ? (adjustments as any).guidedUprightLines
+                      : []
+                    ).map((ln: number[], i: number) => {
+                      if (!ln || ln.length < 4) return null;
+                      const ww = uncroppedImageRenderSize.width || 1;
+                      const hh = uncroppedImageRenderSize.height || 1;
+                      return (
+                        <Line
+                          key={`guide-${i}`}
+                          dash={[6, 4]}
+                          listening={false}
+                          points={[ln[0] * ww, ln[1] * hh, ln[2] * ww, ln[3] * hh]}
+                          stroke={i === 0 ? '#f59e0b' : '#a78bfa'}
+                          strokeWidth={2}
+                        />
+                      );
+                    })}
+                    {guidedDraft && (
+                      <Line
+                        dash={[4, 4]}
+                        listening={false}
+                        points={[
+                          guidedDraft.start.x,
+                          guidedDraft.start.y,
+                          guidedDraft.end.x,
+                          guidedDraft.end.y,
+                        ]}
+                        stroke="#fbbf24"
                         strokeWidth={2}
                       />
                     )}

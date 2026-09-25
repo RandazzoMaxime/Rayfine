@@ -85,6 +85,7 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
   const setUI = useUIStore((s) => s.setUI);
   const isLoading = useLibraryStore((s) => s.isViewLoading);
   const selectedImage = useEditorStore((s) => s.selectedImage);
+  const developInfoMode = useEditorStore((s) => s.developInfoMode || 'off');
   const adjustments = useEditorStore((s) => s.adjustments);
   const adjustmentsHistory = useEditorStore((s) => s.history);
   const adjustmentsHistoryIndex = useEditorStore((s) => s.historyIndex);
@@ -93,6 +94,8 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
   const transformedOriginalUrl = useEditorStore((s) => s.transformedOriginalUrl);
   const interactivePatch = useEditorStore((s) => s.interactivePatch);
   const showOriginal = useEditorStore((s) => s.showOriginal);
+  const beforeAfterSplit = useEditorStore((s) => s.beforeAfterSplit);
+  const softProofing = useEditorStore((s) => s.softProofing);
   const isSliderDragging = useEditorStore((s) => s.isSliderDragging);
   const targetZoom = useEditorStore((s) => s.zoom);
   const originalSize = useEditorStore((s) => s.originalSize);
@@ -100,7 +103,9 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
   const overlayMode = useEditorStore((s) => s.overlayMode);
   const overlayRotation = useEditorStore((s) => s.overlayRotation);
   const isStraightenActive = useEditorStore((s) => s.isStraightenActive);
+  const isGuidedUprightActive = useEditorStore((s) => s.isGuidedUprightActive);
   const isWbPickerActive = useEditorStore((s) => s.isWbPickerActive);
+  const isPointColorPickerActive = useEditorStore((s) => s.isPointColorPickerActive);
   const liveRotation = useEditorStore((s) => s.liveRotation);
   const brushSettings = useEditorStore((s) => s.brushSettings);
   const activeMaskContainerId = useEditorStore((s) => s.activeMaskContainerId);
@@ -190,7 +195,39 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
   const lastWgpuTransformRef = useRef<string | null>(null);
 
   const toggleShowOriginal = useCallback(
-    () => setEditor((state) => ({ showOriginal: !state.showOriginal })),
+    () =>
+      setEditor((state) => {
+        const next = !state.showOriginal;
+        return {
+          showOriginal: next,
+          // enabling full original turns off split view
+          beforeAfterSplit: next ? false : state.beforeAfterSplit,
+        };
+      }),
+    [setEditor],
+  );
+
+  const toggleBeforeAfterSplit = useCallback(
+    (opts?: { cycleOrientation?: boolean }) =>
+      setEditor((state) => {
+        if (opts?.cycleOrientation && state.beforeAfterSplit) {
+          const order = ['vertical', 'horizontal', 'two-up'] as const;
+          const idx = order.indexOf(state.beforeAfterOrientation as any);
+          const next = order[(idx < 0 ? 0 : idx + 1) % order.length];
+          return { beforeAfterOrientation: next };
+        }
+        const next = !state.beforeAfterSplit;
+        return {
+          beforeAfterSplit: next,
+          // split implies we need original; clear full-original solo mode
+          showOriginal: next ? false : state.showOriginal,
+        };
+      }),
+    [setEditor],
+  );
+
+  const toggleSoftProofing = useCallback(
+    () => setEditor((state) => ({ softProofing: !state.softProofing })),
     [setEditor],
   );
 
@@ -264,7 +301,13 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
     [setAdjustments],
   );
 
-  const handleWbPicked = useCallback(() => { }, []);
+  const handleWbPicked = useCallback(() => {
+    useEditorStore.getState().setEditor({ isWbPickerActive: false });
+  }, []);
+
+  const handlePointColorPicked = useCallback(() => {
+    useEditorStore.getState().setEditor({ isPointColorPickerActive: false });
+  }, []);
 
   useEffect(() => {
     if (isFullScreen) {
@@ -911,7 +954,7 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
         animateTransform(newPositionX, newPositionY, zoomTarget, clickAnimationTime);
       }
     },
-    [isCropping, isMasking, isAiEditing, isWbPickerActive, animateTransform],
+    [isCropping, isMasking, isAiEditing, isWbPickerActive, isPointColorPickerActive, animateTransform],
   );
 
   useEffect(() => {
@@ -1971,6 +2014,10 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
           onRedo={redo}
           onToggleFullScreen={handleToggleFullScreen}
           onToggleShowOriginal={toggleShowOriginal}
+          onToggleBeforeAfterSplit={toggleBeforeAfterSplit}
+          beforeAfterSplit={beforeAfterSplit}
+          softProofing={softProofing}
+          onToggleSoftProofing={toggleSoftProofing}
           onUndo={undo}
           selectedImage={selectedImage}
           showOriginal={showOriginal}
@@ -2034,6 +2081,7 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
             isMaskControlHovered={isMaskControlHovered}
             isMasking={isMasking}
             isStraightenActive={isStraightenActive}
+            isGuidedUprightActive={isGuidedUprightActive}
             isRotationActive={isRotationActive}
             isSliderDragging={isSliderDragging}
             maskOverlayUrl={maskOverlayUrl}
@@ -2056,6 +2104,8 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
             updateSubMask={updateSubMaskLocal}
             isWbPickerActive={isWbPickerActive}
             onWbPicked={handleWbPicked}
+            isPointColorPickerActive={isPointColorPickerActive}
+            onPointColorPicked={handlePointColorPicked}
             setAdjustments={setAdjustments}
             overlayRotation={overlayRotation}
             overlayMode={overlayMode}
@@ -2066,6 +2116,58 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
             hasRenderedFirstFrame={hasRenderedFirstFrame}
           />
         </div>
+
+        {/* LR Loupe Info overlay (I cycles off → basic → full) */}
+        {selectedImage && developInfoMode !== 'off' && (
+          <div
+            className="absolute bottom-3 left-1/2 -translate-x-1/2 z-40 pointer-events-none max-w-[min(92%,720px)]"
+            data-tooltip="Develop info (I to cycle)"
+          >
+            <div className="px-3 py-1.5 rounded-md bg-black/55 backdrop-blur-sm border border-white/10 text-white shadow-lg">
+              <div className="text-[11px] font-medium truncate text-center">
+                {(selectedImage.path || '').split(/[\\/]/).pop()?.split('?')[0]}
+                {selectedImage.width > 0 && selectedImage.height > 0
+                  ? `  ·  ${selectedImage.width} × ${selectedImage.height}`
+                  : ''}
+                {selectedImage.isRaw ? '  ·  RAW' : ''}
+              </div>
+              {(() => {
+                const ex = selectedImage.exif || {};
+                const iso = ex.PhotographicSensitivity || ex.ISO || ex.ISOSpeedRatings;
+                let fNum = ex.FNumber ? String(ex.FNumber) : '';
+                if (fNum && !fNum.toLowerCase().startsWith('f')) fNum = `f/${fNum}`;
+                const shutter = ex.ExposureTime ? String(ex.ExposureTime) : '';
+                const focal = ex.FocalLengthIn35mmFilm || ex.FocalLength;
+                const focalStr = focal
+                  ? String(focal).toLowerCase().endsWith('mm')
+                    ? String(focal)
+                    : `${focal} mm`
+                  : '';
+                const parts = [shutter, fNum, iso ? `ISO ${iso}` : '', focalStr].filter(Boolean);
+                if (!parts.length && developInfoMode === 'basic') return null;
+                return (
+                  <div className="mt-0.5 text-[10px] text-white/85 tabular-nums flex flex-wrap items-center justify-center gap-x-3 gap-y-0.5">
+                    {parts.map((p) => (
+                      <span key={p}>{p}</span>
+                    ))}
+                  </div>
+                );
+              })()}
+              {developInfoMode === 'full' && (
+                <div className="mt-0.5 text-[10px] text-white/70 truncate text-center">
+                  {[
+                    selectedImage.exif?.Model || selectedImage.exif?.Make,
+                    selectedImage.exif?.LensModel || selectedImage.exif?.Lens,
+                    selectedImage.exif?.DateTimeOriginal,
+                  ]
+                    .filter(Boolean)
+                    .map(String)
+                    .join('  ·  ') || '—'}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

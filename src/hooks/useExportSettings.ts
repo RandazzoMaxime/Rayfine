@@ -14,8 +14,14 @@ export function useExportSettings() {
   const [exportMasks, setExportMasks] = useState(false);
   const [preserveFolders, setPreserveFolders] = useState(false);
   const [filenameTemplate, setFilenameTemplate] = useState('{original_filename}_edited');
+  const [colorSpace, setColorSpace] = useState('srgb');
+  const [outputSharpening, setOutputSharpening] = useState('screen');
+  const [resolutionDpi, setResolutionDpi] = useState(240);
+  const [limitFileSizeKb, setLimitFileSizeKb] = useState<number | null>(null);
   const [enableWatermark, setEnableWatermark] = useState(false);
   const [watermarkPath, setWatermarkPath] = useState<string | null>(null);
+  const [watermarkText, setWatermarkText] = useState('');
+  const [watermarkTextColor, setWatermarkTextColor] = useState('#FFFFFF');
   const [watermarkAnchor, setWatermarkAnchor] = useState<WatermarkAnchor>(WatermarkAnchor.BottomRight);
   const [watermarkScale, setWatermarkScale] = useState(10);
   const [watermarkSpacing, setWatermarkSpacing] = useState(5);
@@ -34,8 +40,14 @@ export function useExportSettings() {
     setExportMasks(preset.exportMasks ?? false);
     setPreserveFolders(preset.preserveFolders ?? false);
     setFilenameTemplate(preset.filenameTemplate);
+    setColorSpace(preset.colorSpace || 'srgb');
+    setOutputSharpening(preset.outputSharpening || 'screen');
+    setResolutionDpi(preset.resolutionDpi || 240);
+    setLimitFileSizeKb(preset.limitFileSizeKb ?? null);
     setEnableWatermark(preset.enableWatermark);
     setWatermarkPath(preset.watermarkPath);
+    setWatermarkText(preset.watermarkText || '');
+    setWatermarkTextColor(preset.watermarkTextColor || '#FFFFFF');
     setWatermarkAnchor(preset.watermarkAnchor as WatermarkAnchor);
     setWatermarkScale(preset.watermarkScale);
     setWatermarkSpacing(preset.watermarkSpacing);
@@ -56,8 +68,14 @@ export function useExportSettings() {
       exportMasks,
       preserveFolders,
       filenameTemplate,
+      colorSpace,
+      outputSharpening,
+      resolutionDpi,
+      limitFileSizeKb,
       enableWatermark,
       watermarkPath,
+      watermarkText,
+      watermarkTextColor,
       watermarkAnchor,
       watermarkScale,
       watermarkSpacing,
@@ -76,8 +94,14 @@ export function useExportSettings() {
       exportMasks,
       preserveFolders,
       filenameTemplate,
+      colorSpace,
+      outputSharpening,
+      resolutionDpi,
+      limitFileSizeKb,
       enableWatermark,
       watermarkPath,
+      watermarkText,
+      watermarkTextColor,
       watermarkAnchor,
       watermarkScale,
       watermarkSpacing,
@@ -110,10 +134,22 @@ export function useExportSettings() {
     setPreserveFolders,
     filenameTemplate,
     setFilenameTemplate,
+    colorSpace,
+    setColorSpace,
+    outputSharpening,
+    setOutputSharpening,
+    resolutionDpi,
+    setResolutionDpi,
+    limitFileSizeKb,
+    setLimitFileSizeKb,
     enableWatermark,
     setEnableWatermark,
     watermarkPath,
     setWatermarkPath,
+    watermarkText,
+    setWatermarkText,
+    watermarkTextColor,
+    setWatermarkTextColor,
     watermarkAnchor,
     setWatermarkAnchor,
     watermarkScale,

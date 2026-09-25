@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import clsx from 'clsx';
 import { getVersion } from '@tauri-apps/api/app';
 import { open } from '@tauri-apps/plugin-shell';
 import {
@@ -14,10 +15,19 @@ import {
   Users,
   LayoutGrid,
   Columns,
+  Columns2,
+  GalleryHorizontalEnd,
+  Expand,
   SlidersHorizontal,
   Rows3,
+  Star,
+  ChevronRight,
+  ChevronUp,
 } from 'lucide-react';
 import CullingView from './library/CullingView';
+import CompareView from './library/CompareView';
+import SurveyView from './library/SurveyView';
+import LoupeView from './library/LoupeView';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import Button from '../ui/Button';
@@ -31,9 +41,11 @@ import {
   ThumbnailAspectRatio,
   RawStatus,
   EditedStatus,
+  FlagStatus,
   LibraryDisplayMode,
 } from '../ui/AppProperties';
 import { GroupBadgeInfo, GroupId } from '../../utils/imageGrouping';
+import { COLOR_LABELS } from '../../utils/adjustments';
 import { ImportState, Status } from '../ui/ExportImportProperties';
 import Text from '../ui/Text';
 import { TextColors, TextVariants, TextWeights } from '../../types/typography';
@@ -49,7 +61,24 @@ export interface ColumnWidths {
   name: number;
   date: number;
   rating: number;
+  flag: number;
+  edited: number;
+  fileType: number;
+  gps: number;
+  urgency: number;
+  creator: number;
+  credit: number;
+  city: number;
+  country: number;
+  state: number;
+  headline: number;
   color: number;
+  shutter: number;
+  aperture: number;
+  iso: number;
+  focal: number;
+  camera: number;
+  lens: number;
 }
 
 interface MainLibraryProps {
@@ -89,18 +118,9 @@ interface MainLibraryProps {
   thumbnailProgress: Progress;
   thumbnailSize: ThumbnailSize;
   onNavigateToCommunity(): void;
-}
-
-export interface ColumnWidths {
-  thumbnail: number;
-  name: number;
-  date: number;
-  rating: number;
-  color: number;
-  shutter: number;
-  aperture: number;
-  iso: number;
-  focal: number;
+  onRate?(rate: number, paths?: string[]): void;
+  onSetColorLabel?(color: string | null, paths?: string[]): void;
+  onSetFlag?(flag: 'pick' | 'reject' | null, paths?: string[]): void;
 }
 
 interface DisplayModeSwitchProps {
@@ -127,6 +147,21 @@ function DisplayModeSwitch({ displayMode, setDisplayMode, t }: DisplayModeSwitch
         Icon: Columns,
         tooltip: t('library.viewMode.culling', { defaultValue: 'Culling View' }),
       },
+      {
+        id: LibraryDisplayMode.Compare,
+        Icon: Columns2,
+        tooltip: t('library.viewMode.compare', { defaultValue: 'Compare View' }),
+      },
+      {
+        id: LibraryDisplayMode.Survey,
+        Icon: GalleryHorizontalEnd,
+        tooltip: t('library.viewMode.survey', { defaultValue: 'Survey View' }),
+      },
+      {
+        id: LibraryDisplayMode.Loupe,
+        Icon: Expand,
+        tooltip: t('library.viewMode.loupe', { defaultValue: 'Loupe View' }),
+      },
     ],
     [t],
   );
@@ -135,7 +170,7 @@ function DisplayModeSwitch({ displayMode, setDisplayMode, t }: DisplayModeSwitch
   const safeIndex = selectedIndex >= 0 ? selectedIndex : 0;
 
   return (
-    <div className="flex items-center bg-surface p-1 rounded-lg border border-border-color/20 h-14 w-40 select-none">
+    <div className="flex items-center bg-surface/80 p-0.5 rounded-md border border-border-color/25 h-9 w-60 select-none">
       <div className="relative flex w-full h-full">
         <motion.div
           className="absolute top-0 bottom-0 z-0 bg-bg-primary rounded-md shadow-sm"
@@ -191,6 +226,10 @@ export default function MainLibrary(props: MainLibraryProps) {
   };
 
   const searchCriteria = useLibraryStore((state) => state.searchCriteria);
+  const filterCriteria = useLibraryStore((state) => state.filterCriteria);
+  const showSelectedOnly = useLibraryStore((state) => state.showSelectedOnly);
+  const setLibrary = useLibraryStore((state) => state.setLibrary);
+  const setFilterCriteria = useLibraryStore((state) => state.setFilterCriteria);
 
   const translatedRatingFilterOptions = useMemo(
     () => [
@@ -244,13 +283,17 @@ export default function MainLibrary(props: MainLibraryProps) {
     () => [
       { key: 'name', label: t('library.sort.fileName') },
       { key: 'date', label: t('library.sort.dateModified') },
-      { key: 'rating', label: t('library.sort.rating') },
       { key: 'date_taken', label: t('library.sort.dateTaken') },
+      { key: 'rating', label: t('library.sort.rating') },
+      { key: 'edited', label: t('library.sort.editedStatus') },
+      { key: 'color', label: t('library.sort.colorLabel' as any, { defaultValue: 'Color label' }) },
+      { key: 'flag', label: t('library.sort.flag' as any, { defaultValue: 'Flag' }) },
+      { key: 'camera', label: t('library.sort.camera' as any, { defaultValue: 'Camera' }) },
+      { key: 'lens', label: t('library.sort.lens' as any, { defaultValue: 'Lens' }) },
       { key: 'focal_length', label: t('library.sort.focalLength') },
       { key: 'iso', label: t('library.sort.iso') },
       { key: 'shutter_speed', label: t('library.sort.shutterSpeed') },
       { key: 'aperture', label: t('library.sort.aperture') },
-      { key: 'edited', label: t('library.sort.editedStatus') },
     ],
     [t],
   );
@@ -325,184 +368,25 @@ export default function MainLibrary(props: MainLibraryProps) {
       return null;
     }
     const hasLastPath = !!props.appSettings.lastRootPath || !!props.appSettings.rootFolders?.length;
-    const currentThemeId = props.theme || DEFAULT_THEME_ID;
-    const selectedTheme: ThemeProps | undefined =
-      THEMES.find((t: ThemeProps) => t.id === currentThemeId) ||
-      THEMES.find((t: ThemeProps) => t.id === DEFAULT_THEME_ID);
-    const splashImage = selectedTheme?.splashImage;
-
+    // Session is restored automatically on launch; with no folder yet, point to Import.
     return (
-      <div className="flex-1 flex h-full p-2 bg-transparent">
-        <div className="flex w-full h-full bg-bg-secondary rounded-lg border border-border-color/25 overflow-hidden">
-          <div className="w-1/2 hidden md:block relative overflow-hidden bg-black">
-            <AnimatePresence>
-              <motion.img
-                alt="Splash screen background"
-                className="absolute inset-0 w-full h-full object-cover"
-                key={splashImage}
-                src={splashImage}
-              />
-            </AnimatePresence>
+      <div className="flex-1 flex items-center justify-center h-full p-2">
+        {!hasLastPath && (
+          <div className="text-center space-y-3">
+            <Text as="div" className="text-text-secondary">
+              {t('library.empty.noFolder' as any, {
+                defaultValue: 'Aucun dossier dans le catalogue. Utilisez « Import » (panneau de droite) pour ajouter vos photos.',
+              })}
+            </Text>
+            <button
+              type="button"
+              onClick={props.onOpenFolder}
+              className="h-8 px-3 rounded bg-surface border border-border-color/40 text-xs text-text-primary hover:bg-card-active"
+            >
+              {t('library.folders.addFolder')}
+            </button>
           </div>
-
-          <div className="w-full md:w-1/2 relative overflow-hidden isolate">
-            <div className="absolute inset-0 -z-10 pointer-events-none">
-              <AnimatePresence>
-                {splashImage && (
-                  <motion.img
-                    key={splashImage + '-ambient'}
-                    src={splashImage}
-                    className="absolute inset-0 w-full h-full object-cover blur-2xl opacity-50 pointer-events-none"
-                    aria-hidden="true"
-                  />
-                )}
-              </AnimatePresence>
-              <div className="absolute inset-0 bg-bg-secondary/90"></div>
-            </div>
-
-            <div className="w-full h-full flex flex-col p-8 lg:p-16 overflow-y-auto custom-scrollbar relative z-10">
-              {isSettingsOpen && props.appSettings ? (
-                <SettingsPanel
-                  appSettings={props.appSettings}
-                  onBack={() => setUI({ isSettingsOpen: false })}
-                  onLibraryRefresh={props.onLibraryRefresh}
-                  onSettingsChange={props.onSettingsChange}
-                  rootPaths={props.rootPaths}
-                />
-              ) : (
-                <>
-                  <div className="my-auto text-left relative z-10">
-                    <Text variant={TextVariants.displayLarge}>{t('library.splash.brand')}</Text>
-                    <Text
-                      variant={TextVariants.heading}
-                      color={TextColors.secondary}
-                      weight={TextWeights.normal}
-                      className="mb-10 max-w-md drop-shadow-sm"
-                    >
-                      {hasLastPath ? (
-                        <>
-                          {t('library.splash.welcomeBack')}
-                          <br />
-                          {t('library.splash.welcomeBackDesc')}
-                        </>
-                      ) : props.isAndroid ? (
-                        t('library.splash.descriptionAndroid')
-                      ) : (
-                        t('library.splash.descriptionDesktop')
-                      )}
-                    </Text>
-                    <div className="flex flex-col w-full max-w-xs gap-4 relative z-10">
-                      {hasLastPath && (
-                        <Button
-                          className="rounded-md h-11 w-full flex justify-center items-center shadow-md transition-transform duration-200 hover:scale-[1.01] active:scale-[.98]"
-                          onClick={props.onContinueSession}
-                          size="lg"
-                        >
-                          <RefreshCw size={20} className="mr-2" /> {t('library.splash.continueSession')}
-                        </Button>
-                      )}
-                      <div className="flex items-center gap-2">
-                        <Button
-                          className={`rounded-md grow flex justify-center items-center shadow-md h-11 transition-transform duration-200 hover:scale-[1.01] active:scale-[.98] ${
-                            hasLastPath ? 'bg-surface text-text-primary' : ''
-                          }`}
-                          onClick={props.onOpenFolder}
-                          size="lg"
-                        >
-                          <Folder size={20} className="mr-2" />
-                          {props.isAndroid
-                            ? t('library.splash.openLibrary')
-                            : hasLastPath
-                              ? t('library.splash.addFolder')
-                              : t('library.splash.openFolder')}
-                        </Button>
-                        <Button
-                          className="px-3 bg-surface text-text-primary shadow-md h-11 transition-transform duration-200 hover:scale-[1.03] active:scale-[.96]"
-                          onClick={() => setUI({ isSettingsOpen: true })}
-                          size="lg"
-                          data-tooltip={t('settings.general.title')}
-                          variant="ghost"
-                        >
-                          <Settings size={20} />
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-
-                  <Text
-                    variant={TextVariants.small}
-                    as="div"
-                    className="absolute bottom-8 left-8 lg:left-16 space-y-1 z-10 drop-shadow-sm"
-                  >
-                    <p>
-                      {t('library.splash.imagesBy')}{' '}
-                      <a
-                        href="https://instagram.com/timonkaech.photography"
-                        className="hover:underline"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        Timon Käch
-                      </a>
-                    </p>
-                    {appVersion && (
-                      <div className="flex items-center space-x-2">
-                        <p>
-                          <span
-                            className={`group transition-all duration-300 ease-in-out rounded-md py-1 ${
-                              isUpdateAvailable
-                                ? 'cursor-pointer border border-yellow-500 px-2 hover:bg-yellow-500/20'
-                                : ''
-                            }`}
-                            onClick={() => {
-                              if (isUpdateAvailable) {
-                                open('https://github.com/CyberTimon/RapidRAW/releases/latest');
-                              }
-                            }}
-                            data-tooltip={
-                              isUpdateAvailable
-                                ? t('library.splash.downloadVersion', { version: latestVersion })
-                                : t('library.splash.latestVersion')
-                            }
-                          >
-                            <span className={isUpdateAvailable ? 'group-hover:hidden' : ''}>
-                              {t('library.splash.version', { version: appVersion })}
-                            </span>
-                            {isUpdateAvailable && (
-                              <span className="hidden group-hover:inline text-yellow-400">
-                                {t('library.splash.newVersionAvailable')}
-                              </span>
-                            )}
-                          </span>
-                        </p>
-                        <span>-</span>
-                        <p>
-                          <a
-                            href="https://ko-fi.com/cybertimon"
-                            className="hover:underline"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                          >
-                            {t('library.splash.donate')}
-                          </a>
-                          <span className="mx-1">{t('library.splash.or')}</span>
-                          <a
-                            href="https://github.com/CyberTimon/RapidRAW"
-                            className="hover:underline"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                          >
-                            {t('library.splash.contribute')}
-                          </a>
-                        </p>
-                      </div>
-                    )}
-                  </Text>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
+        )}
       </div>
     );
   }
@@ -510,18 +394,125 @@ export default function MainLibrary(props: MainLibraryProps) {
   return (
     <div className="flex-1 flex flex-col h-full min-w-0 bg-bg-secondary rounded-lg overflow-hidden">
       <header
-        className="p-4 shrink-0 flex justify-between items-center border-b border-surface gap-4"
+        className="px-3 py-1.5 shrink-0 flex justify-between items-center border-b border-border-color/40 gap-3 bg-bg-secondary/95"
         onMouseEnter={() => setIsProgressHovered(true)}
         onMouseLeave={() => setIsProgressHovered(false)}
       >
         <div className="min-w-0">
-          <Text variant={TextVariants.headline}>{t('library.header.title')}</Text>
+          <Text variant={TextVariants.heading} weight={TextWeights.semibold} className="uppercase tracking-wider text-[11px]">
+            {t('library.header.title')}
+          </Text>
           {!props.isAndroid && (
             <div className="flex items-center gap-2">
               {props.currentFolderPath ? (
-                <Text className="truncate">{props.currentFolderPath}</Text>
+                <nav
+                  className="flex items-center gap-0.5 min-w-0 max-w-full text-sm text-text-secondary overflow-hidden"
+                  aria-label={t('library.header.breadcrumb' as any, { defaultValue: 'Folder path' })}
+                >
+                  {(() => {
+                    const full = String(props.currentFolderPath);
+                    if (full.startsWith('Album: ')) {
+                      return (
+                        <span className="truncate text-text-primary font-medium" title={full}>
+                          {full}
+                        </span>
+                      );
+                    }
+                    const usesBackslash = full.includes('\\');
+                    const norm = full.replace(/\\/g, '/');
+                    const parts = norm.split('/').filter(Boolean);
+                    const crumbs: { label: string; path: string }[] = [];
+                    for (let i = 0; i < parts.length; i++) {
+                      let path: string;
+                      if (full.startsWith('/')) {
+                        path = '/' + parts.slice(0, i + 1).join('/');
+                      } else if (parts[0].endsWith(':')) {
+                        path =
+                          i === 0
+                            ? parts[0] + '/'
+                            : parts[0] + '/' + parts.slice(1, i + 1).join('/');
+                      } else {
+                        path = parts.slice(0, i + 1).join('/');
+                      }
+                      const nativePath = usesBackslash ? path.replace(/\//g, '\\') : path;
+                      crumbs.push({ label: parts[i], path: nativePath });
+                    }
+                    const visible = crumbs.length > 5 ? crumbs.slice(-4) : crumbs;
+                    const hidden = crumbs.length > 5;
+                    return (
+                      <>
+                        {hidden && (
+                          <>
+                            <span className="text-text-secondary/50 px-0.5">…</span>
+                            <ChevronRight size={12} className="shrink-0 opacity-40" />
+                          </>
+                        )}
+                        {visible.map((c, i) => {
+                          const isLast = i === visible.length - 1;
+                          return (
+                            <span key={c.path + '-' + i} className="flex items-center gap-0.5 min-w-0">
+                              {i > 0 && <ChevronRight size={12} className="shrink-0 opacity-40" />}
+                              {isLast ? (
+                                <span className="truncate text-text-primary font-medium" title={c.path}>
+                                  {c.label}
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="truncate hover:text-text-primary hover:underline max-w-[8rem]"
+                                  title={c.path}
+                                  onClick={() => {
+                                    window.dispatchEvent(
+                                      new CustomEvent('rustroom:navigate-folder', {
+                                        detail: { path: c.path, fromHistory: false },
+                                      }),
+                                    );
+                                  }}
+                                >
+                                  {c.label}
+                                </button>
+                              )}
+                            </span>
+                          );
+                        })}
+                      </>
+                    );
+                  })()}
+                </nav>
               ) : (
                 <p className="text-sm invisible select-none pointer-events-none h-5 overflow-hidden"></p>
+              )}
+              {props.currentFolderPath && !String(props.currentFolderPath).startsWith('Album: ') && (
+                <button
+                  type="button"
+                  className="shrink-0 h-5 w-5 flex items-center justify-center rounded text-text-secondary hover:text-text-primary hover:bg-surface"
+                  data-tooltip={t('library.header.goParent' as any, {
+                    defaultValue: 'Parent folder (Alt+↑)',
+                  })}
+                  onClick={() => {
+                    const path = String(props.currentFolderPath || '');
+                    const usesBackslash = path.includes('\\');
+                    const norm = path.replace(/\\/g, '/').replace(/\/+$/, '');
+                    const parts = norm.split('/').filter(Boolean);
+                    if (parts.length <= 1) return;
+                    let parent: string;
+                    if (path.startsWith('/')) parent = '/' + parts.slice(0, -1).join('/');
+                    else if (parts[0].endsWith(':'))
+                      parent =
+                        parts.length === 2
+                          ? parts[0] + '/'
+                          : parts[0] + '/' + parts.slice(1, -1).join('/');
+                    else parent = parts.slice(0, -1).join('/');
+                    if (usesBackslash) parent = parent.replace(/\//g, '\\');
+                    window.dispatchEvent(
+                      new CustomEvent('rustroom:navigate-folder', {
+                        detail: { path: parent, fromHistory: false },
+                      }),
+                    );
+                  }}
+                >
+                  <ChevronUp size={14} />
+                </button>
               )}
               <div
                 className={`flex items-center gap-2 overflow-hidden transition-all duration-300 whitespace-nowrap ${
@@ -551,7 +542,7 @@ export default function MainLibrary(props: MainLibraryProps) {
             </div>
           )}
         </div>
-        <div className="flex items-center gap-4 shrink-0">
+        <div className="flex flex-wrap items-center justify-end gap-2 shrink-0 max-w-[70%]">
           {props.importState.status === Status.Importing && (
             <Text as="div" color={TextColors.accent} className="flex items-center gap-2 animate-pulse">
               <FolderInput size={16} />
@@ -575,11 +566,639 @@ export default function MainLibrary(props: MainLibraryProps) {
               <span>{t('library.import.failed')}</span>
             </Text>
           )}
+          <span
+            className="hidden sm:inline-flex items-center h-8 px-2 rounded-md text-[10px] tabular-nums text-text-secondary/80 bg-surface/50 border border-border-color/20"
+            data-tooltip={t('library.filters.photoCountTip' as any, {
+              defaultValue: 'Photos in current view (after filters)',
+            })}
+          >
+            {t('library.filters.photoCount' as any, {
+              defaultValue: '{{count}} photos',
+              count: props.imageList?.length ?? 0,
+            })}
+          </span>
+          <button
+            type="button"
+            disabled={(props.multiSelectedPaths?.length || 0) === 0 && !props.activePath}
+            onClick={() =>
+              setLibrary({
+                showSelectedOnly: !showSelectedOnly,
+                showPreviousImportOnly: false,
+                showQuickCollectionOnly: false,
+              })
+            }
+            className={clsx(
+              'hidden sm:inline-flex items-center h-8 px-2 rounded-md text-[10px] uppercase tracking-wide border transition-colors',
+              showSelectedOnly
+                ? 'bg-card-active text-text-primary border-border-color/40'
+                : 'text-text-secondary hover:text-text-primary bg-surface/80 border-border-color/25',
+              (props.multiSelectedPaths?.length || 0) === 0 && !props.activePath && 'opacity-40 cursor-not-allowed',
+            )}
+            data-tooltip={t('library.filters.selectedOnlyTip' as any, {
+              defaultValue: 'Show only selected photos',
+            })}
+          >
+            {t('library.filters.selectedOnly' as any, { defaultValue: 'Selected' })}
+            {(props.multiSelectedPaths?.length || 0) > 0 && (
+              <span className="ml-1 min-w-[1.1rem] h-4 px-1 rounded bg-black/25 text-text-primary flex items-center justify-center text-[9px] tabular-nums">
+                {props.multiSelectedPaths.length}
+              </span>
+            )}
+          </button>
           <DisplayModeSwitch displayMode={libraryDisplayMode} setDisplayMode={setLibraryDisplayMode} t={t} />
 
-          <div className="flex items-center bg-surface p-1 rounded-lg gap-1 border border-border-color/20">
+          <div className="flex items-center bg-surface/80 p-0.5 rounded-md gap-0.5 border border-border-color/25">
             <SearchInput indexingProgress={props.indexingProgress} isIndexing={props.isIndexing} />
             <ViewOptionsDropdown
+              advancedFilters={
+                <>
+          <div className="hidden xl:flex items-center gap-1 px-1 h-8 rounded-md bg-surface/80 border border-border-color/25 text-[10px]">
+            <select
+              className="h-6 max-w-[9rem] bg-transparent text-text-secondary text-[10px] outline-none"
+              value={filterCriteria?.camera || ''}
+              onChange={(e) =>
+                setFilterCriteria((prev: any) => ({
+                  ...prev,
+                  camera: e.target.value || undefined,
+                }))
+              }
+              data-tooltip={t('library.filters.camera' as any, { defaultValue: 'Camera' })}
+            >
+              <option value="">{t('library.filters.cameraAll' as any, { defaultValue: 'All cameras' })}</option>
+              {Array.from(
+                new Set(
+                  (props.imageList || [])
+                    .map((img: any) => {
+                      const make = img.exif?.Make || '';
+                      const model = img.exif?.Model || '';
+                      return `${make} ${model}`.trim();
+                    })
+                    .filter(Boolean),
+                ),
+              )
+                .sort((a: string, b: string) => a.localeCompare(b))
+                .map((cam: string) => (
+                  <option key={cam} value={cam}>
+                    {cam}
+                  </option>
+                ))}
+            </select>
+          </div>
+          <div className="hidden xl:flex items-center gap-1 px-1 h-8 rounded-md bg-surface/80 border border-border-color/25 text-[10px]">
+            <select
+              className="h-6 max-w-[8rem] bg-transparent text-text-secondary text-[10px] outline-none"
+              value={filterCriteria?.city || ''}
+              onChange={(e) =>
+                setFilterCriteria((prev: any) => ({
+                  ...prev,
+                  city: e.target.value || undefined,
+                }))
+              }
+              data-tooltip={t('library.filters.city' as any, { defaultValue: 'City' })}
+            >
+              <option value="">{t('library.filters.cityAll' as any, { defaultValue: 'All cities' })}</option>
+              {Array.from(
+                new Set(
+                  (props.imageList || [])
+                    .map((img: any) => String(img.exif?.City || '').trim())
+                    .filter(Boolean),
+                ),
+              )
+                .sort((a: string, b: string) => a.localeCompare(b))
+                .map((city: string) => (
+                  <option key={city} value={city}>
+                    {city}
+                  </option>
+                ))}
+            </select>
+          </div>
+          <div className="hidden xl:flex items-center gap-1 px-1 h-8 rounded-md bg-surface/80 border border-border-color/25 text-[10px]">
+            <select
+              className="h-6 max-w-[8rem] bg-transparent text-text-secondary text-[10px] outline-none"
+              value={filterCriteria?.country || ''}
+              onChange={(e) =>
+                setFilterCriteria((prev: any) => ({
+                  ...prev,
+                  country: e.target.value || undefined,
+                }))
+              }
+              data-tooltip={t('library.filters.country' as any, { defaultValue: 'Country' })}
+            >
+              <option value="">{t('library.filters.countryAll' as any, { defaultValue: 'All countries' })}</option>
+              {Array.from(
+                new Set(
+                  (props.imageList || [])
+                    .map((img: any) => String(img.exif?.Country || '').trim())
+                    .filter(Boolean),
+                ),
+              )
+                .sort((a: string, b: string) => a.localeCompare(b))
+                .map((country: string) => (
+                  <option key={country} value={country}>
+                    {country}
+                  </option>
+                ))}
+            </select>
+          </div>
+          <div className="hidden xl:flex items-center gap-1 px-1 h-8 rounded-md bg-surface/80 border border-border-color/25 text-[10px]">
+            <select
+              className="h-6 max-w-[9rem] bg-transparent text-text-secondary text-[10px] outline-none"
+              value={filterCriteria?.lens || ''}
+              onChange={(e) =>
+                setFilterCriteria((prev: any) => ({
+                  ...prev,
+                  lens: e.target.value || undefined,
+                }))
+              }
+              data-tooltip={t('library.filters.lens' as any, { defaultValue: 'Lens' })}
+            >
+              <option value="">{t('library.filters.lensAll' as any, { defaultValue: 'All lenses' })}</option>
+              {Array.from(
+                new Set(
+                  (props.imageList || [])
+                    .map((img: any) => String(img.exif?.LensModel || img.exif?.Lens || '').trim())
+                    .filter(Boolean),
+                ),
+              )
+                .sort((a: string, b: string) => a.localeCompare(b))
+                .map((lens: string) => (
+                  <option key={lens} value={lens}>
+                    {lens}
+                  </option>
+                ))}
+            </select>
+          </div>
+          <div className="hidden lg:flex items-center gap-0.5 px-1 h-8 rounded-md bg-surface/80 border border-border-color/25">
+            <select
+              value={filterCriteria?.fileExt || ''}
+              onChange={(e) =>
+                setFilterCriteria((prev: any) => ({
+                  ...prev,
+                  fileExt: e.target.value || undefined,
+                }))
+              }
+              className="h-6 max-w-[5.5rem] bg-transparent text-[10px] text-text-secondary outline-none"
+              data-tooltip={t('library.filters.fileExt' as any, { defaultValue: 'File type' })}
+            >
+              <option value="">{t('library.filters.fileExtAll' as any, { defaultValue: 'All types' })}</option>
+              {Array.from(
+                new Set(
+                  (props.imageList || []).map((img: any) => {
+                    const p = String(img.path || '');
+                    const d = p.lastIndexOf('.');
+                    return d >= 0 ? p.slice(d + 1).toLowerCase() : '';
+                  }).filter(Boolean),
+                ),
+              )
+                .sort((a: string, b: string) => a.localeCompare(b))
+                .map((ext: string) => (
+                  <option key={ext} value={ext}>
+                    {ext.toUpperCase()}
+                  </option>
+                ))}
+            </select>
+          </div>
+
+          <div className="hidden lg:flex items-center gap-1 px-1 h-8 rounded-md bg-surface/80 border border-border-color/25">
+            <input
+              list="keyword-filter-list"
+              type="search"
+              placeholder={t('library.filters.keywordPlaceholder' as any, { defaultValue: 'Keyword…' })}
+              value={filterCriteria?.keyword || ''}
+              onChange={(e) =>
+                setFilterCriteria((prev: any) => ({
+                  ...prev,
+                  keyword: e.target.value || undefined,
+                }))
+              }
+              className="h-6 w-24 xl:w-28 bg-transparent text-[10px] text-text-secondary placeholder:text-text-secondary/50 outline-none px-1"
+            />
+            <datalist id="keyword-filter-list">
+              {Array.from(
+                new Set(
+                  (props.imageList || []).flatMap((img: any) =>
+                    (img.tags || [])
+                      .filter((tg: string) => tg.startsWith('user:'))
+                      .map((tg: string) => tg.replace(/^user:/, '')),
+                  ),
+                ),
+              )
+                .filter(Boolean)
+                .sort((a: string, b: string) => a.localeCompare(b))
+                .slice(0, 80)
+                .map((kw: string) => (
+                  <option key={kw} value={kw} />
+                ))}
+            </datalist>
+
+          </div>
+          <div className="hidden xl:flex items-center gap-0.5 px-1 h-8 rounded-md bg-surface/80 border border-border-color/25">
+            <input
+              type="search"
+              placeholder={t('library.filters.captionPlaceholder' as any, { defaultValue: 'Caption…' })}
+              value={filterCriteria?.caption || ''}
+              onChange={(e) =>
+                setFilterCriteria((prev: any) => ({
+                  ...prev,
+                  caption: e.target.value || undefined,
+                }))
+              }
+              className="h-6 w-24 xl:w-28 bg-transparent text-[10px] text-text-secondary placeholder:text-text-secondary/50 outline-none px-1"
+              data-tooltip={t('library.filters.caption' as any, { defaultValue: 'Caption / title' })}
+            />
+          </div>
+
+          <div className="hidden xl:flex items-center gap-0.5 px-1 h-8 rounded-md bg-surface/80 border border-border-color/25 text-[10px] text-text-secondary">
+            <select
+              className="h-6 max-w-[5.5rem] bg-transparent text-[10px] outline-none"
+              value={filterCriteria?.dateField === 'modified' ? 'modified' : 'capture'}
+              onChange={(e) =>
+                setFilterCriteria((prev: any) => ({
+                  ...prev,
+                  dateField: e.target.value === 'modified' ? 'modified' : 'capture',
+                }))
+              }
+              data-tooltip={t('library.filters.dateField' as any, {
+                defaultValue: 'Date field for range filter',
+              })}
+            >
+              <option value="capture">{t('library.filters.dateCapture' as any, { defaultValue: 'Capture' })}</option>
+              <option value="modified">{t('library.filters.dateModified' as any, { defaultValue: 'Modified' })}</option>
+            </select>
+            <input
+              type="date"
+              value={filterCriteria?.dateFrom || ''}
+              onChange={(e) =>
+                setFilterCriteria((prev: any) => ({
+                  ...prev,
+                  dateFrom: e.target.value || undefined,
+                }))
+              }
+              className="h-6 bg-transparent text-[10px] outline-none max-w-[7.5rem]"
+              data-tooltip={t('library.filters.dateFrom' as any, { defaultValue: 'From date' })}
+            />
+            <span className="opacity-40">–</span>
+            <input
+              type="date"
+              value={filterCriteria?.dateTo || ''}
+              onChange={(e) =>
+                setFilterCriteria((prev: any) => ({
+                  ...prev,
+                  dateTo: e.target.value || undefined,
+                }))
+              }
+              className="h-6 bg-transparent text-[10px] outline-none max-w-[7.5rem]"
+              data-tooltip={t('library.filters.dateTo' as any, { defaultValue: 'To date' })}
+            />
+          </div>
+          <div className="hidden xl:flex items-center gap-0.5 px-1 h-8 rounded-md bg-surface/80 border border-border-color/25 text-[10px] text-text-secondary">
+            <span className="opacity-50 px-0.5">ISO</span>
+            <input
+              type="number"
+              min={0}
+              placeholder={t('library.filters.isoMin' as any, { defaultValue: 'min' })}
+              value={filterCriteria?.isoMin ?? ''}
+              onChange={(e) =>
+                setFilterCriteria((prev: any) => ({
+                  ...prev,
+                  isoMin: e.target.value === '' ? undefined : Number(e.target.value),
+                }))
+              }
+              className="h-6 w-12 bg-transparent text-[10px] outline-none"
+            />
+            <span className="opacity-40">–</span>
+            <input
+              type="number"
+              min={0}
+              placeholder={t('library.filters.isoMax' as any, { defaultValue: 'max' })}
+              value={filterCriteria?.isoMax ?? ''}
+              onChange={(e) =>
+                setFilterCriteria((prev: any) => ({
+                  ...prev,
+                  isoMax: e.target.value === '' ? undefined : Number(e.target.value),
+                }))
+              }
+              className="h-6 w-12 bg-transparent text-[10px] outline-none"
+            />
+          </div>
+          <div className="hidden 2xl:flex items-center gap-0.5 px-1 h-8 rounded-md bg-surface/80 border border-border-color/25 text-[10px] text-text-secondary">
+            <span className="opacity-50 px-0.5">f/</span>
+            <input
+              type="number"
+              min={0}
+              step={0.1}
+              placeholder={t('library.filters.apertureMin' as any, { defaultValue: 'min' })}
+              value={filterCriteria?.apertureMin ?? ''}
+              onChange={(e) =>
+                setFilterCriteria((prev: any) => ({
+                  ...prev,
+                  apertureMin: e.target.value === '' ? undefined : Number(e.target.value),
+                }))
+              }
+              className="h-6 w-11 bg-transparent text-[10px] outline-none"
+            />
+            <span className="opacity-40">–</span>
+            <input
+              type="number"
+              min={0}
+              step={0.1}
+              placeholder={t('library.filters.apertureMax' as any, { defaultValue: 'max' })}
+              value={filterCriteria?.apertureMax ?? ''}
+              onChange={(e) =>
+                setFilterCriteria((prev: any) => ({
+                  ...prev,
+                  apertureMax: e.target.value === '' ? undefined : Number(e.target.value),
+                }))
+              }
+              className="h-6 w-11 bg-transparent text-[10px] outline-none"
+            />
+          </div>
+          <div className="hidden 2xl:flex items-center gap-0.5 px-1 h-8 rounded-md bg-surface/80 border border-border-color/25 text-[10px] text-text-secondary">
+            <span className="opacity-50 px-0.5">mm</span>
+            <input
+              type="number"
+              min={0}
+              placeholder={t('library.filters.focalMin' as any, { defaultValue: 'min' })}
+              value={filterCriteria?.focalMin ?? ''}
+              onChange={(e) =>
+                setFilterCriteria((prev: any) => ({
+                  ...prev,
+                  focalMin: e.target.value === '' ? undefined : Number(e.target.value),
+                }))
+              }
+              className="h-6 w-11 bg-transparent text-[10px] outline-none"
+            />
+            <span className="opacity-40">–</span>
+            <input
+              type="number"
+              min={0}
+              placeholder={t('library.filters.focalMax' as any, { defaultValue: 'max' })}
+              value={filterCriteria?.focalMax ?? ''}
+              onChange={(e) =>
+                setFilterCriteria((prev: any) => ({
+                  ...prev,
+                  focalMax: e.target.value === '' ? undefined : Number(e.target.value),
+                }))
+              }
+              className="h-6 w-11 bg-transparent text-[10px] outline-none"
+            />
+          </div>
+          <div className="hidden 2xl:flex items-center gap-0.5 px-1 h-8 rounded-md bg-surface/80 border border-border-color/25 text-[10px] text-text-secondary" title={t('library.filters.shutterHint' as any, { defaultValue: 'Shutter range in seconds (e.g. 0.004 = 1/250)' })}>
+            <span className="opacity-50 px-0.5">s</span>
+            <input
+              type="number"
+              min={0}
+              step="any"
+              placeholder={t('library.filters.shutterMin' as any, { defaultValue: 'min' })}
+              value={filterCriteria?.shutterMin ?? ''}
+              onChange={(e) =>
+                setFilterCriteria((prev: any) => ({
+                  ...prev,
+                  shutterMin: e.target.value === '' ? undefined : Number(e.target.value),
+                }))
+              }
+              className="h-6 w-14 bg-transparent text-[10px] outline-none"
+            />
+            <span className="opacity-40">–</span>
+            <input
+              type="number"
+              min={0}
+              step="any"
+              placeholder={t('library.filters.shutterMax' as any, { defaultValue: 'max' })}
+              value={filterCriteria?.shutterMax ?? ''}
+              onChange={(e) =>
+                setFilterCriteria((prev: any) => ({
+                  ...prev,
+                  shutterMax: e.target.value === '' ? undefined : Number(e.target.value),
+                }))
+              }
+              className="h-6 w-14 bg-transparent text-[10px] outline-none"
+            />
+          </div>
+          <div className="hidden lg:flex items-center gap-0.5 px-1 h-8 rounded-md bg-surface/80 border border-border-color/25 text-[10px]">
+            <select
+              className="h-6 max-w-[5.5rem] bg-transparent text-text-secondary text-[10px] outline-none"
+              value={filterCriteria?.hasGps && filterCriteria.hasGps !== 'all' ? filterCriteria.hasGps : ''}
+              onChange={(e) =>
+                setFilterCriteria((prev: any) => ({
+                  ...prev,
+                  hasGps: e.target.value ? (e.target.value as 'yes' | 'no') : undefined,
+                }))
+              }
+              data-tooltip={t('library.filters.hasGps' as any, { defaultValue: 'GPS' })}
+            >
+              <option value="">{t('library.filters.gpsAll' as any, { defaultValue: 'GPS: all' })}</option>
+              <option value="yes">{t('library.filters.gpsYes' as any, { defaultValue: 'Has GPS' })}</option>
+              <option value="no">{t('library.filters.gpsNo' as any, { defaultValue: 'No GPS' })}</option>
+            </select>
+          </div>
+          <div className="hidden lg:flex items-center gap-0.5 px-1 h-8 rounded-md bg-surface/80 border border-border-color/25 text-[10px]">
+            <select
+              className="h-6 max-w-[6.5rem] bg-transparent text-text-secondary text-[10px] outline-none"
+              value={
+                filterCriteria?.hasKeywords && filterCriteria.hasKeywords !== 'all'
+                  ? filterCriteria.hasKeywords
+                  : ''
+              }
+              onChange={(e) =>
+                setFilterCriteria((prev: any) => ({
+                  ...prev,
+                  hasKeywords: e.target.value ? (e.target.value as 'yes' | 'no') : undefined,
+                }))
+              }
+              data-tooltip={t('library.filters.hasKeywords' as any, { defaultValue: 'Keywords' })}
+            >
+              <option value="">{t('library.filters.keywordsAll' as any, { defaultValue: 'Keywords: all' })}</option>
+              <option value="yes">{t('library.filters.keywordsYes' as any, { defaultValue: 'Has keywords' })}</option>
+              <option value="no">{t('library.filters.keywordsNo' as any, { defaultValue: 'No keywords' })}</option>
+            </select>
+          </div>
+          <div className="hidden lg:flex items-center gap-0.5 px-1 h-8 rounded-md bg-surface/80 border border-border-color/25 text-[10px]">
+            <select
+              className="h-6 max-w-[6.5rem] bg-transparent text-text-secondary text-[10px] outline-none"
+              value={
+                filterCriteria?.virtualCopies && filterCriteria.virtualCopies !== 'all'
+                  ? filterCriteria.virtualCopies
+                  : ''
+              }
+              onChange={(e) =>
+                setFilterCriteria((prev: any) => ({
+                  ...prev,
+                  virtualCopies: e.target.value ? (e.target.value as 'yes' | 'no') : undefined,
+                }))
+              }
+              data-tooltip={t('library.filters.virtualCopies' as any, { defaultValue: 'Virtual copies' })}
+            >
+              <option value="">{t('library.filters.vcAll' as any, { defaultValue: 'VC: all' })}</option>
+              <option value="yes">{t('library.filters.vcYes' as any, { defaultValue: 'Virtual copies' })}</option>
+              <option value="no">{t('library.filters.vcNo' as any, { defaultValue: 'Masters only' })}</option>
+            </select>
+          </div>
+          <div className="hidden lg:flex items-center gap-0.5 px-1 h-8 rounded-md bg-surface/80 border border-border-color/25 text-[10px]">
+            <select
+              className="h-6 max-w-[6.5rem] bg-transparent text-text-secondary text-[10px] outline-none"
+              value={
+                filterCriteria?.hasCaption && filterCriteria.hasCaption !== 'all'
+                  ? filterCriteria.hasCaption
+                  : ''
+              }
+              onChange={(e) =>
+                setFilterCriteria((prev: any) => ({
+                  ...prev,
+                  hasCaption: e.target.value ? (e.target.value as 'yes' | 'no') : undefined,
+                }))
+              }
+              data-tooltip={t('library.filters.hasCaption' as any, { defaultValue: 'Caption' })}
+            >
+              <option value="">{t('library.filters.captionAll' as any, { defaultValue: 'Caption: all' })}</option>
+              <option value="yes">{t('library.filters.captionYes' as any, { defaultValue: 'Has caption' })}</option>
+              <option value="no">{t('library.filters.captionNo' as any, { defaultValue: 'No caption' })}</option>
+            </select>
+          </div>
+          <div className="hidden lg:flex items-center gap-0.5 px-1 h-8 rounded-md bg-surface/80 border border-border-color/25 text-[10px]">
+            <select
+              className="h-6 max-w-[7rem] bg-transparent text-text-secondary text-[10px] outline-none"
+              value={
+                filterCriteria?.hasLocation && filterCriteria.hasLocation !== 'all'
+                  ? filterCriteria.hasLocation
+                  : ''
+              }
+              onChange={(e) =>
+                setFilterCriteria((prev: any) => ({
+                  ...prev,
+                  hasLocation: e.target.value ? (e.target.value as 'yes' | 'no') : undefined,
+                }))
+              }
+              data-tooltip={t('library.filters.hasLocation' as any, { defaultValue: 'Location' })}
+            >
+              <option value="">{t('library.filters.locationAll' as any, { defaultValue: 'Loc: all' })}</option>
+              <option value="yes">{t('library.filters.locationYes' as any, { defaultValue: 'Has location' })}</option>
+              <option value="no">{t('library.filters.locationNo' as any, { defaultValue: 'No location' })}</option>
+            </select>
+          </div>
+          <div className="hidden lg:flex items-center gap-0.5 px-1 h-8 rounded-md bg-surface/80 border border-border-color/25 text-[10px]">
+            <select
+              className="h-6 max-w-[7rem] bg-transparent text-text-secondary text-[10px] outline-none"
+              value={
+                filterCriteria?.orientation && filterCriteria.orientation !== 'all'
+                  ? filterCriteria.orientation
+                  : ''
+              }
+              onChange={(e) =>
+                setFilterCriteria((prev: any) => ({
+                  ...prev,
+                  orientation: e.target.value
+                    ? (e.target.value as 'landscape' | 'portrait' | 'square')
+                    : undefined,
+                }))
+              }
+              data-tooltip={t('library.filters.orientation' as any, { defaultValue: 'Orientation' })}
+            >
+              <option value="">{t('library.filters.orientationAll' as any, { defaultValue: 'Orient: all' })}</option>
+              <option value="landscape">{t('library.filters.landscape' as any, { defaultValue: 'Landscape' })}</option>
+              <option value="portrait">{t('library.filters.portrait' as any, { defaultValue: 'Portrait' })}</option>
+              <option value="square">{t('library.filters.square' as any, { defaultValue: 'Square' })}</option>
+            </select>
+          </div>
+                </>
+              }
+              resetFilters={
+                <>
+          {((filterCriteria?.rating ?? 0) !== 0 ||
+            (filterCriteria?.colors || []).length > 0 ||
+            (filterCriteria?.rawStatus && filterCriteria.rawStatus !== RawStatus.All) ||
+            (filterCriteria?.editedStatus && filterCriteria.editedStatus !== EditedStatus.All) ||
+            (filterCriteria?.flagStatus && filterCriteria.flagStatus !== FlagStatus.All) ||
+            !!(filterCriteria?.camera && String(filterCriteria.camera).trim()) ||
+            !!(filterCriteria?.city && String(filterCriteria.city).trim()) ||
+            !!(filterCriteria?.country && String(filterCriteria.country).trim()) ||
+            !!(filterCriteria?.keyword && String(filterCriteria.keyword).trim()) ||
+            !!(filterCriteria?.dateFrom || filterCriteria?.dateTo) ||
+            !!(filterCriteria?.lens && String(filterCriteria.lens).trim()) ||
+            filterCriteria?.isoMin != null ||
+            filterCriteria?.isoMax != null ||
+            !!(filterCriteria?.hasGps && filterCriteria.hasGps !== 'all') ||
+            filterCriteria?.apertureMin != null ||
+            filterCriteria?.apertureMax != null ||
+            filterCriteria?.focalMin != null ||
+            filterCriteria?.focalMax != null ||
+            filterCriteria?.shutterMin != null ||
+            filterCriteria?.shutterMax != null ||
+            !!(filterCriteria?.fileExt && String(filterCriteria.fileExt).trim()) ||
+            !!(filterCriteria?.caption && String(filterCriteria.caption).trim()) ||
+            !!(filterCriteria?.hasKeywords && filterCriteria.hasKeywords !== 'all') ||
+            !!(filterCriteria?.virtualCopies && filterCriteria.virtualCopies !== 'all') ||
+            !!(filterCriteria?.hasCaption && filterCriteria.hasCaption !== 'all') ||
+            !!(filterCriteria?.hasLocation && filterCriteria.hasLocation !== 'all') ||
+            !!(filterCriteria?.orientation && filterCriteria.orientation !== 'all')) && (
+            <button
+              type="button"
+              className="hidden sm:flex items-center h-8 px-2 rounded-md text-[10px] uppercase tracking-wide text-text-secondary hover:text-text-primary bg-surface/80 border border-border-color/25 gap-1"
+              onClick={() =>
+                setFilterCriteria({
+                  colors: [],
+                  rating: 0,
+                  rawStatus: RawStatus.All,
+                  editedStatus: EditedStatus.All,
+                  flagStatus: FlagStatus.All,
+                  camera: undefined,
+                  city: undefined,
+                  country: undefined,
+                  keyword: undefined,
+                  dateFrom: undefined,
+                  dateTo: undefined,
+                  dateField: undefined,
+                  lens: undefined,
+                  isoMin: undefined,
+                  isoMax: undefined,
+                  hasGps: undefined,
+                  apertureMin: undefined,
+                  apertureMax: undefined,
+                  focalMin: undefined,
+                  focalMax: undefined,
+                  shutterMin: undefined,
+                  shutterMax: undefined,
+                  fileExt: undefined,
+                  caption: undefined,
+                  hasKeywords: undefined,
+                  virtualCopies: undefined,
+                  hasCaption: undefined,
+                  hasLocation: undefined,
+                  orientation: undefined,
+                })
+              }
+            >
+              {t('library.filters.reset')}
+              <span className="min-w-[1.1rem] h-4 px-1 rounded bg-card-active text-text-primary flex items-center justify-center text-[9px]">
+                {Number((filterCriteria?.rating ?? 0) !== 0) +
+                  Number((filterCriteria?.colors || []).length > 0) +
+                  Number(!!(filterCriteria?.rawStatus && filterCriteria.rawStatus !== RawStatus.All)) +
+                  Number(!!(filterCriteria?.editedStatus && filterCriteria.editedStatus !== EditedStatus.All)) +
+                  Number(!!(filterCriteria?.flagStatus && filterCriteria.flagStatus !== FlagStatus.All)) +
+                  Number(!!(filterCriteria?.camera && String(filterCriteria.camera).trim())) +
+                  Number(!!(filterCriteria?.city && String(filterCriteria.city).trim())) +
+                  Number(!!(filterCriteria?.country && String(filterCriteria.country).trim())) +
+                  Number(!!(filterCriteria?.keyword && String(filterCriteria.keyword).trim())) +
+                  Number(!!(filterCriteria?.dateFrom || filterCriteria?.dateTo)) +
+                  Number(!!(filterCriteria?.lens && String(filterCriteria.lens).trim())) +
+                  Number(filterCriteria?.isoMin != null || filterCriteria?.isoMax != null) +
+                  Number(!!(filterCriteria?.hasGps && filterCriteria.hasGps !== 'all')) +
+                  Number(filterCriteria?.apertureMin != null || filterCriteria?.apertureMax != null) +
+                  Number(filterCriteria?.focalMin != null || filterCriteria?.focalMax != null) +
+                  Number(filterCriteria?.shutterMin != null || filterCriteria?.shutterMax != null) +
+                  Number(!!(filterCriteria?.fileExt && String(filterCriteria.fileExt).trim())) +
+                  Number(!!(filterCriteria?.caption && String(filterCriteria.caption).trim())) +
+                  Number(!!(filterCriteria?.hasKeywords && filterCriteria.hasKeywords !== 'all')) +
+                  Number(!!(filterCriteria?.virtualCopies && filterCriteria.virtualCopies !== 'all')) +
+                  Number(!!(filterCriteria?.hasCaption && filterCriteria.hasCaption !== 'all')) +
+                  Number(!!(filterCriteria?.hasLocation && filterCriteria.hasLocation !== 'all')) +
+                  Number(!!(filterCriteria?.hasStack && filterCriteria.hasStack !== 'all')) +
+                  Number(!!(filterCriteria?.orientation && filterCriteria.orientation !== 'all'))}
+              </span>
+            </button>
+          )}
+                </>
+              }
               libraryViewMode={props.libraryViewMode}
               onSelectSize={props.onThumbnailSizeChange}
               onSelectAspectRatio={props.onThumbnailAspectRatioChange}
@@ -596,19 +1215,19 @@ export default function MainLibrary(props: MainLibraryProps) {
             />
             {!props.isAndroid && (
               <Button
-                className="h-12 w-12 bg-transparent text-text-primary shadow-none p-0 flex items-center justify-center"
+                className="h-9 w-9 bg-transparent text-text-primary shadow-none p-0 flex items-center justify-center"
                 onClick={props.onNavigateToCommunity}
                 data-tooltip={t('library.tooltips.communityPresets')}
               >
-                <Users className="w-5 h-5" />
+                <Users className="w-4 h-4" />
               </Button>
             )}
             <Button
-              className="h-12 w-12 bg-transparent text-text-primary shadow-none p-0 flex items-center justify-center"
+              className="h-9 w-9 bg-transparent text-text-primary shadow-none p-0 flex items-center justify-center"
               onClick={props.onGoHome}
               data-tooltip={t('library.tooltips.goHome')}
             >
-              <Home className="w-5 h-5" />
+              <Home className="w-4 h-4" />
             </Button>
           </div>
         </div>
@@ -617,6 +1236,44 @@ export default function MainLibrary(props: MainLibraryProps) {
       {props.imageList.length > 0 ? (
         libraryDisplayMode === LibraryDisplayMode.Cull ? (
           <CullingView {...props} />
+        ) : libraryDisplayMode === LibraryDisplayMode.Compare ? (
+          <CompareView
+            imageList={props.imageList}
+            multiSelectedPaths={props.multiSelectedPaths}
+            activePath={props.activePath}
+            imageRatings={props.imageRatings}
+            onImageClick={props.onImageClick}
+            onImageDoubleClick={props.onImageDoubleClick}
+            onContextMenu={props.onContextMenu}
+            onRequestThumbnails={props.onRequestThumbnails}
+            onRate={props.onRate}
+          />
+        ) : libraryDisplayMode === LibraryDisplayMode.Survey ? (
+          <SurveyView
+            imageList={props.imageList}
+            multiSelectedPaths={props.multiSelectedPaths}
+            activePath={props.activePath}
+            imageRatings={props.imageRatings}
+            onImageClick={props.onImageClick}
+            onImageDoubleClick={props.onImageDoubleClick}
+            onContextMenu={props.onContextMenu}
+            onRequestThumbnails={props.onRequestThumbnails}
+            onRate={props.onRate}
+          />
+        ) : libraryDisplayMode === LibraryDisplayMode.Loupe ? (
+          <LoupeView
+            imageList={props.imageList}
+            multiSelectedPaths={props.multiSelectedPaths}
+            activePath={props.activePath}
+            imageRatings={props.imageRatings}
+            onImageClick={props.onImageClick}
+            onImageDoubleClick={props.onImageDoubleClick}
+            onContextMenu={props.onContextMenu}
+            onRequestThumbnails={props.onRequestThumbnails}
+            onRate={props.onRate}
+            onSetColorLabel={props.onSetColorLabel}
+            onSetFlag={props.onSetFlag}
+          />
         ) : (
           <LibraryGrid
             {...props}
@@ -661,9 +1318,44 @@ export default function MainLibrary(props: MainLibraryProps) {
           </Text>
         </div>
       ) : (
-        <div className="flex-1 flex flex-col items-center justify-center" onContextMenu={props.onEmptyAreaContextMenu}>
-          <SlidersHorizontal className="h-12 w-12 mb-4 text-text-secondary" />
+        <div
+          className="flex-1 flex flex-col items-center justify-center gap-3"
+          onContextMenu={props.onEmptyAreaContextMenu}
+        >
+          <SlidersHorizontal className="h-12 w-12 text-text-secondary" />
           <Text>{t('library.filters.noMatch')}</Text>
+          <Text variant={TextVariants.small} color={TextColors.secondary} className="max-w-sm text-center">
+            {t('library.filters.noMatchHint' as any, {
+              defaultValue: 'No photos match the current filters or catalog scope. Clear filters or pick another folder.',
+            })}
+          </Text>
+          <button
+            type="button"
+            className="mt-1 h-8 px-3 rounded-md text-[11px] font-semibold uppercase bg-surface border border-border-color/40 text-text-secondary hover:text-text-primary hover:bg-card-active"
+            onClick={() => {
+              useLibraryStore.getState().setLibrary({
+                filterCriteria: {
+                  colors: [],
+                  rating: 0,
+                  rawStatus: RawStatus.All,
+                  editedStatus: EditedStatus.All,
+                  flagStatus: FlagStatus.All,
+                  hasGps: 'all',
+                  hasCaption: 'all',
+                  hasLocation: 'all',
+                  orientation: 'all',
+                  hasStack: 'all',
+                  hasKeywords: 'all',
+                  virtualCopies: 'all',
+                },
+                showPreviousImportOnly: false,
+                showQuickCollectionOnly: false,
+                showSelectedOnly: false,
+              });
+            }}
+          >
+            {t('library.filters.clearFilters' as any, { defaultValue: 'Clear filters' })}
+          </button>
         </div>
       )}
       {props.isAndroid && (

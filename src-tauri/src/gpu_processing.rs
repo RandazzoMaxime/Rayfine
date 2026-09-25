@@ -551,12 +551,23 @@ pub struct GpuProcessor {
     pub working_texture_view: wgpu::TextureView,
     pub output_texture: wgpu::Texture,
     pub output_texture_view: wgpu::TextureView,
+    /// Whether the full-size display textures (working/output) were allocated.
+    pub has_display: bool,
 }
 
 const FLARE_MAP_SIZE: u32 = 512;
+/// Images are processed in tiles; tile-scoped GPU textures never need to exceed one tile plus overlap.
+const TILE_SIZE: u32 = 2048;
+const TILE_OVERLAP: u32 = 128;
+const MAX_TILE_INPUT: u32 = TILE_SIZE + 2 * TILE_OVERLAP;
 
 impl GpuProcessor {
-    pub fn new(context: GpuContext, max_width: u32, max_height: u32) -> Result<Self, String> {
+    pub fn new(
+        context: GpuContext,
+        max_width: u32,
+        max_height: u32,
+        with_display: bool,
+    ) -> Result<Self, String> {
         let device = &context.device;
         const MAX_MASK_BINDINGS: u32 = 1;
 
@@ -951,10 +962,26 @@ impl GpuProcessor {
         let dummy_lut_view = dummy_lut_texture.create_view(&Default::default());
         let dummy_lut_sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
 
+        // Tile-scoped textures (blurs, ping-pong, tile output) are addressed in tile-local
+        // coordinates, so they only need one tile + overlap, not the whole image.
         let max_tile_size = wgpu::Extent3d {
-            width: max_width,
-            height: max_height,
+            width: max_width.min(MAX_TILE_INPUT),
+            height: max_height.min(MAX_TILE_INPUT),
             depth_or_array_layers: 1,
+        };
+        // Display textures hold the whole image, but only the on-screen editor preview uses them.
+        let display_size = if with_display {
+            wgpu::Extent3d {
+                width: max_width,
+                height: max_height,
+                depth_or_array_layers: 1,
+            }
+        } else {
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            }
         };
 
         let reusable_texture_desc = wgpu::TextureDescriptor {
@@ -1014,7 +1041,7 @@ impl GpuProcessor {
 
         let working_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Working Output Texture"),
-            size: max_tile_size,
+            size: display_size,
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1029,7 +1056,7 @@ impl GpuProcessor {
 
         let output_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Full Output Texture"),
-            size: max_tile_size,
+            size: display_size,
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1074,6 +1101,7 @@ impl GpuProcessor {
             working_texture_view,
             output_texture,
             output_texture_view,
+            has_display: with_display,
         })
     }
 
@@ -1279,9 +1307,6 @@ impl GpuProcessor {
 
             queue.submit(Some(encoder.finish()));
         }
-
-        const TILE_SIZE: u32 = 2048;
-        const TILE_OVERLAP: u32 = 128;
 
         let mut final_pixels = vec![
             0u8;
@@ -1655,7 +1680,7 @@ fn process_and_get_dynamic_image_inner(
     let new_height = (height + 255) & !255;
 
     if let Some(p) = processor_lock.as_ref() {
-        if p.width < width || p.height < height {
+        if p.width < width || p.height < height || (output_to_display && !p.processor.has_display) {
             needs_new_processor = true;
         }
     } else {
@@ -1677,7 +1702,8 @@ fn process_and_get_dynamic_image_inner(
             timeout: Some(std::time::Duration::from_millis(500)),
         });
 
-        let new_processor = GpuProcessor::new(context.clone(), new_width, new_height)?;
+        let new_processor =
+            GpuProcessor::new(context.clone(), new_width, new_height, output_to_display)?;
 
         *processor_lock = Some(crate::GpuProcessorState {
             processor: new_processor,

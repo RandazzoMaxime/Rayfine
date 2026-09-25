@@ -7,7 +7,6 @@ const RIGHT_PANEL_ORDER = [
   Panel.Crop,
   Panel.Masks,
   Panel.Ai,
-  Panel.Presets,
   Panel.Export,
 ];
 
@@ -17,6 +16,9 @@ export interface CollapsibleSectionsState {
   curves: boolean;
   details: boolean;
   effects: boolean;
+  optics: boolean;
+  geometry: boolean;
+  calibration: boolean;
 }
 
 export interface ConfirmModalState {
@@ -79,6 +81,8 @@ interface UIState {
   // View & Layout
   activeView: string;
   isFullScreen: boolean;
+  /** LR Lights Out: 0=normal, 1=dim chrome, 2=black (immersive) */
+  lightsOut: 0 | 1 | 2;
   isWindowFullScreen: boolean;
   isInstantTransition: boolean;
   isLayoutReady: boolean;
@@ -86,8 +90,12 @@ interface UIState {
   isLibraryExportPanelVisible: boolean;
   isSettingsOpen: boolean;
 
+  /** Map module: images the filmstrip should show (collection + GPS filter). null = normal list. */
+  mapImageList: ImageFile[] | null;
+
   // Dimensions
   leftPanelWidth: number;
+  developLeftPanelWidth: number;
   rightPanelWidth: number;
   bottomPanelHeight: number;
   compactEditorPanelHeightOverride: number | null;
@@ -105,6 +113,8 @@ interface UIState {
   renameTargetPaths: Array<string>;
   isImportModalOpen: boolean;
   isCopyPasteSettingsModalOpen: boolean;
+  /** Develop "Preset Browser" modal (grid of presets not yet in the user list). */
+  isPresetBrowserOpen: boolean;
   importTargetFolder: string | null;
   importSourcePaths: Array<string>;
   folderActionTarget: string | null;
@@ -114,6 +124,8 @@ interface UIState {
   isCreateAlbumGroupModalOpen: boolean;
   isRenameAlbumModalOpen: boolean;
   albumActionTarget: string | null;
+  /** When set, next created album is seeded with these photo paths. */
+  pendingAlbumSeedPaths: string[] | null;
 
   // Complex Modal States
   confirmModalState: ConfirmModalState;
@@ -136,22 +148,26 @@ interface UIState {
 export const useUIStore = create<UIState>((set, get) => ({
   activeView: 'library',
   isFullScreen: false,
+  lightsOut: 0,
   isWindowFullScreen: false,
   isInstantTransition: false,
   isLayoutReady: false,
-  uiVisibility: { folderTree: true, filmstrip: true },
+  uiVisibility: { folderTree: true, filmstrip: true, developLeft: true, libraryRight: true },
   isLibraryExportPanelVisible: false,
   isSettingsOpen: false,
 
-  leftPanelWidth: 256,
-  rightPanelWidth: 320,
-  bottomPanelHeight: 144,
+  mapImageList: null,
+
+  leftPanelWidth: 240,
+  developLeftPanelWidth: 220,
+  rightPanelWidth: 340,
+  bottomPanelHeight: 128,
   compactEditorPanelHeightOverride: null,
 
   activeRightPanel: Panel.Adjustments,
   renderedRightPanel: Panel.Adjustments,
   slideDirection: 1,
-  collapsibleSectionsState: { basic: true, color: false, curves: true, details: false, effects: false },
+  collapsibleSectionsState: { basic: true, color: false, curves: false, details: false, effects: false, optics: false, geometry: false, calibration: false },
 
   isCreateFolderModalOpen: false,
   isRenameFolderModalOpen: false,
@@ -159,6 +175,7 @@ export const useUIStore = create<UIState>((set, get) => ({
   renameTargetPaths: [],
   isImportModalOpen: false,
   isCopyPasteSettingsModalOpen: false,
+  isPresetBrowserOpen: false,
   importTargetFolder: null,
   importSourcePaths: [],
   folderActionTarget: null,
@@ -167,6 +184,7 @@ export const useUIStore = create<UIState>((set, get) => ({
   isCreateAlbumGroupModalOpen: false,
   isRenameAlbumModalOpen: false,
   albumActionTarget: null,
+  pendingAlbumSeedPaths: null,
 
   confirmModalState: { isOpen: false },
   panoramaModalState: {

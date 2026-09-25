@@ -72,6 +72,32 @@ const DEFAULT_POINT_CURVES = {
   ],
 };
 
+/** LR named tone curves (approx. point curves on Luma; RGB channels reset to linear). */
+const TONE_CURVE_PRESETS: Record<string, Array<{ x: number; y: number }>> = {
+  Linear: [
+    { x: 0, y: 0 },
+    { x: 255, y: 255 },
+  ],
+  'Medium Contrast': [
+    { x: 0, y: 0 },
+    { x: 32, y: 22 },
+    { x: 64, y: 56 },
+    { x: 128, y: 128 },
+    { x: 192, y: 196 },
+    { x: 224, y: 233 },
+    { x: 255, y: 255 },
+  ],
+  'Strong Contrast': [
+    { x: 0, y: 0 },
+    { x: 32, y: 16 },
+    { x: 64, y: 48 },
+    { x: 128, y: 128 },
+    { x: 192, y: 208 },
+    { x: 224, y: 240 },
+    { x: 255, y: 255 },
+  ],
+};
+
 function buildParametricPoints(settings: ParametricCurveSettings): Array<Coord> {
   const vH = settings.highlights / 100;
   const vL = settings.lights / 100;
@@ -273,6 +299,8 @@ export default function CurveGraph({
   const { showContextMenu } = useContextMenu();
   const [curveMode, setCurveMode] = useState<'point' | 'parametric'>(adjustments.curveMode || 'point');
   const [activeChannel, setActiveChannel] = useState<ActiveChannel>(ActiveChannel.Luma);
+
+
   const [draggingPointIndex, setDraggingPointIndex] = useState<number | null>(null);
   const [draggingSplitKey, setDraggingSplitKey] = useState<'split1' | 'split2' | 'split3' | null>(null);
   const [localPoints, setLocalPoints] = useState<Array<Coord> | null>(null);
@@ -348,6 +376,38 @@ export default function CurveGraph({
         },
       };
     });
+
+  // LR Curves: Shift+C cycles channel; Alt+C toggles Point ↔ Parametric
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        e.target instanceof HTMLSelectElement
+      )
+        return;
+      if (e.key.toLowerCase() !== 'c') return;
+      if (e.ctrlKey || e.metaKey) return;
+      if (e.altKey && !e.shiftKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        handleToggleMode(curveMode === 'point' ? 'parametric' : 'point');
+        return;
+      }
+      if (e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        const order = [ActiveChannel.Luma, ActiveChannel.Red, ActiveChannel.Green, ActiveChannel.Blue];
+        setActiveChannel((cur) => {
+          const idx = order.indexOf(cur);
+          return order[(idx + 1) % order.length];
+        });
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [curveMode]);
+
   };
 
   useEffect(() => {
@@ -513,6 +573,7 @@ export default function CurveGraph({
       localPointsRef.current = newPoints;
       setAdjustments((prev: any) => ({
         ...prev,
+        toneCurveName: 'Custom',
         curves: { ...prev.curves, [activeChannel]: newPoints },
       }));
     }
@@ -537,6 +598,7 @@ export default function CurveGraph({
     localPointsRef.current = newPoints;
     setAdjustments((prev: any) => ({
       ...prev,
+      toneCurveName: 'Custom',
       curves: { ...prev.curves, [activeChannel]: newPoints },
     }));
     setDraggingPointIndex(newPointIndex);
@@ -780,39 +842,46 @@ export default function CurveGraph({
 
   return (
     <div className="select-none touch-none" ref={containerRef}>
-      <div className="flex items-center justify-between gap-2 mb-2 mt-2">
-        <div className="flex items-center gap-1 p-1 rounded-lg bg-surface-secondary shrink-0">
+      <div className="flex items-center justify-between gap-1.5 mb-1.5 mt-1">
+        <div className="flex items-center gap-0.5 p-0.5 rounded-md bg-surface-secondary shrink-0">
           <button
-            className={`w-8 h-8 rounded-md flex items-center justify-center transition-all ${
+            className={`h-6 px-1.5 rounded flex items-center gap-1 text-[9px] uppercase tracking-wide transition-all ${
               !isParametricMode ? 'bg-surface text-text-primary' : 'text-text-secondary hover:text-text-primary'
             }`}
             onClick={() => handleToggleMode('point')}
-            data-tooltip={t('adjustments.curves.pointCurve')}
+            data-tooltip={t('adjustments.curves.pointCurveTip' as any, { defaultValue: 'Point curve (Alt+C)' })}
             type="button"
           >
-            <Spline size={16} />
+            <Spline size={12} />
+            <span className="hidden sm:inline">{t('adjustments.curves.pointShort' as any)}</span>
           </button>
           <button
-            className={`w-8 h-8 rounded-md flex items-center justify-center transition-all ${
+            className={`h-6 px-1.5 rounded flex items-center gap-1 text-[9px] uppercase tracking-wide transition-all ${
               isParametricMode ? 'bg-surface text-text-primary' : 'text-text-secondary hover:text-text-primary'
             }`}
             onClick={() => handleToggleMode('parametric')}
-            data-tooltip={t('adjustments.curves.parametricCurve')}
+            data-tooltip={t('adjustments.curves.parametricCurveTip' as any, { defaultValue: 'Parametric curve (Alt+C)' })}
             type="button"
           >
-            <Settings2 size={16} />
+            <Settings2 size={12} />
+            <span className="hidden sm:inline">{t('adjustments.curves.paramShort' as any)}</span>
           </button>
         </div>
 
-        <div className="flex items-center gap-1 shrink-0">
+        <div
+          className="flex items-center gap-0.5 shrink-0"
+          data-tooltip={t('adjustments.curves.channelCycleTip' as any, {
+            defaultValue: 'Shift+C channel · Alt+C point/parametric',
+          })}
+        >
           {Object.keys(channelConfig).map((channel: any) => {
             const selected = activeChannel === channel;
             const channelLabel = t(`adjustments.curves.channels.${channel}`);
             return (
               <button
                 key={channel}
-                className={`w-7 h-7 rounded-full flex items-center justify-center transition-all ${
-                  selected ? 'ring-2 ring-offset-2 ring-offset-surface ring-accent' : 'bg-surface-secondary'
+                className={`w-6 h-6 rounded-full flex items-center justify-center transition-all text-[10px] ${
+                  selected ? 'ring-1 ring-offset-1 ring-offset-surface ring-accent' : 'bg-surface-secondary'
                 } ${channel === ActiveChannel.Luma ? 'text-text-primary' : ''}`}
                 onClick={() => setActiveChannel(channel as ActiveChannel)}
                 type="button"
@@ -822,7 +891,7 @@ export default function CurveGraph({
                 }}
                 title={t('adjustments.curves.channelTitle', { channel: channelLabel })}
               >
-                <Text variant={TextVariants.small} color={TextColors.primary} weight={TextWeights.bold}>
+                <Text variant={TextVariants.small} color={TextColors.primary} weight={TextWeights.bold} className="text-[10px]">
                   {channelLabel.charAt(0).toUpperCase()}
                 </Text>
               </button>
@@ -831,6 +900,55 @@ export default function CurveGraph({
         </div>
       </div>
 
+      <div className="flex flex-wrap gap-0.5 mb-1.5">
+        {(['Linear', 'Medium Contrast', 'Strong Contrast', 'Custom'] as const).map((name) => {
+          const cur = String((adjustments as any)?.toneCurveName || 'Linear');
+          const isOn =
+            cur.toLowerCase() === name.toLowerCase() ||
+            (name === 'Linear' && (!cur || cur === 'Linear'));
+          return (
+            <button
+              key={name}
+              type="button"
+              className={`px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wide transition-colors ${
+                isOn
+                  ? 'bg-card-active text-text-primary'
+                  : 'text-text-secondary hover:text-text-primary hover:bg-surface/80'
+              }`}
+              onClick={() => {
+                if (name === 'Custom') {
+                  setAdjustments((prev: any) => ({
+                    ...prev,
+                    toneCurveName: 'Custom',
+                  }));
+                  return;
+                }
+                const lumaPts = TONE_CURVE_PRESETS[name].map((p) => ({ ...p }));
+                const linear = DEFAULT_POINT_CURVES.luma.map((p) => ({ ...p }));
+                setAdjustments((prev: any) => ({
+                  ...prev,
+                  toneCurveName: name,
+                  curves: {
+                    ...(prev.curves || {}),
+                    luma: lumaPts,
+                    red: linear.map((p) => ({ ...p })),
+                    green: linear.map((p) => ({ ...p })),
+                    blue: linear.map((p) => ({ ...p })),
+                  },
+                }));
+                setLocalPoints(null);
+                localPointsRef.current = null;
+                handleToggleMode('point');
+              }}
+              data-tooltip={t('adjustments.curves.toneCurvePresetTip' as any, {
+                defaultValue: 'Named tone curve (crs:ToneCurveName)',
+              })}
+            >
+              {name === 'Medium Contrast' ? 'Med' : name === 'Strong Contrast' ? 'Strong' : name}
+            </button>
+          );
+        })}
+      </div>
       <div className="relative">
         <div
           className="w-full aspect-square bg-surface-secondary p-1 rounded-md relative touch-none"

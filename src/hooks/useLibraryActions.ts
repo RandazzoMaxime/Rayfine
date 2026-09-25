@@ -200,12 +200,9 @@ export function useLibraryActions(handleImageSelect?: (path: string) => void) {
       handleMultiSelectClick(path, event, {
         shiftAnchor: selectionAnchorPath ?? libraryActivePath,
         updateLibraryActivePath: true,
-        onSimpleClick: (p: string, isAlreadySelected: boolean) => {
-          if (isAlreadySelected) {
-            setLibrary({ libraryActivePath: p, selectionAnchorPath: p });
-          } else {
-            setLibrary({ multiSelectedPaths: [p], libraryActivePath: p, selectionAnchorPath: p });
-          }
+        // Plain click only makes the photo active; the thumbnail checkbox (or P / X) selects it.
+        onSimpleClick: (p: string) => {
+          setLibrary({ libraryActivePath: p, selectionAnchorPath: p });
         },
       });
     },
@@ -359,11 +356,44 @@ export function useLibraryActions(handleImageSelect?: (path: string) => void) {
 
     if (insert(newTree, actualTarget)) {
       try {
+        // Seed with selection if requested (Create Collection from Selection)
+        const { pendingAlbumSeedPaths, setUI } = useUIStore.getState();
+        const seed =
+          type === 'album' && pendingAlbumSeedPaths && pendingAlbumSeedPaths.length > 0
+            ? [...pendingAlbumSeedPaths]
+            : [];
+        if (seed.length && newItem.type === 'album') {
+          (newItem as Album).images = Array.from(new Set([...(newItem as Album).images, ...seed]));
+        }
         await invoke(Invokes.SaveAlbums, { tree: newTree });
+        if (seed.length && newItem.type === 'album') {
+          try {
+            await invoke(Invokes.AddToAlbum, { albumId: newItem.id, paths: seed });
+          } catch {
+            /* SaveAlbums already has images; AddToAlbum is best-effort for sidecar sync */
+          }
+        }
         const sortedTree = await invoke(Invokes.GetAlbums);
-        setLibrary({ albumTree: sortedTree as AlbumItem[] });
+        setLibrary({
+          albumTree: sortedTree as AlbumItem[],
+          ...(seed.length
+            ? {
+                activeAlbumId: newItem.id,
+                showPreviousImportOnly: false,
+                showQuickCollectionOnly: false,
+                showSelectedOnly: false,
+              }
+            : {}),
+        });
+        setUI({ pendingAlbumSeedPaths: null });
+        if (seed.length) {
+          toast.success(
+            `Collection “${name}” created with ${seed.length} photo${seed.length === 1 ? '' : 's'}`,
+          );
+        }
       } catch (err) {
         toast.error(`Failed to create: ${err}`);
+        useUIStore.getState().setUI({ pendingAlbumSeedPaths: null });
       }
     }
   }, []);
@@ -397,9 +427,45 @@ export function useLibraryActions(handleImageSelect?: (path: string) => void) {
     }
   }, []);
 
+  const handleSetFlag = useCallback(async (flag: 'pick' | 'reject' | null, paths?: string[]) => {
+    const { multiSelectedPaths, libraryActivePath, imageList, setLibrary } = useLibraryStore.getState();
+    const { selectedImage } = useEditorStore.getState();
+    const pathsToUpdate =
+      paths ||
+      (multiSelectedPaths.length > 0
+        ? multiSelectedPaths
+        : selectedImage
+          ? [selectedImage.path]
+          : libraryActivePath
+            ? [libraryActivePath]
+            : []);
+    if (pathsToUpdate.length === 0) return;
+
+    // Toggle: if primary already has same flag, clear it
+    const primary = pathsToUpdate[0];
+    const primaryImg = imageList.find((img: ImageFile) => img.path === primary);
+    const currentFlag = (primaryImg?.tags || []).find((t: string) => t.startsWith('flag:'))?.substring(5) || null;
+    const finalFlag = flag !== null && flag === currentFlag ? null : flag;
+
+    try {
+      await invoke(Invokes.SetFlagForPaths, { paths: pathsToUpdate, flag: finalFlag });
+      setLibrary((state) => ({
+        imageList: state.imageList.map((image: ImageFile) => {
+          if (!pathsToUpdate.includes(image.path)) return image;
+          const otherTags = (image.tags || []).filter((tag: string) => !tag.startsWith('flag:'));
+          const newTags = finalFlag ? [...otherTags, `flag:${finalFlag}`] : otherTags;
+          return { ...image, tags: newTags.length > 0 ? newTags : null };
+        }),
+      }));
+    } catch (err) {
+      toast.error(`Failed to set flag: ${err}`);
+    }
+  }, []);
+
   return {
     handleRate,
     handleSetColorLabel,
+    handleSetFlag,
     handleTagsChanged,
     handleUpdateExif,
     handleClearSelection,

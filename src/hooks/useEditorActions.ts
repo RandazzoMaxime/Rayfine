@@ -75,8 +75,10 @@ export function useEditorActions() {
       setAdjustments((prev: Adjustments) => ({
         ...prev,
         ...autoAdjustments,
+        // LR-compatible flag when Auto is applied (XMP crs:AutoTone on export)
+        autoTone: true,
         sectionVisibility: { ...prev.sectionVisibility, ...autoAdjustments.sectionVisibility },
-      }));
+      } as Adjustments));
     } catch (err) {
       toast.error(`Failed to apply auto adjustments: ${err}`);
     }
@@ -197,7 +199,9 @@ export function useEditorActions() {
 
       if (!copiedAdjustments || !appSettings) return;
 
-      const { mode, includedAdjustments } = appSettings.copyPasteSettings;
+      const mode = appSettings.copyPasteSettings?.mode ?? PasteMode.Merge;
+      const includedAdjustments =
+        appSettings.copyPasteSettings?.includedAdjustments ?? COPYABLE_ADJUSTMENT_KEYS;
       const adjustmentsToApply: Partial<Adjustments> = {};
 
       for (const key of includedAdjustments) {
@@ -255,6 +259,125 @@ export function useEditorActions() {
     },
     [setAdjustments],
   );
+
+  /**
+   * Lightroom-style "Previous" / Match Previous:
+   * apply develop settings from the last photo that was active in Develop.
+   */
+  const handleMatchPrevious = useCallback(() => {
+    const { previousDevelopAdjustments, previousDevelopPath, selectedImage, copiedAdjustments } =
+      useEditorStore.getState();
+    const { multiSelectedPaths, libraryActivePath } = useLibraryStore.getState();
+
+    if (!previousDevelopAdjustments) {
+      toast.info(
+        // keep short for toast
+        'No previous settings — open another photo in Develop first.',
+      );
+      return;
+    }
+
+    const pathsToUpdate: string[] = [];
+    const candidates =
+      multiSelectedPaths.length > 0
+        ? multiSelectedPaths
+        : selectedImage?.path
+          ? [selectedImage.path]
+          : libraryActivePath
+            ? [libraryActivePath]
+            : [];
+
+    for (const p of candidates) {
+      if (p && p !== previousDevelopPath) pathsToUpdate.push(p);
+    }
+
+    if (pathsToUpdate.length === 0) {
+      toast.info('Previous settings are from the current photo.');
+      return;
+    }
+
+    // Reuse paste pipeline with temporary clipboard
+    useEditorStore.getState().setEditor({
+      copiedAdjustments: structuredClone(previousDevelopAdjustments),
+    });
+    try {
+      handlePasteAdjustments(pathsToUpdate);
+    } finally {
+      // Restore prior clipboard so Copy/Paste is unchanged
+      useEditorStore.getState().setEditor({ copiedAdjustments });
+    }
+  }, [handlePasteAdjustments]);
+
+  /**
+   * Lightroom-style Sync Settings:
+   * copy develop settings from the active (source) photo onto the rest of the multi-selection.
+   * Uses the same include/merge rules as Copy/Paste Settings.
+   */
+  const handleSyncSettings = useCallback(async () => {
+    const { selectedImage, adjustments, copiedAdjustments } = useEditorStore.getState();
+    const { multiSelectedPaths, libraryActivePath } = useLibraryStore.getState();
+
+    const selection =
+      multiSelectedPaths?.length > 0
+        ? multiSelectedPaths
+        : selectedImage?.path
+          ? [selectedImage.path]
+          : libraryActivePath
+            ? [libraryActivePath]
+            : [];
+
+    if (selection.length < 2) {
+      toast.info('Select 2+ photos to sync settings.');
+      return;
+    }
+
+    const sourcePath =
+      (selectedImage?.path && selection.includes(selectedImage.path) && selectedImage.path) ||
+      (libraryActivePath && selection.includes(libraryActivePath) && libraryActivePath) ||
+      selection[0];
+
+    const targets = selection.filter((p) => p && p !== sourcePath);
+    if (targets.length === 0) {
+      toast.info('No target photos to sync.');
+      return;
+    }
+
+    let sourceAdjustments: any = null;
+    if (selectedImage?.path === sourcePath) {
+      sourceAdjustments = adjustments;
+    } else {
+      try {
+        const meta: any = await invoke(Invokes.LoadMetadata, { path: sourcePath });
+        if (meta?.adjustments && !meta.adjustments.is_null) {
+          sourceAdjustments = normalizeLoadedAdjustments(meta.adjustments);
+        } else {
+          sourceAdjustments = { ...INITIAL_ADJUSTMENTS };
+        }
+      } catch (err) {
+        toast.error(`Failed to load source settings: ${err}`);
+        return;
+      }
+    }
+
+    if (!sourceAdjustments) return;
+
+    const adjustmentsToCopy: any = {};
+    for (const key of COPYABLE_ADJUSTMENT_KEYS) {
+      if (Object.prototype.hasOwnProperty.call(sourceAdjustments, key)) {
+        adjustmentsToCopy[key] = structuredClone(sourceAdjustments[key]);
+      }
+    }
+
+    useEditorStore.getState().setEditor({
+      copiedAdjustments: adjustmentsToCopy,
+    });
+    try {
+      handlePasteAdjustments(targets);
+      toast.success(`Synced settings to ${targets.length} photo${targets.length === 1 ? '' : 's'}.`);
+    } finally {
+      useEditorStore.getState().setEditor({ copiedAdjustments });
+    }
+  }, [handlePasteAdjustments]);
 
   const handleZoomChange = useCallback((zoomValue: number, fitToWindow: boolean = false) => {
     const { originalSize, baseRenderSize, adjustments } = useEditorStore.getState();
@@ -315,6 +438,8 @@ export function useEditorActions() {
     handleResetAdjustments,
     handleCopyAdjustments,
     handlePasteAdjustments,
+    handleMatchPrevious,
+    handleSyncSettings,
     handleZoomChange,
   };
 }

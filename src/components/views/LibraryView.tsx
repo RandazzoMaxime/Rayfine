@@ -1,8 +1,11 @@
+import { useEffect, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
+import { Paintbrush, X } from 'lucide-react';
 
 import CommunityPage from '../panel/CommunityPage';
 import MainLibrary from '../panel/MainLibrary';
-import BottomBar from '../panel/BottomBar';
+import LibraryBottomBar from '../panel/library/LibraryBottomBar';
+import LibraryLightbox from '../panel/library/LibraryLightbox';
 
 import { useUIStore } from '../../store/useUIStore';
 import { useLibraryStore } from '../../store/useLibraryStore';
@@ -27,6 +30,8 @@ interface LibraryViewProps {
   handleLibraryImageSingleClick: (...args: any) => void;
   handleImageSelect: (...args: any) => void;
   handleRate: (...args: any) => void;
+  handleSetColorLabel: (...args: any) => void;
+  handleSetFlag: (...args: any) => void;
   handleThumbnailContextMenu: (...args: any) => void;
   handleMainLibraryContextMenu: (...args: any) => void;
   handleContinueSession: (...args: any) => void;
@@ -36,6 +41,8 @@ interface LibraryViewProps {
   handleLibraryRefresh: () => Promise<void>;
   handleCopyAdjustments: () => void;
   handlePasteAdjustments: () => void;
+  handleMatchPrevious?: () => void;
+  handleSyncSettings?: () => void;
   handleResetAdjustments: () => void;
   requestThumbnails: any;
 }
@@ -54,6 +61,8 @@ export default function LibraryView({
   handleLibraryImageSingleClick,
   handleImageSelect,
   handleRate,
+  handleSetColorLabel,
+  handleSetFlag,
   handleThumbnailContextMenu,
   handleMainLibraryContextMenu,
   handleContinueSession,
@@ -63,6 +72,8 @@ export default function LibraryView({
   handleLibraryRefresh,
   handleCopyAdjustments,
   handlePasteAdjustments,
+  handleMatchPrevious,
+  handleSyncSettings,
   handleResetAdjustments,
   requestThumbnails,
 }: LibraryViewProps) {
@@ -117,6 +128,65 @@ export default function LibraryView({
       })),
     );
 
+  // Double-click = look at one photo larger; Develop is reached explicitly, not by double-click.
+  const [lightboxPath, setLightboxPath] = useState<string | null>(null);
+
+  const libraryPainter = useLibraryStore((s) => s.libraryPainter);
+  const keywordPaintTagLegacy = useLibraryStore((s) => s.keywordPaintTag);
+  const keywordPaintTag =
+    libraryPainter?.kind === 'keyword'
+      ? String(libraryPainter.value ?? '')
+      : keywordPaintTagLegacy;
+  const painterActive = !!libraryPainter || !!keywordPaintTag;
+  const painterLabel = (() => {
+    if (libraryPainter?.kind === 'rating') return `★ ${libraryPainter.value}`;
+    if (libraryPainter?.kind === 'color') return `Color: ${libraryPainter.value || 'none'}`;
+    if (libraryPainter?.kind === 'flag')
+      return libraryPainter.value === 'pick'
+        ? 'Flag: Pick'
+        : libraryPainter.value === 'reject'
+          ? 'Flag: Reject'
+          : 'Flag: Unflag';
+    if (keywordPaintTag)
+      return keywordPaintTag.includes('/')
+        ? keywordPaintTag.split('/').join(' › ')
+        : keywordPaintTag;
+    return '';
+  })();
+
+
+  // Background prefetch: once a folder is listed, queue its thumbnails (top first) so scrolling
+  // is instant. Visible items requested later by the grid jump ahead (backend queue is LIFO).
+  const prefetchKey = `${currentFolderPath}:${sortedImageList.length}`;
+  useEffect(() => {
+    if (!sortedImageList.length || !requestThumbnails) return;
+    const timer = setTimeout(() => {
+      const { thumbnails } = useProcessStore.getState();
+      const paths = sortedImageList
+        .slice(0, 500)
+        .map((img) => img.path)
+        .filter((p) => !thumbnails[p]);
+      if (paths.length) requestThumbnails(paths);
+    }, 400);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefetchKey]);
+
+  // LR: + / − cycle library thumbnail size (Small ↔ Medium ↔ Large)
+  useEffect(() => {
+    const onThumb = (e: Event) => {
+      const delta = Number((e as CustomEvent).detail?.delta) || 0;
+      if (!delta) return;
+      const order = [ThumbnailSize.Small, ThumbnailSize.Medium, ThumbnailSize.Large];
+      const idx = order.indexOf(thumbnailSize);
+      const next = order[Math.max(0, Math.min(order.length - 1, (idx < 0 ? 1 : idx) + delta))];
+      if (next && next !== thumbnailSize) setThumbnailSize(next);
+    };
+    window.addEventListener('rustroom:library-thumb-size', onThumb as EventListener);
+    return () => window.removeEventListener('rustroom:library-thumb-size', onThumb as EventListener);
+  }, [thumbnailSize, setThumbnailSize]);
+
+
   return (
     <div className="flex flex-row grow h-full min-h-0">
       <div className="flex-1 flex flex-col min-w-0 gap-2">
@@ -128,6 +198,25 @@ export default function LibraryView({
             currentFolderPath={currentFolderPath}
           />
         ) : (
+          <>
+          {painterActive && (
+            <div className="mx-2 mt-1 flex items-center gap-2 px-2.5 py-1.5 rounded-md bg-accent/15 border border-accent/35 text-[11px] text-text-primary shrink-0">
+              <Paintbrush size={13} className="shrink-0 text-accent" />
+              <span className="truncate flex-1">
+                Painter: <strong className="font-semibold">{painterLabel}</strong>
+                <span className="text-text-secondary"> — click thumbs to apply · Alt-click clear · Esc stop</span>
+              </span>
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] uppercase font-semibold bg-surface/80 hover:bg-card-active border border-border-color/40"
+                onClick={() =>
+                  useLibraryStore.getState().setLibrary({ libraryPainter: null, keywordPaintTag: null })
+                }
+              >
+                <X size={11} /> Stop
+              </button>
+            </div>
+          )}
           <MainLibrary
             activePath={libraryActivePath}
             aiModelDownloadStatus={aiModelDownloadStatus}
@@ -150,7 +239,7 @@ export default function LibraryView({
             onEmptyAreaContextMenu={handleMainLibraryContextMenu}
             onGoHome={handleGoHome}
             onImageClick={handleLibraryImageSingleClick}
-            onImageDoubleClick={handleImageSelect}
+            onImageDoubleClick={(path: string) => setLightboxPath(path)}
             onImportClick={() => handleImportClick(currentFolderPath as string)}
             onLibraryRefresh={handleLibraryRefresh}
             onOpenFolder={handleOpenFolder}
@@ -165,31 +254,15 @@ export default function LibraryView({
             thumbnailProgress={thumbnailProgress}
             thumbnailSize={thumbnailSize}
             onNavigateToCommunity={() => setUI({ activeView: 'community' })}
-          />
-        )}
-        {rootPaths && rootPaths.length > 0 && (
-          <BottomBar
-            isCopied={isCopied}
-            isCopyDisabled={multiSelectedPaths.length !== 1}
-            isExportDisabled={multiSelectedPaths.length === 0}
-            isLibraryView={true}
-            isPasted={isPasted}
-            isPasteDisabled={useEditorStore.getState().copiedAdjustments === null || multiSelectedPaths.length === 0}
-            isRatingDisabled={multiSelectedPaths.length === 0}
-            isResetDisabled={multiSelectedPaths.length === 0}
-            multiSelectedPaths={multiSelectedPaths}
-            onCopy={handleCopyAdjustments}
-            onExportClick={() =>
-              setUI((state) => ({ isLibraryExportPanelVisible: !state.isLibraryExportPanelVisible }))
-            }
-            onOpenCopyPasteSettings={() => setUI({ isCopyPasteSettingsModalOpen: true })}
-            onPaste={() => handlePasteAdjustments()}
             onRate={handleRate}
-            onReset={() => handleResetAdjustments()}
-            rating={imageRatings[libraryActivePath || ''] || 0}
-            thumbnailAspectRatio={thumbnailAspectRatio}
-            totalImages={imageList.length}
+            onSetColorLabel={handleSetColorLabel}
+            onSetFlag={handleSetFlag}
           />
+          </>
+        )}
+        {lightboxPath && <LibraryLightbox path={lightboxPath} onClose={() => setLightboxPath(null)} />}
+        {rootPaths && rootPaths.length > 0 && activeView !== 'community' && (
+          <LibraryBottomBar imageList={sortedImageList} />
         )}
       </div>
     </div>

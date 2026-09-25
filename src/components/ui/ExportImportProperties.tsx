@@ -31,6 +31,9 @@ export const FILENAME_VARIABLES: Array<string> = [
   '{DD}',
   '{hh}',
   '{mm}',
+  '{ss}',
+  '{YYYYMMDD}',
+  '{folder}',
 ];
 
 export interface ExportSettings {
@@ -47,6 +50,20 @@ export interface ExportSettings {
   watermark: WatermarkSettings | null;
   exportMasks?: boolean;
   preserveFolders?: boolean;
+  /**
+   * Output color space for export metadata / future conversion.
+   * Values: 'srgb' | 'adobe-rgb' | 'display-p3' | 'prophoto'
+   */
+  colorSpace?: string;
+  /**
+   * Output sharpening preset after resize.
+   * Values: 'none' | 'screen' | 'matte' | 'glossy'
+   */
+  outputSharpening?: string;
+  /** Output resolution in DPI (EXIF X/YResolution). Common: 72, 240, 300 */
+  resolutionDpi?: number;
+  /** When set, iteratively lower quality so file stays under this many KB (JPEG/WebP/JXL). */
+  limitFileSizeKb?: number | null;
 }
 
 export enum WatermarkAnchor {
@@ -62,11 +79,13 @@ export enum WatermarkAnchor {
 }
 
 export interface WatermarkSettings {
-  path: string;
+  path?: string | null;
   anchor: WatermarkAnchor;
   scale: number;
   spacing: number;
   opacity: number;
+  text?: string | null;
+  textColor?: string | null;
 }
 
 export interface ExportState {
@@ -112,9 +131,15 @@ export interface ExportPreset {
   stripGps: boolean;
   exportMasks?: boolean;
   preserveFolders?: boolean;
+  colorSpace?: string;
+  outputSharpening?: string;
+  resolutionDpi?: number;
+  limitFileSizeKb?: number | null;
   filenameTemplate: string;
   enableWatermark: boolean;
   watermarkPath: string | null;
+  watermarkText?: string | null;
+  watermarkTextColor?: string | null;
   watermarkAnchor: string;
   watermarkScale: number;
   watermarkSpacing: number;

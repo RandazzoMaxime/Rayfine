@@ -38,6 +38,8 @@ mod raw_processing;
 mod tagging;
 mod tagging_utils;
 mod window_customizer;
+#[cfg(test)]
+mod perf_bench;
 
 use std::collections::{HashMap, hash_map::DefaultHasher};
 use std::fs;
@@ -1524,6 +1526,25 @@ async fn save_collage(base64_data: String, first_path_str: String) -> Result<Str
     Ok(output_path.to_string_lossy().to_string())
 }
 
+/// Frees the GPU processing textures and the cached GPU input image (called when leaving the
+/// editor). They are recreated on demand at the size the next render actually needs.
+#[tauri::command]
+fn release_gpu_resources(state: tauri::State<AppState>) {
+    *state.gpu_processor.lock().unwrap() = None;
+    *state.gpu_image_cache.lock().unwrap() = None;
+    if let Some(context) = state.gpu_context.lock().unwrap().as_ref() {
+        if let Ok(mut display) = context.display.lock() {
+            if let Some(display) = display.as_mut() {
+                display.current_bind_group = None;
+            }
+        }
+        let _ = context.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(std::time::Duration::from_millis(500)),
+        });
+    }
+}
+
 #[tauri::command]
 async fn generate_preview_for_path(
     path: String,
@@ -1569,6 +1590,23 @@ async fn generate_preview_for_path(
 
         let (transformed_image, unscaled_crop_offset) =
             apply_all_transformations(Cow::Borrowed(&base_image), &js_adjustments);
+
+        // Library previews (lightbox, cull, Border) never need more than 4096 px: downscale
+        // before the GPU pass so a 45–60 MP RAW doesn't allocate gigabytes of GPU memory.
+        const PREVIEW_MAX_DIM: u32 = 4096;
+        let (full_w, full_h) = transformed_image.dimensions();
+        let (transformed_image, preview_scale) = if full_w.max(full_h) > PREVIEW_MAX_DIM {
+            let small = image_processing::downscale_f32_image(
+                transformed_image.as_ref(),
+                PREVIEW_MAX_DIM,
+                PREVIEW_MAX_DIM,
+            );
+            let scale = small.width() as f32 / full_w as f32;
+            (Cow::Owned(small), scale)
+        } else {
+            (transformed_image, 1.0)
+        };
+
         let (img_w, img_h) = transformed_image.dimensions();
         let mask_definitions: Vec<MaskDefinition> = js_adjustments
             .get("masks")
@@ -1584,8 +1622,11 @@ async fn generate_preview_for_path(
                     def,
                     img_w,
                     img_h,
-                    1.0,
-                    unscaled_crop_offset,
+                    preview_scale,
+                    (
+                        unscaled_crop_offset.0 * preview_scale,
+                        unscaled_crop_offset.1 * preview_scale,
+                    ),
                     warped_image.as_deref(),
                 )
             })
@@ -2283,6 +2324,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             apply_adjustments,
             generate_preview_for_path,
+            release_gpu_resources,
             generate_original_transformed_preview,
             generate_preset_preview,
             generate_uncropped_preview,
@@ -2343,16 +2385,21 @@ pub fn run() {
             file_management::create_folder,
             file_management::delete_folder,
             file_management::copy_files,
+            file_management::copy_file_to,
             file_management::move_files,
             file_management::rename_folder,
             file_management::rename_files,
             file_management::duplicate_file,
             file_management::show_in_finder,
+            file_management::show_xmp_sidecar,
+            file_management::export_develop_to_xmp,
             file_management::delete_files_from_disk,
             file_management::delete_files_with_associated,
             file_management::save_metadata_and_update_thumbnail,
             file_management::apply_adjustments_to_paths,
+            file_management::apply_relative_adjustments_to_paths,
             file_management::load_metadata,
+            file_management::save_image_snapshots,
             file_management::load_presets,
             file_management::save_presets,
             file_management::get_or_create_internal_library_root,
@@ -2360,12 +2407,21 @@ pub fn run() {
             file_management::apply_auto_adjustments_to_paths,
             file_management::handle_import_presets_from_file,
             file_management::handle_import_legacy_presets_from_file,
+            file_management::handle_import_legacy_presets_from_paths,
+            file_management::handle_import_legacy_presets_from_directory,
+            file_management::parse_legacy_preset_files,
             file_management::handle_export_presets_to_file,
+            file_management::export_preset_to_xmp,
+            file_management::reimport_develop_from_xmp,
+            file_management::reimport_develop_from_xmp_paths,
+            file_management::export_presets_to_xmp_directory,
             file_management::save_community_preset,
             file_management::clear_all_sidecars,
             file_management::clear_thumbnail_cache,
             file_management::set_color_label_for_paths,
             file_management::set_rating_for_paths,
+            file_management::set_flag_for_paths,
+            file_management::write_text_file,
             file_management::import_files,
             file_management::create_virtual_copy,
             file_management::get_albums,

@@ -216,6 +216,9 @@ pub struct Preset {
     pub include_crop_transform: Option<bool>,
     #[serde(rename = "presetType", skip_serializing_if = "Option::is_none")]
     pub preset_type: Option<String>,
+    /// LR `crs:Group` folder name when exporting/importing XMP (optional, not required on disk).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -368,6 +371,33 @@ pub struct ImportSettings {
     pub organize_by_date: bool,
     pub date_folder_format: String,
     pub delete_after_import: bool,
+    /// Skip files that already exist at destination (by name).
+    #[serde(default)]
+    pub skip_duplicates: bool,
+    /// Build / refresh library previews after copy (frontend may also trigger).
+    #[serde(default)]
+    pub build_previews: bool,
+    /// Preview quality hint: minimal | standard | one_to_one
+    #[serde(default)]
+    pub preview_quality: Option<String>,
+    /// Optional develop preset id to apply after import (applied by frontend if set).
+    #[serde(default)]
+    pub develop_preset_id: Option<String>,
+    /// Keywords to apply to imported files (frontend applies via tagging after import).
+    #[serde(default)]
+    pub keywords: Option<Vec<String>>,
+    /// IPTC/DC creator (Artist) applied after import by frontend.
+    #[serde(default)]
+    pub creator: Option<String>,
+    /// IPTC/DC copyright applied after import by frontend.
+    #[serde(default)]
+    pub copyright: Option<String>,
+    /// Caption / description applied after import by frontend.
+    #[serde(default)]
+    pub caption: Option<String>,
+    /// Request copy-as-DNG on import (best-effort; conversion may be deferred).
+    #[serde(default)]
+    pub copy_as_dng: bool,
 }
 
 pub fn parse_virtual_path(virtual_path: &str) -> (PathBuf, PathBuf) {
@@ -478,6 +508,62 @@ pub async fn update_exif_fields(
             final_metadata.exif = Some(exif_data);
             if let Ok(json) = serde_json::to_string_pretty(&final_metadata) {
                 let _ = std::fs::write(&primary_path, json);
+            }
+            // Mirror IPTC-ish fields into Adobe .xmp for Lightroom interop
+            let wants_xmp = updates.keys().any(|k| {
+                matches!(
+                    k.as_str(),
+                    "ImageDescription"
+                        | "Description"
+                        | "XPTitle"
+                        | "Caption"
+                        | "Artist"
+                        | "Creator"
+                        | "XPAuthor"
+                        | "Copyright"
+                        | "Rights"
+                        | "City"
+                        | "Country"
+                        | "Location"
+                        | "State"
+                        | "Province"
+                        | "Headline"
+                        | "Credit"
+                        | "Source"
+                        | "Instructions"
+                        | "AuthorsPosition"
+                        | "CountryCode"
+                        | "UsageTerms"
+                        | "WebStatement"
+                        | "CopyrightStatus"
+                        | "IntellectualGenre"
+                        | "Event"
+                        | "PersonInImage"
+                        | "Scene"
+                        | "SubjectCode"
+                        | "CreatorWorkURL"
+                        | "CiUrlWork"
+                        | "JobIdentifier"
+                        | "JobID"
+                        | "DigitalSourceType"
+                        | "CaptionWriter"
+                        | "Writer"
+                        | "Category"
+                        | "SupplementalCategories"
+                        | "Urgency"
+                        | "CiEmailWork"
+                        | "CiTelWork"
+                        | "Email"
+                        | "Phone"
+                        | "CiAdrExtadr"
+                        | "CiAdrCity"
+                        | "CiAdrRegion"
+                        | "CiAdrPcode"
+                        | "CiAdrCtry"
+                )
+            });
+            if wants_xmp {
+                sync_metadata_to_xmp(original_path, &final_metadata, true);
             }
         });
         Ok(())
@@ -2370,6 +2456,25 @@ pub fn copy_files(source_paths: Vec<String>, destination_folder: String) -> Resu
     Ok(())
 }
 
+/// Copy a single file to an explicit destination path (creates parent dirs).
+/// Used by multi-file Web/Book gallery packages for unique basenames.
+#[tauri::command]
+pub fn copy_file_to(source_path: String, destination_path: String) -> Result<(), String> {
+    // Virtual copies: path may include #vc suffix — strip via parse_virtual_path
+    let (real_src, _) = parse_virtual_path(&source_path);
+    if !real_src.is_file() {
+        return Err(format!("Source is not a file: {}", real_src.display()));
+    }
+    let dest = Path::new(&destination_path);
+    if let Some(parent) = dest.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).map_err(|e| format!("create_dir: {}", e))?;
+        }
+    }
+    fs::copy(&real_src, dest).map_err(|e| format!("copy: {}", e))?;
+    Ok(())
+}
+
 #[tauri::command]
 pub fn move_files(
     source_paths: Vec<String>,
@@ -2591,6 +2696,115 @@ pub async fn apply_adjustments_to_paths(
             {
                 for (k, v) in pasted_map {
                     new_map.insert(k.clone(), v.clone());
+                }
+            }
+
+            resolve_lens_params_in_adjustments(
+                &mut new_adjustments,
+                &existing_metadata.exif,
+                lens_db.as_deref(),
+            );
+
+            existing_metadata.adjustments = new_adjustments;
+
+            if let Ok(json_string) = serde_json::to_string_pretty(&existing_metadata) {
+                let _ = std::fs::write(&sidecar_path, json_string);
+            }
+
+            if enable_xmp_sync {
+                let source_path = parse_virtual_path(path).0;
+                sync_metadata_to_xmp(&source_path, &existing_metadata, create_xmp_if_missing);
+            }
+        });
+
+        let state = app_handle.state::<AppState>();
+        let thumb_cache_dir = match resolve_thumbnail_cache_dir(&app_handle) {
+            Ok(dir) => dir,
+            Err(e) => {
+                log::warn!("Unable to initialize thumbnail cache directory: {}", e);
+                for path in &paths {
+                    emit_thumbnail_cache_setup_error(&app_handle, path, &e);
+                }
+                for _ in 0..paths.len() {
+                    increment_thumbnail_progress(&state, &app_handle);
+                }
+                return;
+            }
+        };
+
+        let gpu_context = gpu_processing::get_or_init_gpu_context(&state, &app_handle).ok();
+
+        paths.par_iter().for_each(|path_str| {
+            let result = generate_single_thumbnail_and_cache(
+                path_str,
+                &thumb_cache_dir,
+                gpu_context.as_ref(),
+                None,
+                true,
+                &app_handle,
+                &settings,
+            );
+
+            if let Some((thumbnail_path, rating, is_edited)) = result {
+                emit_thumbnail_generated(&app_handle, path_str, &thumbnail_path, rating, is_edited);
+            }
+
+            increment_thumbnail_progress(&state, &app_handle);
+        });
+    });
+
+    Ok(())
+}
+
+/// Apply relative (delta) adjustments to existing develop settings — Lightroom Quick Develop style.
+/// Numeric keys are added; missing keys start from 0. Non-numeric keys in `deltas` are ignored.
+#[tauri::command]
+pub async fn apply_relative_adjustments_to_paths(
+    paths: Vec<String>,
+    deltas: Value,
+    app_handle: AppHandle,
+) -> Result<(), String> {
+    let state = app_handle.state::<AppState>();
+    add_to_thumbnail_queue(&state, paths.len(), &app_handle);
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let settings = load_settings(app_handle.clone()).unwrap_or_default();
+        let enable_xmp_sync = settings.enable_xmp_sync.unwrap_or(false);
+        let create_xmp_if_missing = settings.create_xmp_if_missing.unwrap_or(false);
+
+        let lens_db = app_handle
+            .state::<AppState>()
+            .lens_db
+            .lock()
+            .unwrap()
+            .clone();
+
+        let delta_map = deltas.as_object().cloned().unwrap_or_default();
+
+        paths.par_iter().for_each(|path| {
+            let (_, sidecar_path) = parse_virtual_path(path);
+            let mut existing_metadata = crate::exif_processing::load_sidecar(&sidecar_path);
+
+            let mut new_adjustments = existing_metadata.adjustments;
+            if new_adjustments.is_null() {
+                new_adjustments = serde_json::json!({});
+            }
+
+            if let Some(map) = new_adjustments.as_object_mut() {
+                for (k, v) in &delta_map {
+                    let delta = match v {
+                        Value::Number(n) => n.as_f64().unwrap_or(0.0),
+                        Value::String(s) => s.parse::<f64>().unwrap_or(0.0),
+                        _ => continue,
+                    };
+                    if delta == 0.0 {
+                        continue;
+                    }
+                    let current = map
+                        .get(k)
+                        .and_then(|x| x.as_f64())
+                        .unwrap_or(0.0);
+                    map.insert(k.clone(), serde_json::json!(current + delta));
                 }
             }
 
@@ -2902,6 +3116,55 @@ pub fn set_rating_for_paths(
 
     Ok(())
 }
+/// Write UTF-8 text to an absolute path (used for Web gallery HTML export, etc.).
+#[tauri::command]
+pub fn write_text_file(path: String, contents: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if let Some(parent) = p.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).map_err(|e| format!("create_dir: {}", e))?;
+        }
+    }
+    fs::write(p, contents.as_bytes()).map_err(|e| format!("write: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_flag_for_paths(
+    paths: Vec<String>,
+    flag: Option<String>,
+    app_handle: AppHandle,
+) -> Result<(), String> {
+    let settings = load_settings(app_handle.clone()).unwrap_or_default();
+    let enable_xmp_sync = settings.enable_xmp_sync.unwrap_or(false);
+    let create_xmp_if_missing = settings.create_xmp_if_missing.unwrap_or(false);
+
+    let flag_norm = flag
+        .as_ref()
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty());
+
+    paths.par_iter().for_each(|path| {
+        let (source_path, sidecar_path) = parse_virtual_path(path);
+        let mut metadata = crate::exif_processing::load_sidecar(&sidecar_path);
+        let mut tags = metadata.tags.unwrap_or_default();
+        tags.retain(|tag| !tag.starts_with("flag:"));
+        if let Some(f) = &flag_norm {
+            if f == "pick" || f == "reject" {
+                tags.push(format!("flag:{}", f));
+            }
+        }
+        metadata.tags = if tags.is_empty() { None } else { Some(tags) };
+        if let Ok(json_string) = serde_json::to_string_pretty(&metadata) {
+            let _ = std::fs::write(&sidecar_path, json_string);
+        }
+        if enable_xmp_sync {
+            sync_metadata_to_xmp(&source_path, &metadata, create_xmp_if_missing);
+        }
+    });
+    Ok(())
+}
+
 
 #[tauri::command]
 pub fn load_metadata(path: String, app_handle: AppHandle) -> Result<ImageMetadata, String> {
@@ -2920,6 +3183,145 @@ pub fn load_metadata(path: String, app_handle: AppHandle) -> Result<ImageMetadat
 
     Ok(metadata)
 }
+
+/// Persist develop snapshots into the image sidecar without regenerating thumbnails.
+#[tauri::command]
+pub fn save_image_snapshots(path: String, snapshots: Value) -> Result<(), String> {
+    let (_source_path, sidecar_path) = parse_virtual_path(&path);
+    let mut metadata = crate::exif_processing::load_sidecar(&sidecar_path);
+    metadata.snapshots = if snapshots.is_null() {
+        None
+    } else {
+        Some(snapshots)
+    };
+    let json_string = serde_json::to_string_pretty(&metadata).map_err(|e| e.to_string())?;
+    std::fs::write(&sidecar_path, json_string).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Export a single develop preset (name + adjustments JSON) to a Lightroom-compatible .xmp file.
+#[tauri::command]
+pub fn export_preset_to_xmp(
+    name: String,
+    adjustments: Value,
+    file_path: String,
+    group: Option<String>,
+) -> Result<(), String> {
+    let xmp = preset_converter::convert_adjustments_to_xmp_with_group(
+        &name,
+        &adjustments,
+        group.as_deref(),
+    );
+    fs::write(&file_path, xmp).map_err(|e| format!("Failed to write XMP: {}", e))?;
+    Ok(())
+}
+
+/// Force-reload develop adjustments from the photo's Lightroom `.xmp` sidecar into the RR sidecar.
+/// Overwrites existing RapidRAW develop settings (user-initiated).
+#[tauri::command]
+fn reimport_develop_from_xmp_path_inner(path: &str) -> Result<Value, String> {
+    let (source_path, sidecar_path) = parse_virtual_path(path);
+    let xmp_path = resolve_xmp_path(&source_path)
+        .ok_or_else(|| format!("No XMP sidecar found for {}", source_path.display()))?;
+    let content = fs::read_to_string(&xmp_path)
+        .map_err(|e| format!("Failed to read XMP: {}", e))?;
+    let looks_like_develop = content.contains("crs:")
+        && (content.contains("HasSettings")
+            || content.contains("Exposure2012")
+            || content.contains("ToneCurvePV2012")
+            || content.contains("Highlights2012")
+            || content.contains("ConvertToGrayscale"));
+    if !looks_like_develop {
+        return Err("XMP sidecar has no develop (crs) settings".to_string());
+    }
+    let preset = preset_converter::convert_xmp_to_preset(&content)?;
+    let mut metadata = crate::exif_processing::load_sidecar(&sidecar_path);
+    // Keep rating/tags from existing RR sidecar when present
+    let rating = metadata.rating;
+    let tags = metadata.tags.clone();
+    metadata.adjustments = preset.adjustments.clone();
+    if rating > 0 {
+        if let Some(obj) = metadata.adjustments.as_object_mut() {
+            obj.insert("rating".to_string(), serde_json::json!(rating));
+        }
+    }
+    if tags.is_some() {
+        metadata.tags = tags;
+    }
+    let json_string = serde_json::to_string_pretty(&metadata).map_err(|e| e.to_string())?;
+    fs::write(&sidecar_path, json_string).map_err(|e| e.to_string())?;
+    Ok(preset.adjustments)
+}
+
+#[tauri::command]
+pub fn reimport_develop_from_xmp(path: String, _app_handle: AppHandle) -> Result<Value, String> {
+    reimport_develop_from_xmp_path_inner(&path)
+}
+
+/// Batch reimport develop settings from photo XMP sidecars. Returns {ok, fail, errors}.
+#[tauri::command]
+pub fn reimport_develop_from_xmp_paths(paths: Vec<String>) -> Result<Value, String> {
+    let mut ok = 0usize;
+    let mut fail = 0usize;
+    let mut ok_paths: Vec<String> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    for path in paths {
+        match reimport_develop_from_xmp_path_inner(&path) {
+            Ok(_) => {
+                ok += 1;
+                ok_paths.push(path);
+            }
+            Err(e) => {
+                fail += 1;
+                if errors.len() < 8 {
+                    errors.push(format!("{}: {}", path, e));
+                }
+            }
+        }
+    }
+    Ok(serde_json::json!({ "ok": ok, "fail": fail, "okPaths": ok_paths, "errors": errors }))
+}
+
+/// Export many presets as individual .xmp files into a directory (sanitized filenames).
+#[tauri::command]
+pub fn export_presets_to_xmp_directory(
+    presets: Vec<Preset>,
+    directory: String,
+) -> Result<usize, String> {
+    let dir = PathBuf::from(&directory);
+    if !dir.is_dir() {
+        fs::create_dir_all(&dir).map_err(|e| format!("Failed to create directory: {}", e))?;
+    }
+    let mut count = 0usize;
+    for preset in presets {
+        let mut safe: String = preset
+            .name
+            .chars()
+            .map(|c| match c {
+                '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+                c => c,
+            })
+            .collect();
+        if safe.trim().is_empty() {
+            safe = format!("preset_{}", count + 1);
+        }
+        let mut path = dir.join(format!("{}.xmp", safe));
+        let mut n = 1u32;
+        while path.exists() {
+            path = dir.join(format!("{} ({}).xmp", safe, n));
+            n += 1;
+        }
+        let xmp = preset_converter::convert_adjustments_to_xmp_with_group(
+            &preset.name,
+            &preset.adjustments,
+            preset.group.as_deref(),
+        );
+        fs::write(&path, xmp).map_err(|e| format!("Failed to write {}: {}", path.display(), e))?;
+        count += 1;
+    }
+    Ok(count)
+}
+
 
 fn get_presets_path(app_handle: &AppHandle) -> Result<std::path::PathBuf, String> {
     let presets_dir = app_handle
@@ -3034,32 +3436,8 @@ pub fn handle_import_presets_from_file(
     Ok(current_presets)
 }
 
-#[tauri::command]
-pub fn handle_import_legacy_presets_from_file(
-    file_path: String,
-    app_handle: AppHandle,
-) -> Result<Vec<PresetItem>, String> {
-    let content = fs::read_to_string(&file_path)
-        .map_err(|e| format!("Failed to read legacy preset file: {}", e))?;
-
-    let xmp_content = if file_path.to_lowercase().ends_with(".lrtemplate") {
-        let re = Regex::new(r#"(?s)s.xmp = "(.*)""#).unwrap();
-        if let Some(caps) = re.captures(&content) {
-            caps.get(1)
-                .map(|m| m.as_str().replace(r#"\""#, r#"""#))
-                .unwrap_or(content)
-        } else {
-            content
-        }
-    } else {
-        content
-    };
-
-    let converted_preset = preset_converter::convert_xmp_to_preset(&xmp_content)?;
-
-    let mut current_presets = load_presets(app_handle.clone())?;
-
-    let current_names: HashSet<String> = current_presets
+fn collect_preset_names(presets: &[PresetItem]) -> HashSet<String> {
+    presets
         .iter()
         .flat_map(|item| match item {
             PresetItem::Preset(p) => vec![p.name.clone()],
@@ -3069,22 +3447,220 @@ pub fn handle_import_legacy_presets_from_file(
                 names
             }
         })
-        .collect();
+        .collect()
+}
 
-    let mut new_name = converted_preset.name.clone();
+fn unique_preset_name(base: &str, used: &HashSet<String>) -> String {
+    let mut new_name = base.to_string();
     let mut counter = 1;
-    while current_names.contains(&new_name) {
-        new_name = format!("{} ({})", converted_preset.name, counter);
+    while used.contains(&new_name) {
+        new_name = format!("{} ({})", base, counter);
         counter += 1;
     }
+    new_name
+}
 
-    let mut final_preset = converted_preset;
-    final_preset.name = new_name;
+fn read_xmp_or_lrtemplate(file_path: &str) -> Result<String, String> {
+    let content = fs::read_to_string(file_path)
+        .map_err(|e| format!("Failed to read legacy preset file: {}", e))?;
 
-    current_presets.push(PresetItem::Preset(final_preset));
+    if file_path.to_lowercase().ends_with(".lrtemplate") {
+        let re = Regex::new(r#"(?s)s.xmp = "(.*)""#).unwrap();
+        if let Some(caps) = re.captures(&content) {
+            Ok(caps
+                .get(1)
+                .map(|m| m.as_str().replace(r#"\""#, r#"""#))
+                .unwrap_or(content))
+        } else {
+            Ok(content)
+        }
+    } else {
+        Ok(content)
+    }
+}
+
+/// Insert a converted XMP preset into the list, honouring Lightroom group folders.
+fn insert_converted_xmp_preset(
+    current_presets: &mut Vec<PresetItem>,
+    mut preset: Preset,
+    group: Option<String>,
+) {
+    let mut used_names = collect_preset_names(current_presets);
+    preset.name = unique_preset_name(&preset.name, &used_names);
+    used_names.insert(preset.name.clone());
+
+    if let Some(group_name) = group.filter(|g| !g.trim().is_empty()) {
+        // Find existing folder with same name
+        if let Some(PresetItem::Folder(folder)) = current_presets.iter_mut().find(|item| {
+            matches!(item, PresetItem::Folder(f) if f.name == group_name)
+        }) {
+            // Avoid duplicate child names inside folder
+            let child_names: HashSet<String> = folder.children.iter().map(|c| c.name.clone()).collect();
+            preset.name = unique_preset_name(&preset.name, &child_names);
+            folder.children.push(preset);
+            return;
+        }
+
+        // Create new folder
+        let folder = PresetFolder {
+            id: Uuid::new_v4().to_string(),
+            name: group_name,
+            children: vec![preset],
+        };
+        current_presets.push(PresetItem::Folder(folder));
+        return;
+    }
+
+    current_presets.push(PresetItem::Preset(preset));
+}
+
+#[tauri::command]
+pub fn handle_import_legacy_presets_from_file(
+    file_path: String,
+    app_handle: AppHandle,
+) -> Result<Vec<PresetItem>, String> {
+    let xmp_content = read_xmp_or_lrtemplate(&file_path)?;
+    let converted = preset_converter::convert_xmp_to_preset_with_group(&xmp_content)?;
+
+    let mut current_presets = load_presets(app_handle.clone())?;
+    insert_converted_xmp_preset(&mut current_presets, converted.preset, converted.group);
 
     save_presets(current_presets.clone(), app_handle)?;
     Ok(current_presets)
+}
+
+/// Import multiple Lightroom XMP / lrtemplate files at once (paths can be files).
+#[tauri::command]
+pub fn handle_import_legacy_presets_from_paths(
+    file_paths: Vec<String>,
+    app_handle: AppHandle,
+) -> Result<Vec<PresetItem>, String> {
+    if file_paths.is_empty() {
+        return Err("No preset files provided".to_string());
+    }
+
+    let mut current_presets = load_presets(app_handle.clone())?;
+    let mut errors: Vec<String> = Vec::new();
+    let mut imported = 0usize;
+
+    for path in file_paths {
+        let lower = path.to_lowercase();
+        if !(lower.ends_with(".xmp") || lower.ends_with(".lrtemplate")) {
+            errors.push(format!("Skipped unsupported file: {}", path));
+            continue;
+        }
+        match read_xmp_or_lrtemplate(&path)
+            .and_then(|xmp| preset_converter::convert_xmp_to_preset_with_group(&xmp))
+        {
+            Ok(converted) => {
+                insert_converted_xmp_preset(
+                    &mut current_presets,
+                    converted.preset,
+                    converted.group,
+                );
+                imported += 1;
+            }
+            Err(e) => errors.push(format!("{}: {}", path, e)),
+        }
+    }
+
+    if imported == 0 {
+        return Err(if errors.is_empty() {
+            "No presets imported".to_string()
+        } else {
+            errors.join("; ")
+        });
+    }
+
+    save_presets(current_presets.clone(), app_handle)?;
+    if !errors.is_empty() {
+        log::warn!("Partial preset import: {}", errors.join("; "));
+    }
+    Ok(current_presets)
+}
+
+/// Recursively import all .xmp / .lrtemplate develop presets from a directory
+/// (e.g. Adobe CameraRaw Settings / ImportedSettings).
+#[tauri::command]
+pub fn handle_import_legacy_presets_from_directory(
+    directory: String,
+    app_handle: AppHandle,
+) -> Result<Vec<PresetItem>, String> {
+    let root = PathBuf::from(&directory);
+    if !root.is_dir() {
+        return Err(format!("Not a directory: {}", directory));
+    }
+
+    let mut file_paths: Vec<String> = WalkDir::new(&root)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .filter_map(|e| {
+            let p = e.path();
+            let ext = p
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if ext == "xmp" || ext == "lrtemplate" {
+                Some(p.to_string_lossy().to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    file_paths.sort();
+    if file_paths.is_empty() {
+        return Err(format!(
+            "No .xmp or .lrtemplate files found in {}",
+            directory
+        ));
+    }
+
+    handle_import_legacy_presets_from_paths(file_paths, app_handle)
+}
+
+/// Parse Lightroom .xmp / .lrtemplate presets (files or folders, recursive) WITHOUT saving them.
+/// Returns `{ presets: [Preset (group = crs:Group)], errors: [String] }`.
+#[tauri::command]
+pub fn parse_legacy_preset_files(paths: Vec<String>) -> Result<Value, String> {
+    let is_legacy = |p: &Path| {
+        let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+        ext == "xmp" || ext == "lrtemplate"
+    };
+    let mut files: Vec<PathBuf> = Vec::new();
+    for path in paths {
+        let p = PathBuf::from(&path);
+        if p.is_dir() {
+            let mut found: Vec<PathBuf> = WalkDir::new(&p)
+                .into_iter()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_type().is_file() && is_legacy(e.path()))
+                .map(|e| e.path().to_path_buf())
+                .collect();
+            found.sort();
+            files.extend(found);
+        } else if is_legacy(&p) {
+            files.push(p);
+        }
+    }
+    let mut presets: Vec<Preset> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    for file in files {
+        let file_str = file.to_string_lossy().to_string();
+        match read_xmp_or_lrtemplate(&file_str)
+            .and_then(|xmp| preset_converter::convert_xmp_to_preset_with_group(&xmp))
+        {
+            Ok(converted) => {
+                let mut preset = converted.preset;
+                preset.group = converted.group.filter(|g| !g.trim().is_empty());
+                presets.push(preset);
+            }
+            Err(e) => errors.push(format!("{}: {}", file_str, e)),
+        }
+    }
+    Ok(serde_json::json!({ "presets": presets, "errors": errors }))
 }
 
 #[tauri::command]
@@ -3141,6 +3717,7 @@ pub fn save_community_preset(
         include_masks,
         include_crop_transform,
         preset_type: preset_type.or(Some("style".to_string())),
+        group: None,
     };
 
     if let Some(PresetItem::Folder(folder)) = current_presets.iter_mut().find(|item| {
@@ -3248,6 +3825,38 @@ pub fn show_in_finder(path: String) -> Result<(), String> {
 
     Ok(())
 }
+
+/// Reveal the Lightroom/Adobe `.xmp` sidecar next to an image, if present.
+#[tauri::command]
+pub fn show_xmp_sidecar(path: String) -> Result<(), String> {
+    let (source_path, _) = parse_virtual_path(&path);
+    let xmp = resolve_xmp_path(&source_path)
+        .ok_or_else(|| format!("No XMP sidecar found for {}", source_path.display()))?;
+    show_in_finder(xmp.to_string_lossy().to_string())
+}
+
+/// Force-write current RapidRAW develop adjustments (+ rating/tags) into the photo `.xmp` sidecar.
+/// Optional `adjustments` override the RR sidecar (used when the open editor has unsaved slider state).
+#[tauri::command]
+pub fn export_develop_to_xmp(
+    path: String,
+    adjustments: Option<Value>,
+    _app_handle: AppHandle,
+) -> Result<(), String> {
+    let (source_path, sidecar_path) = parse_virtual_path(&path);
+    let mut metadata = crate::exif_processing::load_sidecar(&sidecar_path);
+    if let Some(adj) = adjustments {
+        metadata.adjustments = adj;
+    }
+    // Explicit user action always creates a missing sidecar
+    sync_metadata_to_xmp(&source_path, &metadata, true);
+    if resolve_xmp_path(&source_path).is_none() {
+        return Err("Failed to write XMP sidecar".to_string());
+    }
+    let _ = sidecar_path;
+    Ok(())
+}
+
 
 #[tauri::command]
 pub fn delete_files_from_disk(paths: Vec<String>, app_handle: AppHandle) -> Result<(), String> {
@@ -3500,6 +4109,9 @@ pub async fn import_files(
     let _ = app_handle.emit("import-start", serde_json::json!({ "total": total_files }));
 
     tauri::async_runtime::spawn_blocking(move || {
+        let mut imported_paths: Vec<String> = Vec::new();
+        let mut dng_passthrough: usize = 0;
+        let mut dng_deferred: usize = 0;
         for (i, source_path_str) in source_paths.iter().enumerate() {
             let _ = app_handle.emit(
                 "import-progress",
@@ -3546,6 +4158,13 @@ pub async fn import_files(
                     let dest_file_path = final_dest_folder.join(new_filename);
 
                     if dest_file_path.exists() {
+                        if settings.skip_duplicates {
+                            log::info!(
+                                "Skipping duplicate import target: {}",
+                                dest_file_path.display()
+                            );
+                            return Ok(());
+                        }
                         return Err(format!(
                             "File already exists at destination: {}",
                             dest_file_path.display()
@@ -3553,6 +4172,9 @@ pub async fn import_files(
                     }
 
                     fs::write(&dest_file_path, source_bytes).map_err(|e| e.to_string())?;
+                    if let Some(s) = dest_file_path.to_str() {
+                        imported_paths.push(s.to_string());
+                    }
 
                     if settings.delete_after_import {
                         log::info!(
@@ -3592,14 +4214,39 @@ pub async fn import_files(
                     total_files,
                     &file_date,
                 );
-                let extension = source_path
+                let src_ext = source_path
                     .extension()
                     .and_then(|s| s.to_str())
-                    .unwrap_or("");
-                let new_filename = format!("{}.{}", new_stem, extension);
+                    .unwrap_or("")
+                    .to_lowercase();
+                // LR "Copy as DNG": if source is already DNG, keep .dng; otherwise copy original
+                // and report deferred conversion (full RAW→DNG encoder not bundled).
+                let (extension, dng_note) = if settings.copy_as_dng {
+                    if src_ext == "dng" {
+                        dng_passthrough += 1;
+                        ("dng".to_string(), "passthrough")
+                    } else {
+                        dng_deferred += 1;
+                        (src_ext.clone(), "deferred")
+                    }
+                } else {
+                    (src_ext.clone(), "")
+                };
+                let new_filename = if extension.is_empty() {
+                    new_stem.clone()
+                } else {
+                    format!("{}.{}", new_stem, extension)
+                };
                 let dest_file_path = final_dest_folder.join(new_filename);
 
                 if dest_file_path.exists() {
+                    if settings.skip_duplicates {
+                        log::info!(
+                            "Skipping duplicate import target: {}",
+                            dest_file_path.display()
+                        );
+                        return Ok(());
+                    }
                     return Err(format!(
                         "File already exists at destination: {}",
                         dest_file_path.display()
@@ -3607,11 +4254,34 @@ pub async fn import_files(
                 }
 
                 fs::copy(&source_path, &dest_file_path).map_err(|e| e.to_string())?;
+                if settings.copy_as_dng && dng_note == "deferred" {
+                    log::info!(
+                        "Copy as DNG deferred for {} (imported as .{})",
+                        source_path.display(),
+                        extension
+                    );
+                }
+                if let Some(s) = dest_file_path.to_str() {
+                    imported_paths.push(s.to_string());
+                }
                 if source_sidecar.exists()
                     && let Some(dest_str) = dest_file_path.to_str()
                 {
                     let (_, dest_sidecar) = parse_virtual_path(dest_str);
                     fs::copy(&source_sidecar, &dest_sidecar).map_err(|e| e.to_string())?;
+                }
+
+                // Copy Adobe/Lightroom .xmp sidecar next to the image when present
+                if let Some(src_xmp) = resolve_xmp_path(&source_path) {
+                    let dest_xmp = mirror_xmp_dest_path(&dest_file_path, &src_xmp, &source_path);
+                    if let Err(e) = fs::copy(&src_xmp, &dest_xmp) {
+                        log::warn!(
+                            "Failed to copy XMP sidecar {} → {}: {}",
+                            src_xmp.display(),
+                            dest_xmp.display(),
+                            e
+                        );
+                    }
                 }
 
                 let mut source_rrexif_name = source_path.file_name().unwrap().to_os_string();
@@ -3678,7 +4348,23 @@ pub async fn import_files(
             "import-progress",
             serde_json::json!({ "current": total_files, "total": total_files, "path": "" }),
         );
-        let _ = app_handle.emit("import-complete", ());
+        let _ = app_handle.emit(
+            "import-complete",
+            serde_json::json!({
+                "destinationFolder": destination_folder,
+                "developPresetId": settings.develop_preset_id,
+                "importedCount": imported_paths.len(),
+                "importedPaths": imported_paths,
+                "buildPreviews": settings.build_previews,
+                "keywords": settings.keywords,
+                "creator": settings.creator,
+                "copyright": settings.copyright,
+                "caption": settings.caption,
+                "copyAsDng": settings.copy_as_dng,
+                "dngPassthrough": dng_passthrough,
+                "dngDeferred": dng_deferred
+            }),
+        );
     });
 
     Ok(())
@@ -3710,6 +4396,14 @@ pub fn generate_filename_from_template(
     result = result.replace("{DD}", &local_date.format("%d").to_string());
     result = result.replace("{hh}", &local_date.format("%H").to_string());
     result = result.replace("{mm}", &local_date.format("%M").to_string());
+    result = result.replace("{ss}", &local_date.format("%S").to_string());
+    result = result.replace("{YYYYMMDD}", &local_date.format("%Y%m%d").to_string());
+    let folder = original_path
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|s| s.to_str())
+        .unwrap_or("export");
+    result = result.replace("{folder}", folder);
 
     result
 }
@@ -3890,36 +4584,150 @@ pub fn extract_xmp_label(content: &str) -> Option<String> {
     None
 }
 
-pub fn extract_xmp_tags(content: &str) -> Vec<String> {
-    let mut tags = Vec::new();
-    if let Some(start_idx) = content.find("<dc:subject>")
-        && let Some(end_idx) = content[start_idx..].find("</dc:subject>")
+/// Pull bag items from an XMP Bag/Seq block between open/close tags.
+fn extract_rdf_li_values(content: &str, open_tag: &str, close_tag: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(start_idx) = content.find(open_tag)
+        && let Some(end_idx) = content[start_idx..].find(close_tag)
     {
-        let subject_block = &content[start_idx..start_idx + end_idx];
+        let block = &content[start_idx..start_idx + end_idx];
         let mut current_idx = 0;
-        while let Some(li_start) = subject_block[current_idx..].find("<rdf:li>") {
+        while let Some(li_start) = block[current_idx..].find("<rdf:li>") {
             let val_start = current_idx + li_start + 8;
-            if let Some(li_end) = subject_block[val_start..].find("</rdf:li>") {
-                tags.push(subject_block[val_start..val_start + li_end].to_string());
+            if let Some(li_end) = block[val_start..].find("</rdf:li>") {
+                let raw = block[val_start..val_start + li_end].trim();
+                // Unescape common XML entities
+                let val = raw
+                    .replace("&amp;", "&")
+                    .replace("&lt;", "<")
+                    .replace("&gt;", ">")
+                    .replace("&quot;", "\"");
+                if !val.is_empty() {
+                    out.push(val);
+                }
                 current_idx = val_start + li_end + 9;
             } else {
                 break;
             }
         }
     }
+    out
+}
+
+/// Import keywords from XMP: `dc:subject` leaves + `lr:hierarchicalSubject` paths.
+/// Hierarchical paths use `|` in Lightroom; we store as `user:parent/child` (+ parent segments).
+pub fn extract_xmp_tags(content: &str) -> Vec<String> {
+    let mut tags: Vec<String> = Vec::new();
+    let push_unique = |tags: &mut Vec<String>, tag: String| {
+        if !tag.is_empty() && !tags.iter().any(|t| t == &tag) {
+            tags.push(tag);
+        }
+    };
+
+    // Flat subjects
+    for raw in extract_rdf_li_values(content, "<dc:subject>", "</dc:subject>") {
+        let bare = raw.trim();
+        if bare.is_empty() {
+            continue;
+        }
+        // Preserve flag:/color: system tags as-is
+        if bare.starts_with("flag:") || bare.starts_with("color:") || bare.starts_with("stack:") {
+            push_unique(&mut tags, bare.to_string());
+            continue;
+        }
+        // Already namespaced
+        if bare.starts_with("user:") {
+            push_unique(&mut tags, bare.to_lowercase());
+            continue;
+        }
+        // Hierarchical path written into subject with / or |
+        if bare.contains('|') || bare.contains('/') {
+            let path = bare.replace('|', "/").to_lowercase();
+            let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
+            let mut acc = String::new();
+            for part in parts {
+                acc = if acc.is_empty() {
+                    part.to_string()
+                } else {
+                    format!("{}/{}", acc, part)
+                };
+                push_unique(&mut tags, format!("user:{}", acc));
+            }
+            continue;
+        }
+        push_unique(&mut tags, format!("user:{}", bare.to_lowercase()));
+    }
+
+    // Lightroom hierarchicalSubject (paths with |)
+    for raw in extract_rdf_li_values(
+        content,
+        "<lr:hierarchicalSubject>",
+        "</lr:hierarchicalSubject>",
+    ) {
+        let path = raw.replace('|', "/").trim().to_lowercase();
+        if path.is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
+        let mut acc = String::new();
+        for part in parts {
+            acc = if acc.is_empty() {
+                part.to_string()
+            } else {
+                format!("{}/{}", acc, part)
+            };
+            push_unique(&mut tags, format!("user:{}", acc));
+        }
+    }
+
     tags
 }
 
+
+/// Choose destination XMP path that preserves source naming style (photo.xmp vs photo.ARW.xmp).
+fn mirror_xmp_dest_path(dest_image: &Path, src_xmp: &Path, source_image: &Path) -> PathBuf {
+    let src_name = src_xmp.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let stem = source_image
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    if src_name.eq_ignore_ascii_case(&format!("{}.xmp", stem))
+        || src_name.eq_ignore_ascii_case(&format!("{}.XMP", stem))
+    {
+        dest_image.with_extension("xmp")
+    } else {
+        let mut name = dest_image.file_name().unwrap().to_os_string();
+        name.push(".xmp");
+        dest_image.with_file_name(name)
+    }
+}
+
 pub fn resolve_xmp_path(image_path: &Path) -> Option<PathBuf> {
+    // Style A (common): photo.xmp / photo.XMP next to photo.ARW
     let xmp_path = image_path.with_extension("xmp");
     let xmp_path_upper = image_path.with_extension("XMP");
     if xmp_path.exists() {
-        Some(xmp_path)
-    } else if xmp_path_upper.exists() {
-        Some(xmp_path_upper)
-    } else {
-        None
+        return Some(xmp_path);
     }
+    if xmp_path_upper.exists() {
+        return Some(xmp_path_upper);
+    }
+    // Style B (also used by Adobe tooling): photo.ARW.xmp
+    if let Some(name) = image_path.file_name() {
+        let mut dotted = name.to_os_string();
+        dotted.push(".xmp");
+        let candidate = image_path.with_file_name(&dotted);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+        let mut dotted_upper = name.to_os_string();
+        dotted_upper.push(".XMP");
+        let candidate_upper = image_path.with_file_name(&dotted_upper);
+        if candidate_upper.exists() {
+            return Some(candidate_upper);
+        }
+    }
+    None
 }
 
 pub fn sync_metadata_from_xmp(source_path: &Path, metadata: &mut ImageMetadata) -> bool {
@@ -3968,8 +4776,759 @@ pub fn sync_metadata_from_xmp(source_path: &Path, metadata: &mut ImageMetadata) 
             metadata.tags = Some(current_tags);
             changed = true;
         }
+
+        // Import develop settings from sidecar XMP when we don't already have RR adjustments.
+        // Lightroom writes crs:* develop params into the photo's .xmp sidecar.
+        let adjustments_empty = metadata.adjustments.is_null()
+            || metadata
+                .adjustments
+                .as_object()
+                .map(|o| {
+                    o.keys()
+                        .all(|k| k == "rating" || k == "sectionVisibility")
+                })
+                .unwrap_or(true);
+        let looks_like_develop = content.contains("crs:")
+            && (content.contains("HasSettings")
+                || content.contains("Exposure2012")
+                || content.contains("ToneCurvePV2012")
+                || content.contains("ConvertToGrayscale")
+                || content.contains("Highlights2012"));
+        if adjustments_empty && looks_like_develop {
+            match preset_converter::convert_xmp_to_preset(&content) {
+                Ok(preset) => {
+                    if let Some(dev) = preset.adjustments.as_object() {
+                        if !dev.is_empty() {
+                            // Preserve rating if we already set it above
+                            let mut merged = dev.clone();
+                            if metadata.rating > 0 {
+                                merged.insert(
+                                    "rating".to_string(),
+                                    serde_json::json!(metadata.rating),
+                                );
+                            }
+                            metadata.adjustments = serde_json::Value::Object(merged);
+                            changed = true;
+                            log::info!(
+                                "Imported develop settings from sidecar XMP for {}",
+                                source_path.display()
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Failed to parse develop XMP for {}: {}",
+                        source_path.display(),
+                        e
+                    );
+                }
+            }
+        }
+
+        // Import DC description / creator / rights into exif map for Metadata panel
+        let mut exif_map = metadata.exif.clone().unwrap_or_default();
+        let mut exif_changed = false;
+        if let Some(desc) = extract_dc_alt_text(&content, "description") {
+            if exif_map.get("ImageDescription").map(|s| s.as_str()) != Some(desc.as_str()) {
+                exif_map.insert("ImageDescription".to_string(), desc);
+                exif_changed = true;
+            }
+        }
+        if let Some(title) = extract_dc_alt_text(&content, "title") {
+            if exif_map.get("XPTitle").map(|s| s.as_str()) != Some(title.as_str()) {
+                exif_map.insert("XPTitle".to_string(), title.clone());
+                exif_map.insert("Title".to_string(), title);
+                exif_changed = true;
+            }
+        }
+        // photoshop:DateCreated → DateTimeOriginal (when not already set)
+        if !exif_map.contains_key("DateTimeOriginal") {
+            if let Some(dc) = extract_simple_xmp_field(&content, "photoshop", "DateCreated") {
+
+                // Store as EXIF-ish string
+                let as_exif = dc.replace('T', " ").replace('-', ":");
+                // Only replace first two dashes-turned-colons in date part carefully:
+                let as_exif = if dc.len() >= 10 {
+                    let d = &dc[..10].replace('-', ":");
+                    let rest = if dc.len() > 10 { &dc[10..] } else { "" };
+                    let rest = rest.trim_start_matches('T').trim_start_matches(' ');
+                    if rest.is_empty() {
+                        format!("{} 00:00:00", d)
+                    } else {
+                        format!("{} {}", d, rest)
+                    }
+                } else {
+                    as_exif
+                };
+                exif_map.insert("DateTimeOriginal".to_string(), as_exif);
+                exif_changed = true;
+            }
+        }
+        if let Some(creator) = extract_dc_alt_text(&content, "creator") {
+            if exif_map.get("Artist").map(|s| s.as_str()) != Some(creator.as_str()) {
+                exif_map.insert("Artist".to_string(), creator.clone());
+                exif_map.insert("Creator".to_string(), creator);
+                exif_changed = true;
+            }
+        }
+        if let Some(rights) = extract_dc_alt_text(&content, "rights") {
+            if exif_map.get("Copyright").map(|s| s.as_str()) != Some(rights.as_str()) {
+                exif_map.insert("Copyright".to_string(), rights);
+                exif_changed = true;
+            }
+        }
+        // IPTC location / headline from photoshop + Iptc4xmpCore (LR sidecars)
+        for (ns, tag, keys) in [
+            ("photoshop", "City", &["City"][..]),
+            ("photoshop", "Country", &["Country"][..]),
+            ("photoshop", "State", &["State", "Province"][..]),
+            ("photoshop", "Headline", &["Headline"][..]),
+            ("photoshop", "Credit", &["Credit"][..]),
+            ("photoshop", "CaptionWriter", &["CaptionWriter", "Writer"][..]),
+            ("photoshop", "Category", &["Category"][..]),
+            ("photoshop", "Urgency", &["Urgency"][..]),
+            ("photoshop", "Source", &["Source"][..]),
+            ("photoshop", "Instructions", &["Instructions"][..]),
+            ("photoshop", "AuthorsPosition", &["AuthorsPosition"][..]),
+            ("photoshop", "TransmissionReference", &["JobIdentifier", "JobID"][..]),
+            ("photoshop", "JobIdentifier", &["JobIdentifier"][..]),
+            ("Iptc4xmpCore", "CountryCode", &["CountryCode"][..]),
+            ("Iptc4xmpCore", "IntellectualGenre", &["IntellectualGenre"][..]),
+            ("Iptc4xmpCore", "Location", &["Location", "SubLocation"][..]),
+        ] {
+            if let Some(val) = extract_simple_xmp_field(&content, ns, tag) {
+                let missing = keys.iter().all(|k| !exif_map.contains_key(*k));
+                if missing {
+                    for k in keys {
+                        exif_map.insert((*k).to_string(), val.clone());
+                    }
+                    exif_changed = true;
+                }
+            }
+        }
+        // Iptc4xmpExt:Event (alt-lang)
+        if let Some(ev) = extract_namespaced_alt_text(&content, "Iptc4xmpExt", "Event")
+            .or_else(|| extract_simple_xmp_field(&content, "Iptc4xmpExt", "Event"))
+        {
+            if exif_map.get("Event").map(|s| s.as_str()) != Some(ev.as_str()) {
+                exif_map.insert("Event".to_string(), ev);
+                exif_changed = true;
+            }
+        }
+        if let Some(dst) = extract_simple_xmp_field(&content, "Iptc4xmpExt", "DigitalSourceType") {
+            if exif_map.get("DigitalSourceType").map(|s| s.as_str()) != Some(dst.as_str()) {
+                exif_map.insert("DigitalSourceType".to_string(), dst);
+                exif_changed = true;
+            }
+        }
+        if let Some(people) = extract_person_in_image(&content) {
+            if exif_map.get("PersonInImage").map(|s| s.as_str()) != Some(people.as_str()) {
+                exif_map.insert("PersonInImage".to_string(), people);
+                exif_changed = true;
+            }
+        }
+        if let Some(scene) = extract_string_bag(&content, "Iptc4xmpCore", "Scene") {
+            if exif_map.get("Scene").map(|s| s.as_str()) != Some(scene.as_str()) {
+                exif_map.insert("Scene".to_string(), scene);
+                exif_changed = true;
+            }
+        }
+        if let Some(supp) = extract_string_bag(&content, "photoshop", "SupplementalCategories") {
+            if exif_map
+                .get("SupplementalCategories")
+                .map(|s| s.as_str())
+                != Some(supp.as_str())
+            {
+                exif_map.insert("SupplementalCategories".to_string(), supp);
+                exif_changed = true;
+            }
+        }
+        if let Some(codes) = extract_string_bag(&content, "Iptc4xmpCore", "SubjectCode") {
+            if exif_map.get("SubjectCode").map(|s| s.as_str()) != Some(codes.as_str()) {
+                exif_map.insert("SubjectCode".to_string(), codes);
+                exif_changed = true;
+            }
+        }
+        // xmpRights:UsageTerms (alt-lang)
+        if let Some(ut) = extract_namespaced_alt_text(&content, "xmpRights", "UsageTerms")
+            .or_else(|| extract_simple_xmp_field(&content, "xmpRights", "UsageTerms"))
+        {
+            if exif_map.get("UsageTerms").map(|s| s.as_str()) != Some(ut.as_str()) {
+                exif_map.insert("UsageTerms".to_string(), ut);
+                exif_changed = true;
+            }
+        }
+        if let Some(ws) = extract_simple_xmp_field(&content, "xmpRights", "WebStatement") {
+            if exif_map.get("WebStatement").map(|s| s.as_str()) != Some(ws.as_str()) {
+                exif_map.insert("WebStatement".to_string(), ws);
+                exif_changed = true;
+            }
+        }
+        if let Some(url) = extract_simple_xmp_field(&content, "Iptc4xmpCore", "CreatorWorkURL")
+            .or_else(|| extract_simple_xmp_field(&content, "Iptc4xmpCore", "CiUrlWork"))
+        {
+            if exif_map.get("CreatorWorkURL").map(|s| s.as_str()) != Some(url.as_str()) {
+                exif_map.insert("CreatorWorkURL".to_string(), url.clone());
+                exif_map.insert("CiUrlWork".to_string(), url);
+                exif_changed = true;
+            }
+        }
+        if let Some(em) = extract_simple_xmp_field(&content, "Iptc4xmpCore", "CiEmailWork") {
+            if exif_map.get("CiEmailWork").map(|s| s.as_str()) != Some(em.as_str()) {
+                exif_map.insert("CiEmailWork".to_string(), em.clone());
+                exif_map.insert("Email".to_string(), em);
+                exif_changed = true;
+            }
+        }
+        if let Some(ph) = extract_simple_xmp_field(&content, "Iptc4xmpCore", "CiTelWork") {
+            if exif_map.get("CiTelWork").map(|s| s.as_str()) != Some(ph.as_str()) {
+                exif_map.insert("CiTelWork".to_string(), ph.clone());
+                exif_map.insert("Phone".to_string(), ph);
+                exif_changed = true;
+            }
+        }
+        for (tag, keys) in [
+            ("CiAdrExtadr", &["CiAdrExtadr", "Creator Address"][..]),
+            ("CiAdrCity", &["CiAdrCity"][..]),
+            ("CiAdrRegion", &["CiAdrRegion"][..]),
+            ("CiAdrPcode", &["CiAdrPcode"][..]),
+            ("CiAdrCtry", &["CiAdrCtry"][..]),
+        ] {
+            if let Some(val) = extract_simple_xmp_field(&content, "Iptc4xmpCore", tag) {
+                let missing = keys.iter().all(|k| !exif_map.contains_key(*k));
+                if missing {
+                    for k in keys {
+                        exif_map.insert((*k).to_string(), val.clone());
+                    }
+                    exif_changed = true;
+                }
+            }
+        }
+        // Copyright status: prefer photoshop:CopyrightStatus, else map xmpRights:Marked
+        if let Some(cs) = extract_simple_xmp_field(&content, "photoshop", "CopyrightStatus") {
+            if exif_map.get("CopyrightStatus").map(|s| s.as_str()) != Some(cs.as_str()) {
+                exif_map.insert("CopyrightStatus".to_string(), cs);
+                exif_changed = true;
+            }
+        } else if let Some(marked) = extract_simple_xmp_field(&content, "xmpRights", "Marked") {
+            let label = if marked.eq_ignore_ascii_case("True") {
+                "Copyrighted"
+            } else if marked.eq_ignore_ascii_case("False") {
+                "Public Domain"
+            } else {
+                ""
+            };
+            if !label.is_empty()
+                && exif_map.get("CopyrightStatus").map(|s| s.as_str()) != Some(label)
+            {
+                exif_map.insert("CopyrightStatus".to_string(), label.to_string());
+                exif_changed = true;
+            }
+        }
+
+        if exif_changed {
+            metadata.exif = Some(exif_map);
+            changed = true;
+        }
     }
     changed
+}
+
+
+/// Merge RapidRAW develop adjustments into an existing photo XMP document (best-effort).
+/// Updates/inserts crs:* attributes and nested crs elements; preserves other XMP metadata.
+fn merge_develop_into_xmp(content: &str, adjustments: &Value) -> String {
+    let develop_empty = adjustments.is_null()
+        || adjustments.as_object().map(|o| {
+            o.keys()
+                .filter(|k| *k != "rating" && *k != "sectionVisibility")
+                .count()
+                == 0
+        }).unwrap_or(true);
+    if develop_empty {
+        return content.to_string();
+    }
+
+    let develop_xmp = preset_converter::convert_adjustments_to_xmp("RapidRAW", adjustments);
+
+    // Collect crs attribute lines: crs:Foo="bar"
+    let attr_re = Regex::new(r#"(?m)^\s*(crs:[A-Za-z0-9]+="[^"]*")\s*$"#).unwrap();
+    let mut attrs: Vec<String> = Vec::new();
+    for cap in attr_re.captures_iter(&develop_xmp) {
+        let a = cap[1].to_string();
+        // skip version noise if desired - keep all
+        attrs.push(a);
+    }
+
+    // Collect nested crs element blocks (Name, ToneCurve*, etc.)
+    let elem_re = Regex::new(r"(?s)(<crs:[A-Za-z0-9]+[\s>].*?</crs:[A-Za-z0-9]+>)").unwrap();
+    let mut elems: Vec<String> = Vec::new();
+    for cap in elem_re.captures_iter(&develop_xmp) {
+        let e = cap[1].trim().to_string();
+        // skip Name if we don't want RapidRAW name on photo sidecars
+        if e.starts_with("<crs:Name>") {
+            continue;
+        }
+        elems.push(e);
+    }
+
+    let mut out = content.to_string();
+
+    // Ensure crs namespace on rdf:Description
+    if !out.contains("xmlns:crs=") {
+        out = out.replacen(
+            "<rdf:Description",
+            r#"<rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/""#,
+            1,
+        );
+    }
+
+    // Remove existing crs attributes on Description (simple global)
+    let strip_attr = Regex::new(r#"\s+crs:[A-Za-z0-9]+="[^"]*""#).unwrap();
+    out = strip_attr.replace_all(&out, "").to_string();
+
+    // Remove existing nested crs element blocks
+    let strip_elem = Regex::new(r"(?s)\s*<crs:[A-Za-z0-9]+(?:\s[^>]*)?>.*?</crs:[A-Za-z0-9]+>").unwrap();
+    out = strip_elem.replace_all(&out, "").to_string();
+    // self-closing crs if any
+    let strip_self = Regex::new(r#"\s*<crs:[A-Za-z0-9]+[^>]*/>"#).unwrap();
+    out = strip_self.replace_all(&out, "").to_string();
+
+    // Inject attributes into first rdf:Description tag (before > or />)
+    if let Some(desc_idx) = out.find("<rdf:Description") {
+        if let Some(rel_end) = out[desc_idx..].find('>') {
+            let abs_end = desc_idx + rel_end;
+            let is_self_closing = abs_end > 0 && out.as_bytes()[abs_end - 1] == b'/';
+            let insert_at = if is_self_closing { abs_end - 1 } else { abs_end };
+            let mut attr_block = String::new();
+            for a in &attrs {
+                attr_block.push_str("\n   ");
+                attr_block.push_str(a);
+            }
+            out.insert_str(insert_at, &attr_block);
+        }
+    }
+
+    // Inject nested elements before </rdf:Description>
+    if !elems.is_empty() {
+        if let Some(last_index) = out.rfind("</rdf:Description>") {
+            let mut block = String::new();
+            for e in &elems {
+                block.push_str("   ");
+                block.push_str(e);
+                block.push('\n');
+            }
+            let (start, end) = out.split_at(last_index);
+            out = format!("{}{}{}", start, block, end);
+        }
+    }
+
+    // Mark HasSettings
+    if !out.contains("crs:HasSettings=") {
+        if let Some(desc_idx) = out.find("<rdf:Description") {
+            if let Some(rel_end) = out[desc_idx..].find('>') {
+                let abs_end = desc_idx + rel_end;
+                let is_self_closing = abs_end > 0 && out.as_bytes()[abs_end - 1] == b'/';
+                let insert_at = if is_self_closing { abs_end - 1 } else { abs_end };
+                out.insert_str(insert_at, r#" crs:HasSettings="True""#);
+            }
+        }
+    }
+
+    out
+}
+
+
+/// Escape text for XMP/XML text nodes.
+fn xml_escape_text(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// Upsert namespaced alt-lang field: <ns:TAG><rdf:Alt><rdf:li xml:lang="x-default">…</rdf:li></rdf:Alt></ns:TAG>
+/// Upsert Iptc4xmpExt:PersonInImage as rdf:Bag of names (comma/semicolon separated input).
+/// Upsert a namespaced rdf:Bag of strings from comma/semicolon-separated input.
+fn upsert_string_bag(content: &str, ns: &str, tag: &str, values: &str) -> String {
+    let re = Regex::new(&format!(
+        r#"(?s)\s*<{ns}:{tag}>\s*<rdf:Bag>.*?</rdf:Bag>\s*</{ns}:{tag}>"#,
+        ns = ns,
+        tag = tag
+    ))
+    .unwrap();
+    let mut out = content.to_string();
+    // ensure common IPTC core ns when used
+    if ns == "Iptc4xmpCore" {
+        out = ensure_xmlns(
+            &out,
+            "Iptc4xmpCore",
+            "http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/",
+        );
+    } else if ns == "Iptc4xmpExt" {
+        out = ensure_xmlns(
+            &out,
+            "Iptc4xmpExt",
+            "http://iptc.org/std/Iptc4xmpExt/2008-02-29/",
+        );
+    }
+    let items: Vec<String> = values
+        .split(|c| c == ',' || c == ';')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| xml_escape_text(s))
+        .collect();
+    if items.is_empty() {
+        return re.replace_all(&out, "").to_string();
+    }
+    let mut bag = format!("<{ns}:{tag}>\n    <rdf:Bag>\n", ns = ns, tag = tag);
+    for n in &items {
+        bag.push_str(&format!("     <rdf:li>{}</rdf:li>\n", n));
+    }
+    bag.push_str(&format!("    </rdf:Bag>\n   </{ns}:{tag}>", ns = ns, tag = tag));
+    if re.is_match(&out) {
+        re.replace(&out, format!("\n   {}", bag)).to_string()
+    } else if let Some(last_index) = out.rfind("</rdf:Description>") {
+        let (start, end) = out.split_at(last_index);
+        format!("{} {}\n  {}", start, bag, end)
+    } else {
+        out
+    }
+}
+
+fn extract_string_bag(content: &str, ns: &str, tag: &str) -> Option<String> {
+    let re = Regex::new(&format!(
+        r#"(?s)<{ns}:{tag}>\s*<rdf:Bag>(.*?)</rdf:Bag>\s*</{ns}:{tag}>"#,
+        ns = ns,
+        tag = tag
+    ))
+    .ok()?;
+    let bag = re.captures(content)?.get(1)?.as_str();
+    let li = Regex::new(r#"<rdf:li[^>]*>([^<]*)</rdf:li>"#).ok()?;
+    let mut names = Vec::new();
+    for c in li.captures_iter(bag) {
+        if let Some(m) = c.get(1) {
+            let s = m
+                .as_str()
+                .replace("&amp;", "&")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+                .trim()
+                .to_string();
+            if !s.is_empty() {
+                names.push(s);
+            }
+        }
+    }
+    if names.is_empty() {
+        None
+    } else {
+        Some(names.join(", "))
+    }
+}
+
+fn upsert_person_in_image_bag(content: &str, people: &str) -> String {
+    let re = Regex::new(
+        r#"(?s)\s*<Iptc4xmpExt:PersonInImage>\s*<rdf:Bag>.*?</rdf:Bag>\s*</Iptc4xmpExt:PersonInImage>"#,
+    )
+    .unwrap();
+    let mut out = content.to_string();
+    out = ensure_xmlns(
+        &out,
+        "Iptc4xmpExt",
+        "http://iptc.org/std/Iptc4xmpExt/2008-02-29/",
+    );
+    let names: Vec<String> = people
+        .split(|c| c == ',' || c == ';')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| xml_escape_text(s))
+        .collect();
+    if names.is_empty() {
+        return re.replace_all(&out, "").to_string();
+    }
+    let mut bag = String::from("<Iptc4xmpExt:PersonInImage>\n    <rdf:Bag>\n");
+    for n in &names {
+        bag.push_str(&format!("     <rdf:li>{}</rdf:li>\n", n));
+    }
+    bag.push_str("    </rdf:Bag>\n   </Iptc4xmpExt:PersonInImage>");
+    if re.is_match(&out) {
+        re.replace(&out, format!("\n   {}", bag)).to_string()
+    } else if let Some(last_index) = out.rfind("</rdf:Description>") {
+        let (start, end) = out.split_at(last_index);
+        format!("{} {}\n  {}", start, bag, end)
+    } else {
+        out
+    }
+}
+
+fn extract_person_in_image(content: &str) -> Option<String> {
+    let re = Regex::new(
+        r#"(?s)<Iptc4xmpExt:PersonInImage>\s*<rdf:Bag>(.*?)</rdf:Bag>\s*</Iptc4xmpExt:PersonInImage>"#,
+    )
+    .ok()?;
+    let bag = re.captures(content)?.get(1)?.as_str();
+    let li = Regex::new(r#"<rdf:li[^>]*>([^<]*)</rdf:li>"#).ok()?;
+    let mut names = Vec::new();
+    for c in li.captures_iter(bag) {
+        if let Some(m) = c.get(1) {
+            let s = m
+                .as_str()
+                .replace("&amp;", "&")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+                .trim()
+                .to_string();
+            if !s.is_empty() {
+                names.push(s);
+            }
+        }
+    }
+    if names.is_empty() {
+        None
+    } else {
+        Some(names.join(", "))
+    }
+}
+
+fn upsert_namespaced_alt_field(content: &str, ns: &str, tag: &str, value: Option<&str>) -> String {
+    let re = Regex::new(&format!(
+        r#"(?s)\s*<{ns}:{tag}>\s*<rdf:Alt>.*?</rdf:Alt>\s*</{ns}:{tag}>"#,
+        ns = ns,
+        tag = tag
+    ))
+    .unwrap();
+    let mut out = content.to_string();
+    match value {
+        None | Some("") => {
+            out = re.replace_all(&out, "").to_string();
+        }
+        Some(v) => {
+            let safe = xml_escape_text(v.trim());
+            let block = format!(
+                "<{ns}:{tag}>\n    <rdf:Alt>\n     <rdf:li xml:lang=\"x-default\">{safe}</rdf:li>\n    </rdf:Alt>\n   </{ns}:{tag}>",
+                ns = ns,
+                tag = tag,
+                safe = safe
+            );
+            if re.is_match(&out) {
+                out = re.replace(&out, format!("\n   {}", block)).to_string();
+            } else if let Some(last_index) = out.rfind("</rdf:Description>") {
+                let (start, end) = out.split_at(last_index);
+                out = format!("{} {}\n  {}", start, block, end);
+            }
+        }
+    }
+    out
+}
+
+/// Upsert a Dublin Core alt-lang field: <dc:TAG><rdf:Alt><rdf:li xml:lang="x-default">…</rdf:li></rdf:Alt></dc:TAG>
+fn upsert_dc_alt_field(content: &str, tag: &str, value: Option<&str>) -> String {
+    let re = Regex::new(&format!(
+        r#"(?s)\s*<dc:{tag}>\s*<rdf:Alt>.*?</rdf:Alt>\s*</dc:{tag}>"#,
+        tag = tag
+    ))
+    .unwrap();
+    let mut out = content.to_string();
+    match value {
+        None | Some("") => {
+            out = re.replace_all(&out, "").to_string();
+        }
+        Some(v) => {
+            let safe = xml_escape_text(v.trim());
+            let block = format!(
+                "<dc:{tag}>\n    <rdf:Alt>\n     <rdf:li xml:lang=\"x-default\">{safe}</rdf:li>\n    </rdf:Alt>\n   </dc:{tag}>",
+                tag = tag,
+                safe = safe
+            );
+            if re.is_match(&out) {
+                out = re.replace(&out, format!("\n   {}", block)).to_string();
+            } else if let Some(last_index) = out.rfind("</rdf:Description>") {
+                let (start, end) = out.split_at(last_index);
+                out = format!("{} {}\n  {}", start, block, end);
+            }
+        }
+    }
+    out
+}
+
+/// Ensure xmlns:dc is declared on rdf:Description for LR-compatible DC packets.
+fn ensure_dc_namespace(content: &str) -> String {
+    if content.contains("xmlns:dc=") {
+        return content.to_string();
+    }
+    if let Some(idx) = content.find("<rdf:Description") {
+        // insert after opening tag name
+        let rest = &content[idx..];
+        if let Some(gt) = rest.find('>') {
+            let insert_at = idx + gt;
+            let (a, b) = content.split_at(insert_at);
+            return format!(
+                r#"{} xmlns:dc="http://purl.org/dc/elements/1.1/"{}"#,
+                a, b
+            );
+        }
+    }
+    content.to_string()
+}
+
+fn extract_namespaced_alt_text(content: &str, ns: &str, tag: &str) -> Option<String> {
+    let re = Regex::new(&format!(
+        r#"(?s)<{ns}:{tag}>\s*<rdf:Alt>\s*<rdf:li[^>]*>([^<]*)</rdf:li>"#,
+        ns = ns,
+        tag = tag
+    ))
+    .ok()?;
+    re.captures(content).and_then(|c| {
+        c.get(1).map(|m| {
+            m.as_str()
+                .replace("&amp;", "&")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+                .trim()
+                .to_string()
+        })
+    })
+    .filter(|s| !s.is_empty())
+}
+
+fn extract_dc_alt_text(content: &str, tag: &str) -> Option<String> {
+    let re = Regex::new(&format!(
+        r#"(?s)<dc:{tag}>\s*<rdf:Alt>\s*<rdf:li[^>]*>([^<]*)</rdf:li>"#,
+        tag = tag
+    ))
+    .ok()?;
+    re.captures(content)
+        .and_then(|c| c.get(1).map(|m| {
+            m.as_str()
+                .replace("&amp;", "&")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+                .trim()
+                .to_string()
+        }))
+        .filter(|s| !s.is_empty())
+}
+
+
+fn ensure_xmlns(content: &str, prefix: &str, uri: &str) -> String {
+    let needle = format!("xmlns:{}=", prefix);
+    if content.contains(&needle) {
+        return content.to_string();
+    }
+    if let Some(idx) = content.find("<rdf:Description") {
+        let rest = &content[idx..];
+        if let Some(gt) = rest.find('>') {
+            let insert_at = idx + gt;
+            let (a, b) = content.split_at(insert_at);
+            return format!(r#"{} xmlns:{}="{}"{}"#, a, prefix, uri, b);
+        }
+    }
+    content.to_string()
+}
+
+/// Read a simple XMP field as element or attribute: photoshop:City / <photoshop:City>…
+fn extract_simple_xmp_field(content: &str, ns: &str, tag: &str) -> Option<String> {
+    let re_elem = Regex::new(&format!(
+        r#"<{ns}:{tag}\s*>([^<]*)</{ns}:{tag}>"#,
+        ns = ns,
+        tag = tag
+    ))
+    .ok()?;
+    if let Some(c) = re_elem.captures(content) {
+        if let Some(m) = c.get(1) {
+            let s = m
+                .as_str()
+                .replace("&amp;", "&")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+                .trim()
+                .to_string();
+            if !s.is_empty() {
+                return Some(s);
+            }
+        }
+    }
+    let re_attr = Regex::new(&format!(
+        r#"{ns}:{tag}\s*=\s*"([^"]*)""#,
+        ns = ns,
+        tag = tag
+    ))
+    .ok()?;
+    if let Some(c) = re_attr.captures(content) {
+        if let Some(m) = c.get(1) {
+            let s = m
+                .as_str()
+                .replace("&amp;", "&")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+                .trim()
+                .to_string();
+            if !s.is_empty() {
+                return Some(s);
+            }
+        }
+    }
+    None
+}
+
+/// Upsert a simple element like <photoshop:City>…</photoshop:City> or attribute form.
+fn upsert_simple_xmp_field(content: &str, ns: &str, tag: &str, value: Option<&str>) -> String {
+    let re_attr = Regex::new(&format!(r#"{ns}:{tag}\s*=\s*"[^"]*""#, ns = ns, tag = tag)).unwrap();
+    let re_elem = Regex::new(&format!(
+        r#"<{ns}:{tag}\s*>[^<]*</{ns}:{tag}>"#,
+        ns = ns,
+        tag = tag
+    ))
+    .unwrap();
+    let re_elem_ws = Regex::new(&format!(
+        r#"\s*<{ns}:{tag}\s*>[^<]*</{ns}:{tag}>"#,
+        ns = ns,
+        tag = tag
+    ))
+    .unwrap();
+
+    match value {
+        None | Some("") => {
+            let mut c = re_attr.replace_all(content, "").to_string();
+            c = re_elem_ws.replace_all(&c, "").to_string();
+            c
+        }
+        Some(v) => {
+            let escaped = v
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+                .replace('"', "&quot;");
+            if re_attr.is_match(content) {
+                re_attr
+                    .replace(content, format!(r#"{ns}:{tag}="{}""#, escaped, ns = ns, tag = tag))
+                    .to_string()
+            } else if re_elem.is_match(content) {
+                re_elem
+                    .replace(
+                        content,
+                        format!("<{ns}:{tag}>{}</{ns}:{tag}>", escaped, ns = ns, tag = tag),
+                    )
+                    .to_string()
+            } else if let Some(last_index) = content.rfind("</rdf:Description>") {
+                let (start, end) = content.split_at(last_index);
+                format!(
+                    "{} <{ns}:{tag}>{}</{ns}:{tag}>\n{}",
+                    start, escaped, end, ns = ns, tag = tag
+                )
+            } else {
+                content.to_string()
+            }
+        }
+    }
 }
 
 pub fn sync_metadata_to_xmp(source_path: &Path, metadata: &ImageMetadata, create_if_missing: bool) {
@@ -3993,7 +5552,8 @@ pub fn sync_metadata_to_xmp(source_path: &Path, metadata: &ImageMetadata, create
  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
   <rdf:Description rdf:about=""
     xmlns:xmp="http://ns.adobe.com/xap/1.0/"
-    xmlns:dc="http://purl.org/dc/elements/1.1/">
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
   </rdf:Description>
  </rdf:RDF>
 </x:xmpmeta>"#;
@@ -4064,25 +5624,1907 @@ pub fn sync_metadata_to_xmp(source_path: &Path, metadata: &ImageMetadata, create
             content = re_label_tag.replace_all(&content, "").to_string();
         }
 
+        // Flat keywords for dc:subject (strip user: prefix; keep leaf-friendly list)
+        let mut flat_subjects: Vec<String> = Vec::new();
+        let mut hierarchical: Vec<String> = Vec::new();
+        for t in &normal_tags {
+            let bare = t.strip_prefix("user:").unwrap_or(t.as_str());
+            // color: already mapped to xmp:Label above; never put in subject
+            if bare.starts_with("color:") {
+                continue;
+            }
+            // flag:pick / flag:reject and stack:<id> stay in dc:subject for interop
+            if bare.starts_with("flag:") || bare.starts_with("stack:") {
+                if !flat_subjects.iter().any(|s| s == bare) {
+                    flat_subjects.push(bare.to_string());
+                }
+                continue;
+            }
+            // hierarchical path uses | in LR XMP; we store /
+            if bare.contains('/') {
+                hierarchical.push(bare.replace('/', "|"));
+            }
+            // always include leaf in flat subject
+            let leaf = bare.rsplit('/').next().unwrap_or(bare);
+            if !leaf.is_empty() && !flat_subjects.iter().any(|s| s == leaf) {
+                flat_subjects.push(leaf.to_string());
+            }
+        }
+
         let re_subject =
             Regex::new(r#"(?s)<dc:subject>\s*<rdf:Bag>.*?</rdf:Bag>\s*</dc:subject>"#).unwrap();
-        if normal_tags.is_empty() {
+        if flat_subjects.is_empty() {
             content = re_subject.replace_all(&content, "").to_string();
         } else {
             let mut bag = String::from("<dc:subject>\n    <rdf:Bag>\n");
-            for t in normal_tags {
-                bag.push_str(&format!("     <rdf:li>{}</rdf:li>\n", t));
+            for t in &flat_subjects {
+                let esc = t
+                    .replace('&', "&amp;")
+                    .replace('<', "&lt;")
+                    .replace('>', "&gt;");
+                bag.push_str(&format!("     <rdf:li>{}</rdf:li>\n", esc));
             }
             bag.push_str("    </rdf:Bag>\n   </dc:subject>");
 
             if re_subject.is_match(&content) {
-                content = re_subject.replace(&content, bag).to_string();
+                content = re_subject.replace(&content, bag.as_str()).to_string();
             } else if let Some(last_index) = content.rfind("</rdf:Description>") {
                 let (start, end) = content.split_at(last_index);
                 content = format!("{} {}\n  {}", start, bag, end);
             }
         }
 
+        // Lightroom hierarchical keywords (lr:hierarchicalSubject)
+        content = ensure_xmlns(
+            &content,
+            "lr",
+            "http://ns.adobe.com/lightroom/1.0/",
+        );
+        let re_hier = Regex::new(
+            r#"(?s)<lr:hierarchicalSubject>\s*<rdf:Bag>.*?</rdf:Bag>\s*</lr:hierarchicalSubject>"#,
+        )
+        .unwrap();
+        if hierarchical.is_empty() {
+            content = re_hier.replace_all(&content, "").to_string();
+        } else {
+            let mut bag = String::from("<lr:hierarchicalSubject>\n    <rdf:Bag>\n");
+            for t in &hierarchical {
+                let esc = t
+                    .replace('&', "&amp;")
+                    .replace('<', "&lt;")
+                    .replace('>', "&gt;");
+                bag.push_str(&format!("     <rdf:li>{}</rdf:li>\n", esc));
+            }
+            bag.push_str("    </rdf:Bag>\n   </lr:hierarchicalSubject>");
+            if re_hier.is_match(&content) {
+                content = re_hier.replace(&content, bag.as_str()).to_string();
+            } else if let Some(last_index) = content.rfind("</rdf:Description>") {
+                let (start, end) = content.split_at(last_index);
+                content = format!("{} {}\n  {}", start, bag, end);
+            }
+        }
+
+        // Dublin Core IPTC-ish fields from RapidRAW exif map (LR-readable)
+        content = ensure_dc_namespace(&content);
+        if let Some(exif) = metadata.exif.as_ref() {
+            // Caption/description vs title are distinct in LR (dc:description vs dc:title)
+            let description = exif
+                .get("ImageDescription")
+                .or_else(|| exif.get("Description"))
+                .or_else(|| exif.get("Caption"))
+                .map(|s| s.as_str());
+            let title = exif
+                .get("XPTitle")
+                .or_else(|| exif.get("Title"))
+                .map(|s| s.as_str());
+            let creator = exif
+                .get("Artist")
+                .or_else(|| exif.get("Creator"))
+                .or_else(|| exif.get("XPAuthor"))
+                .map(|s| s.as_str());
+            let rights = exif
+                .get("Copyright")
+                .or_else(|| exif.get("Rights"))
+                .or_else(|| exif.get("XPComment"))
+                .map(|s| s.as_str());
+            // Only overwrite when keys are present; empty string clears
+            if exif.contains_key("ImageDescription")
+                || exif.contains_key("Description")
+                || exif.contains_key("Caption")
+            {
+                content = upsert_dc_alt_field(&content, "description", description);
+            }
+            if exif.contains_key("XPTitle") || exif.contains_key("Title") {
+                content = upsert_dc_alt_field(&content, "title", title);
+            }
+            if exif.contains_key("Artist")
+                || exif.contains_key("Creator")
+                || exif.contains_key("XPAuthor")
+            {
+                content = upsert_dc_alt_field(&content, "creator", creator);
+            }
+            if exif.contains_key("Copyright")
+                || exif.contains_key("Rights")
+            {
+                content = upsert_dc_alt_field(&content, "rights", rights);
+            }
+
+            // Location IPTC (photoshop + Iptc4xmpCore) — LR-readable
+            content = ensure_xmlns(
+                &content,
+                "photoshop",
+                "http://ns.adobe.com/photoshop/1.0/",
+            );
+            content = ensure_xmlns(
+                &content,
+                "Iptc4xmpCore",
+                "http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/",
+            );
+            let city = exif.get("City").map(|s| s.as_str());
+            let country = exif.get("Country").map(|s| s.as_str());
+            let location = exif
+                .get("Location")
+                .or_else(|| exif.get("SubLocation"))
+                .map(|s| s.as_str());
+            let state = exif
+                .get("State")
+                .or_else(|| exif.get("Province"))
+                .map(|s| s.as_str());
+            let headline = exif.get("Headline").map(|s| s.as_str());
+            if exif.contains_key("City") {
+                content = upsert_simple_xmp_field(&content, "photoshop", "City", city);
+            }
+            if exif.contains_key("Country") {
+                content = upsert_simple_xmp_field(&content, "photoshop", "Country", country);
+            }
+            if exif.contains_key("State") || exif.contains_key("Province") {
+                content = upsert_simple_xmp_field(&content, "photoshop", "State", state);
+            }
+            if exif.contains_key("Headline") {
+                content = upsert_simple_xmp_field(&content, "photoshop", "Headline", headline);
+            }
+            let caption_writer = exif
+                .get("CaptionWriter")
+                .or_else(|| exif.get("Caption Writer"))
+                .or_else(|| exif.get("Writer"))
+                .map(|s| s.as_str());
+            if exif.contains_key("CaptionWriter")
+                || exif.contains_key("Caption Writer")
+                || exif.contains_key("Writer")
+            {
+                content = upsert_simple_xmp_field(
+                    &content,
+                    "photoshop",
+                    "CaptionWriter",
+                    caption_writer,
+                );
+            }
+            if exif.contains_key("Category") {
+                let cat = exif.get("Category").map(|s| s.as_str());
+                content = upsert_simple_xmp_field(&content, "photoshop", "Category", cat);
+            }
+            if exif.contains_key("Urgency") {
+                let urg = exif.get("Urgency").map(|s| s.as_str());
+                content = upsert_simple_xmp_field(&content, "photoshop", "Urgency", urg);
+            }
+            if exif.contains_key("SupplementalCategories")
+                || exif.contains_key("Supplemental Categories")
+            {
+                let supp = exif
+                    .get("SupplementalCategories")
+                    .or_else(|| exif.get("Supplemental Categories"))
+                    .map(|s| s.as_str())
+                    .unwrap_or("");
+                content = upsert_string_bag(
+                    &content,
+                    "photoshop",
+                    "SupplementalCategories",
+                    supp,
+                );
+            }
+            let genre = exif
+                .get("IntellectualGenre")
+                .or_else(|| exif.get("Intellectual Genre"))
+                .map(|s| s.as_str());
+            if exif.contains_key("IntellectualGenre") || exif.contains_key("Intellectual Genre") {
+                content = upsert_simple_xmp_field(
+                    &content,
+                    "Iptc4xmpCore",
+                    "IntellectualGenre",
+                    genre,
+                );
+            }
+            content = ensure_xmlns(
+                &content,
+                "Iptc4xmpExt",
+                "http://iptc.org/std/Iptc4xmpExt/2008-02-29/",
+            );
+            let event = exif.get("Event").map(|s| s.as_str());
+            if exif.contains_key("Event") {
+                // LR often uses Iptc4xmpExt:Event as alt-lang bag
+                content = upsert_namespaced_alt_field(&content, "Iptc4xmpExt", "Event", event);
+            }
+            if exif.contains_key("DigitalSourceType")
+                || exif.contains_key("Digital Source Type")
+            {
+                let dst = exif
+                    .get("DigitalSourceType")
+                    .or_else(|| exif.get("Digital Source Type"))
+                    .map(|s| s.as_str());
+                content = ensure_xmlns(
+                    &content,
+                    "Iptc4xmpExt",
+                    "http://iptc.org/std/Iptc4xmpExt/2008-02-29/",
+                );
+                content = upsert_simple_xmp_field(
+                    &content,
+                    "Iptc4xmpExt",
+                    "DigitalSourceType",
+                    dst,
+                );
+            }
+            if exif.contains_key("PersonInImage") || exif.contains_key("Person In Image") {
+                let people = exif
+                    .get("PersonInImage")
+                    .or_else(|| exif.get("Person In Image"))
+                    .map(|s| s.as_str())
+                    .unwrap_or("");
+                content = upsert_person_in_image_bag(&content, people);
+            }
+            if exif.contains_key("Scene") {
+                let scene = exif.get("Scene").map(|s| s.as_str()).unwrap_or("");
+                content = upsert_string_bag(
+                    &content,
+                    "Iptc4xmpCore",
+                    "Scene",
+                    scene,
+                );
+            }
+            if exif.contains_key("SubjectCode") || exif.contains_key("Subject Code") {
+                let codes = exif
+                    .get("SubjectCode")
+                    .or_else(|| exif.get("Subject Code"))
+                    .map(|s| s.as_str())
+                    .unwrap_or("");
+                content = upsert_string_bag(
+                    &content,
+                    "Iptc4xmpCore",
+                    "SubjectCode",
+                    codes,
+                );
+            }
+            let credit = exif.get("Credit").map(|s| s.as_str());
+            let source = exif.get("Source").map(|s| s.as_str());
+            if exif.contains_key("Credit") {
+                content = upsert_simple_xmp_field(&content, "photoshop", "Credit", credit);
+            }
+            if exif.contains_key("Source") {
+                content = upsert_simple_xmp_field(&content, "photoshop", "Source", source);
+            }
+            let instructions = exif.get("Instructions").map(|s| s.as_str());
+            if exif.contains_key("Instructions") {
+                content = upsert_simple_xmp_field(&content, "photoshop", "Instructions", instructions);
+            }
+            let job_id = exif
+                .get("JobIdentifier")
+                .or_else(|| exif.get("JobID"))
+                .or_else(|| exif.get("Job Identifier"))
+                .map(|s| s.as_str());
+            if exif.contains_key("JobIdentifier")
+                || exif.contains_key("JobID")
+                || exif.contains_key("Job Identifier")
+            {
+                // LR IPTC "Job Identifier" maps to photoshop:TransmissionReference
+                content = upsert_simple_xmp_field(
+                    &content,
+                    "photoshop",
+                    "TransmissionReference",
+                    job_id,
+                );
+                content = upsert_simple_xmp_field(&content, "photoshop", "JobIdentifier", job_id);
+            }
+            let authors_position = exif.get("AuthorsPosition").map(|s| s.as_str());
+            if exif.contains_key("AuthorsPosition") {
+                content =
+                    upsert_simple_xmp_field(&content, "photoshop", "AuthorsPosition", authors_position);
+            }
+            let country_code = exif
+                .get("CountryCode")
+                .or_else(|| exif.get("Country Code"))
+                .map(|s| s.as_str());
+            if exif.contains_key("CountryCode") || exif.contains_key("Country Code") {
+                content = upsert_simple_xmp_field(
+                    &content,
+                    "Iptc4xmpCore",
+                    "CountryCode",
+                    country_code,
+                );
+            }
+            // Rights usage terms (xmpRights:UsageTerms) — LR IPTC/status
+            content = ensure_xmlns(
+                &content,
+                "xmpRights",
+                "http://ns.adobe.com/xap/1.0/rights/",
+            );
+            let usage_terms = exif
+                .get("UsageTerms")
+                .or_else(|| exif.get("Usage Terms"))
+                .map(|s| s.as_str());
+            if exif.contains_key("UsageTerms") || exif.contains_key("Usage Terms") {
+                content = upsert_namespaced_alt_field(
+                    &content,
+                    "xmpRights",
+                    "UsageTerms",
+                    usage_terms,
+                );
+            }
+            let web_statement = exif
+                .get("WebStatement")
+                .or_else(|| exif.get("Web Statement"))
+                .map(|s| s.as_str());
+            if exif.contains_key("WebStatement") || exif.contains_key("Web Statement") {
+                content = upsert_simple_xmp_field(
+                    &content,
+                    "xmpRights",
+                    "WebStatement",
+                    web_statement,
+                );
+            }
+            let creator_url = exif
+                .get("CreatorWorkURL")
+                .or_else(|| exif.get("Creator Work URL"))
+                .or_else(|| exif.get("CiUrlWork"))
+                .map(|s| s.as_str());
+            if exif.contains_key("CreatorWorkURL")
+                || exif.contains_key("Creator Work URL")
+                || exif.contains_key("CiUrlWork")
+            {
+                content = ensure_xmlns(
+                    &content,
+                    "Iptc4xmpCore",
+                    "http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/",
+                );
+                content = upsert_simple_xmp_field(
+                    &content,
+                    "Iptc4xmpCore",
+                    "CreatorWorkURL",
+                    creator_url,
+                );
+                content =
+                    upsert_simple_xmp_field(&content, "Iptc4xmpCore", "CiUrlWork", creator_url);
+            }
+            let creator_email = exif
+                .get("CiEmailWork")
+                .or_else(|| exif.get("Creator Email"))
+                .or_else(|| exif.get("Email"))
+                .map(|s| s.as_str());
+            if exif.contains_key("CiEmailWork")
+                || exif.contains_key("Creator Email")
+                || exif.contains_key("Email")
+            {
+                content = ensure_xmlns(
+                    &content,
+                    "Iptc4xmpCore",
+                    "http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/",
+                );
+                content = upsert_simple_xmp_field(
+                    &content,
+                    "Iptc4xmpCore",
+                    "CiEmailWork",
+                    creator_email,
+                );
+            }
+            let creator_phone = exif
+                .get("CiTelWork")
+                .or_else(|| exif.get("Creator Phone"))
+                .or_else(|| exif.get("Phone"))
+                .map(|s| s.as_str());
+            if exif.contains_key("CiTelWork")
+                || exif.contains_key("Creator Phone")
+                || exif.contains_key("Phone")
+            {
+                content = ensure_xmlns(
+                    &content,
+                    "Iptc4xmpCore",
+                    "http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/",
+                );
+                content = upsert_simple_xmp_field(
+                    &content,
+                    "Iptc4xmpCore",
+                    "CiTelWork",
+                    creator_phone,
+                );
+            }
+            // Creator postal address (Iptc4xmpCore contact)
+            content = ensure_xmlns(
+                &content,
+                "Iptc4xmpCore",
+                "http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/",
+            );
+            for (key, tag) in [
+                ("CiAdrExtadr", "CiAdrExtadr"),
+                ("Creator Address", "CiAdrExtadr"),
+                ("CiAdrCity", "CiAdrCity"),
+                ("CiAdrRegion", "CiAdrRegion"),
+                ("CiAdrPcode", "CiAdrPcode"),
+                ("CiAdrCtry", "CiAdrCtry"),
+            ] {
+                if exif.contains_key(key) {
+                    let v = exif.get(key).map(|s| s.as_str());
+                    content = upsert_simple_xmp_field(&content, "Iptc4xmpCore", tag, v);
+                }
+            }
+            // Copyright status → xmpRights:Marked (True=copyrighted, False=public domain)
+            if exif.contains_key("CopyrightStatus") || exif.contains_key("Copyright Status") {
+                let status = exif
+                    .get("CopyrightStatus")
+                    .or_else(|| exif.get("Copyright Status"))
+                    .map(|s| s.as_str())
+                    .unwrap_or("");
+                let marked = if status.eq_ignore_ascii_case("Copyrighted")
+                    || status.eq_ignore_ascii_case("True")
+                    || status == "true"
+                {
+                    Some("True")
+                } else if status.eq_ignore_ascii_case("Public Domain")
+                    || status.eq_ignore_ascii_case("False")
+                    || status == "false"
+                {
+                    Some("False")
+                } else {
+                    // Unknown / empty → remove Marked
+                    None
+                };
+                // Also store human label as simple field for roundtrip
+                content = upsert_simple_xmp_field(
+                    &content,
+                    "photoshop",
+                    "CopyrightStatus",
+                    if status.is_empty() { None } else { Some(status) },
+                );
+                content = upsert_simple_xmp_field(&content, "xmpRights", "Marked", marked);
+            }
+            // Capture date for LR Library (photoshop:DateCreated)
+            let date_created = exif
+                .get("DateTimeOriginal")
+                .or_else(|| exif.get("CreateDate"))
+                .or_else(|| exif.get("DateTime"))
+                .map(|s| s.as_str());
+            if exif.contains_key("DateTimeOriginal")
+                || exif.contains_key("CreateDate")
+                || exif.contains_key("DateTime")
+            {
+                if let Some(raw) = date_created {
+                    // Normalize EXIF "YYYY:MM:DD HH:MM:SS" → "YYYY-MM-DDTHH:MM:SS"
+                    let norm = raw.trim().replace(' ', "T");
+                    let norm = if norm.len() >= 10 && norm.as_bytes().get(4) == Some(&b':') {
+                        // YYYY:MM:DD...
+                        let mut chars: Vec<char> = norm.chars().collect();
+                        if chars.len() > 4 { chars[4] = '-'; }
+                        if chars.len() > 7 { chars[7] = '-'; }
+                        chars.into_iter().collect::<String>()
+                    } else {
+                        norm
+                    };
+                    content = upsert_simple_xmp_field(
+                        &content,
+                        "photoshop",
+                        "DateCreated",
+                        Some(norm.as_str()),
+                    );
+                }
+            }
+            if exif.contains_key("Location") || exif.contains_key("SubLocation") {
+                content =
+                    upsert_simple_xmp_field(&content, "Iptc4xmpCore", "Location", location);
+            }
+        }
+
+        // Write develop crs:* settings when present (Lightroom-compatible sidecar)
+        content = merge_develop_into_xmp(&content, &metadata.adjustments);
+
         let _ = fs::write(&xmp_file, content);
+    }
+}
+
+
+#[cfg(test)]
+mod xmp_sidecar_tests {
+    use super::*;
+    use crate::image_processing::ImageMetadata;
+    use crate::preset_converter::convert_adjustments_to_xmp;
+
+    #[test]
+    fn sidecar_develop_import_from_xmp() {
+        let dir = std::env::temp_dir().join(format!("rustroom_sidecar_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("photo.ARW");
+        fs::write(&img, b"not-a-real-raw").unwrap();
+        let xmp_body = convert_adjustments_to_xmp(
+            "SidecarLook",
+            &serde_json::json!({
+                "exposure": 0.4,
+                "contrast": 12,
+                "highlights": -20,
+                "saturation": 5
+            }),
+        );
+        fs::write(dir.join("photo.xmp"), xmp_body).unwrap();
+
+        let mut meta = ImageMetadata::default();
+        assert!(meta.adjustments.is_null());
+        let changed = sync_metadata_from_xmp(&img, &mut meta);
+        assert!(changed, "should import develop from sidecar");
+        let adj = meta.adjustments.as_object().expect("adjustments object");
+        assert!(adj.contains_key("contrast") || adj.contains_key("exposure") || adj.contains_key("highlights"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sidecar_does_not_overwrite_existing_adjustments() {
+        let dir = std::env::temp_dir().join(format!("rustroom_sidecar2_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("photo2.ARW");
+        fs::write(&img, b"raw").unwrap();
+        let xmp_body = convert_adjustments_to_xmp(
+            "Other",
+            &serde_json::json!({"exposure": 1.0, "contrast": 50}),
+        );
+        fs::write(dir.join("photo2.xmp"), xmp_body).unwrap();
+
+        let mut meta = ImageMetadata::default();
+        meta.adjustments = serde_json::json!({"exposure": -0.5, "contrast": 1, "custom": true});
+        let _changed = sync_metadata_from_xmp(&img, &mut meta);
+        let adj = meta.adjustments.as_object().unwrap();
+        // existing non-empty develop must be preserved
+        assert_eq!(adj.get("custom").and_then(|v| v.as_bool()), Some(true));
+        assert!((adj.get("exposure").and_then(|v| v.as_f64()).unwrap() - (-0.5)).abs() < 0.01);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sidecar_develop_export_to_xmp() {
+        let dir = std::env::temp_dir().join(format!("rustroom_sidecar_out_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("out.ARW");
+        fs::write(&img, b"raw").unwrap();
+        // start with minimal xmp
+        let skeleton = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/">
+   <xmp:Rating>0</xmp:Rating>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+        fs::write(dir.join("out.xmp"), skeleton).unwrap();
+
+        let mut meta = ImageMetadata::default();
+        meta.rating = 3;
+        meta.adjustments = serde_json::json!({
+            "exposure": 0.25,
+            "contrast": 15,
+            "dehaze": 10,
+            "vibrance": 5
+        });
+        sync_metadata_to_xmp(&img, &meta, false);
+        let written = fs::read_to_string(dir.join("out.xmp")).unwrap();
+        assert!(written.contains("crs:"), "should contain crs namespace/attrs");
+        assert!(written.contains("Exposure2012") || written.contains("Contrast2012"));
+        assert!(written.contains("HasSettings") || written.contains("exposure") || written.contains("Contrast"));
+        // rating must survive develop merge
+        assert!(
+            written.contains("xmp:Rating") && written.contains('3'),
+            "rating 3 should remain in sidecar after develop merge"
+        );
+        // re-import into empty meta
+        let mut meta2 = ImageMetadata::default();
+        assert!(sync_metadata_from_xmp(&img, &mut meta2));
+        let adj = meta2.adjustments.as_object().unwrap();
+        assert!(adj.contains_key("contrast") || adj.contains_key("exposure") || adj.contains_key("dehaze"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sidecar_create_missing_with_develop() {
+        let dir = std::env::temp_dir().join(format!("rustroom_sidecar_create_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("newfile.ARW");
+        fs::write(&img, b"raw").unwrap();
+        // no xmp yet
+        assert!(!dir.join("newfile.xmp").exists());
+
+        let mut meta = ImageMetadata::default();
+        meta.rating = 2;
+        meta.adjustments = serde_json::json!({"exposure": 0.1, "contrast": 8, "whites": 5});
+        sync_metadata_to_xmp(&img, &meta, true);
+        assert!(dir.join("newfile.xmp").exists());
+        let written = fs::read_to_string(dir.join("newfile.xmp")).unwrap();
+        assert!(written.contains("crs:"));
+        assert!(written.contains("Exposure2012") || written.contains("Contrast2012") || written.contains("Whites2012"));
+
+        let mut meta2 = ImageMetadata::default();
+        assert!(sync_metadata_from_xmp(&img, &mut meta2));
+        let adj = meta2.adjustments.as_object().unwrap();
+        assert!(adj.contains_key("contrast") || adj.contains_key("exposure") || adj.contains_key("whites"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reimport_develop_overwrites_existing() {
+        let dir = std::env::temp_dir().join(format!("rustroom_reimport_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("shot.ARW");
+        fs::write(&img, b"raw").unwrap();
+        let xmp = convert_adjustments_to_xmp(
+            "FromLR",
+            &serde_json::json!({"exposure": 0.8, "contrast": 22, "dehaze": 7}),
+        );
+        fs::write(dir.join("shot.xmp"), xmp).unwrap();
+
+        // Seed RR sidecar with different adjustments
+        // parse_virtual_path uses filename.rrdata next to file - check convention
+        let mut meta = ImageMetadata::default();
+        meta.rating = 4;
+        meta.adjustments = serde_json::json!({"exposure": -1.0, "contrast": 0, "custom": true});
+        // write sidecar where parse_virtual_path expects
+        let (_src, sc) = parse_virtual_path(&img.to_string_lossy());
+        let json = serde_json::to_string_pretty(&meta).unwrap();
+        fs::write(&sc, json).unwrap();
+
+        // Directly exercise reimport logic without AppHandle: call convert + write like command
+        let content = fs::read_to_string(dir.join("shot.xmp")).unwrap();
+        let preset = crate::preset_converter::convert_xmp_to_preset(&content).unwrap();
+        let mut loaded = crate::exif_processing::load_sidecar(&sc);
+        let rating = loaded.rating;
+        loaded.adjustments = preset.adjustments.clone();
+        if rating > 0 {
+            if let Some(obj) = loaded.adjustments.as_object_mut() {
+                obj.insert("rating".to_string(), serde_json::json!(rating));
+            }
+        }
+        fs::write(&sc, serde_json::to_string_pretty(&loaded).unwrap()).unwrap();
+
+        let final_meta = crate::exif_processing::load_sidecar(&sc);
+        assert_eq!(final_meta.rating, 4, "rating preserved");
+        let adj = final_meta.adjustments.as_object().unwrap();
+        assert!(adj.get("custom").is_none() || adj.get("contrast").and_then(|v| v.as_f64()).unwrap_or(0.0) > 1.0);
+        assert!(adj.contains_key("contrast") || adj.contains_key("exposure") || adj.contains_key("dehaze"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reimport_batch_counts_ok_and_fail() {
+        let dir = std::env::temp_dir().join(format!("rustroom_reimport_batch_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let good = dir.join("good.ARW");
+        fs::write(&good, b"raw").unwrap();
+        let xmp = convert_adjustments_to_xmp(
+            "Batch",
+            &serde_json::json!({"exposure": 0.3, "contrast": 11}),
+        );
+        fs::write(dir.join("good.xmp"), xmp).unwrap();
+
+        let bad = dir.join("bad.ARW");
+        fs::write(&bad, b"raw").unwrap();
+
+        let result = reimport_develop_from_xmp_paths(vec![
+            good.to_string_lossy().to_string(),
+            bad.to_string_lossy().to_string(),
+        ])
+        .unwrap();
+        assert_eq!(result["ok"], 1);
+        assert_eq!(result["fail"], 1);
+        let ok_paths = result["okPaths"].as_array().unwrap();
+        assert_eq!(ok_paths.len(), 1);
+        assert!(ok_paths[0].as_str().unwrap().contains("good.ARW"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_xmp_path_finds_sidecar() {
+        let dir = std::env::temp_dir().join(format!("rustroom_resolve_xmp_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("pic.ARW");
+        fs::write(&img, b"raw").unwrap();
+        assert!(resolve_xmp_path(&img).is_none());
+        fs::write(dir.join("pic.xmp"), "<x:xmpmeta/>").unwrap();
+        let found = resolve_xmp_path(&img).expect("xmp");
+        assert!(found.ends_with("pic.xmp"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn imported_develop_marks_edited() {
+        let dir = std::env::temp_dir().join(format!("rustroom_edited_flag_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("editme.ARW");
+        fs::write(&img, b"raw").unwrap();
+        let xmp = convert_adjustments_to_xmp(
+            "EditedLook",
+            &serde_json::json!({"exposure": 0.55, "contrast": 18, "vibrance": 12}),
+        );
+        fs::write(dir.join("editme.xmp"), xmp).unwrap();
+
+        let mut meta = ImageMetadata::default();
+        assert!(sync_metadata_from_xmp(&img, &mut meta));
+        let is_raw = true;
+        let edited = crate::image_processing::is_image_edited(&meta.adjustments, is_raw, None);
+        assert!(edited, "develop from XMP should mark image edited");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn merge_preserves_non_crs_metadata() {
+        let skeleton = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmlns:dc="http://purl.org/dc/elements/1.1/">
+   <xmp:Rating>5</xmp:Rating>
+   <dc:subject>
+    <rdf:Bag>
+     <rdf:li>holiday</rdf:li>
+     <rdf:li>family</rdf:li>
+    </rdf:Bag>
+   </dc:subject>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+        let adj = serde_json::json!({
+            "exposure": 0.2,
+            "contrast": 10,
+            "vibrance": 5
+        });
+        let merged = merge_develop_into_xmp(skeleton, &adj);
+        assert!(merged.contains("<xmp:Rating>5</xmp:Rating>") || merged.contains("xmp:Rating"), "rating preserved");
+        assert!(merged.contains("holiday"), "keyword preserved");
+        assert!(merged.contains("family"), "keyword preserved");
+        assert!(merged.contains("crs:") || merged.contains("Exposure2012") || merged.contains("Contrast2012"));
+        assert!(merged.contains("xmlns:crs") || merged.contains("camera-raw-settings"));
+    }
+
+    #[test]
+    fn export_develop_to_xmp_writes_sidecar() {
+        let dir = std::env::temp_dir().join(format!("rr_export_xmp_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let photo = dir.join("shot.arw");
+        fs::write(&photo, b"fake-arw").unwrap();
+        let mut meta = ImageMetadata::default();
+        meta.rating = 4;
+        meta.adjustments = serde_json::json!({
+            "exposure": 0.75,
+            "contrast": 20
+        });
+        // Explicit export path: always create missing XMP with develop
+        sync_metadata_to_xmp(&photo, &meta, true);
+        let xmp_path = resolve_xmp_path(&photo).expect("xmp should exist");
+        let content = fs::read_to_string(&xmp_path).unwrap();
+        assert!(
+            content.contains("Exposure2012") || content.contains("crs:"),
+            "develop crs in xmp"
+        );
+        assert!(
+            content.contains("Rating") || content.contains("xmp:Rating") || content.contains('4'),
+            "rating written"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn import_dest_xmp_naming_matches_source_style() {
+        let dir = std::env::temp_dir().join(format!("rr_import_xmp_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let src_dir = dir.join("src");
+        let dst_dir = dir.join("dst");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::create_dir_all(&dst_dir).unwrap();
+
+        // Style A: photo.xmp next to photo.ARW
+        let photo_a = src_dir.join("a.ARW");
+        fs::write(&photo_a, b"raw-a").unwrap();
+        fs::write(src_dir.join("a.xmp"), b"<x:xmpmeta>A</x:xmpmeta>").unwrap();
+        assert!(resolve_xmp_path(&photo_a).is_some());
+
+        // Style B: photo.ARW.xmp
+        let photo_b = src_dir.join("b.ARW");
+        fs::write(&photo_b, b"raw-b").unwrap();
+        fs::write(src_dir.join("b.ARW.xmp"), b"<x:xmpmeta>B</x:xmpmeta>").unwrap();
+        assert!(resolve_xmp_path(&photo_b).is_some());
+
+        // Simulate copy naming used in import_files
+        for (photo, tag) in [(&photo_a, "A"), (&photo_b, "B")] {
+            let src_xmp = resolve_xmp_path(photo).expect("xmp resolve");
+            let dest_file = dst_dir.join(photo.file_name().unwrap());
+            fs::copy(photo, &dest_file).unwrap();
+            let dest_xmp = mirror_xmp_dest_path(&dest_file, &src_xmp, photo);
+            fs::copy(&src_xmp, &dest_xmp).unwrap();
+            let body = fs::read_to_string(&dest_xmp).unwrap();
+            assert!(body.contains(tag), "dest xmp should match source content {}", tag);
+            // destination should also resolve via resolve_xmp_path
+            assert!(
+                resolve_xmp_path(&dest_file).is_some(),
+                "dest image should resolve xmp"
+            );
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    
+    #[test]
+    fn dc_description_copyright_xmp_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("rustroom_dc_xmp_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let photo = dir.join("meta.ARW");
+        fs::write(&photo, b"raw").unwrap();
+
+        let mut meta = ImageMetadata::default();
+        let mut exif = std::collections::HashMap::new();
+        exif.insert("ImageDescription".to_string(), "Golden hour skyline".to_string());
+        exif.insert("Artist".to_string(), "Ada Lovelace".to_string());
+        exif.insert("Copyright".to_string(), "© 2024 Ada".to_string());
+        meta.exif = Some(exif);
+        meta.rating = 4;
+
+        sync_metadata_to_xmp(&photo, &meta, true);
+        let xmp_path = dir.join("meta.xmp");
+        assert!(xmp_path.exists(), "xmp created");
+        let written = fs::read_to_string(&xmp_path).unwrap();
+        assert!(written.contains("dc:description"), "description: {}", written);
+        assert!(written.contains("Golden hour skyline"), "desc text");
+        assert!(written.contains("dc:creator"), "creator");
+        assert!(written.contains("Ada Lovelace"), "artist");
+        assert!(written.contains("dc:rights"), "rights");
+        assert!(written.contains("© 2024 Ada") || written.contains("&copy;") || written.contains("2024 Ada"), "copyright text");
+
+        let mut loaded = ImageMetadata::default();
+        let changed = sync_metadata_from_xmp(&photo, &mut loaded);
+        assert!(changed, "should import DC fields");
+        let e = loaded.exif.expect("exif map");
+        assert_eq!(e.get("ImageDescription").map(|s| s.as_str()), Some("Golden hour skyline"));
+        assert_eq!(e.get("Artist").map(|s| s.as_str()), Some("Ada Lovelace"));
+        assert_eq!(e.get("Copyright").map(|s| s.as_str()), Some("© 2024 Ada"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+
+    #[test]
+    fn sidecar_writes_dc_title_separate_from_description() {
+        let dir = std::env::temp_dir().join(format!("rustroom_dc_title_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let photo = dir.join("meta.ARW");
+        fs::write(&photo, b"raw").unwrap();
+
+        let mut meta = ImageMetadata::default();
+        let mut exif = std::collections::HashMap::new();
+        exif.insert("ImageDescription".to_string(), "Caption body".to_string());
+        exif.insert("XPTitle".to_string(), "Short Title".to_string());
+        meta.exif = Some(exif);
+
+        sync_metadata_to_xmp(&photo, &meta, true);
+        let written = fs::read_to_string(dir.join("meta.xmp")).unwrap();
+        assert!(
+            written.contains("dc:description") && written.contains("Caption body"),
+            "description: {}",
+            &written[..written.len().min(600)]
+        );
+        assert!(
+            written.contains("dc:title") && written.contains("Short Title"),
+            "title: {}",
+            &written[..written.len().min(600)]
+        );
+        let desc = extract_dc_alt_text(&written, "description").unwrap_or_default();
+        let title = extract_dc_alt_text(&written, "title").unwrap_or_default();
+        assert_eq!(desc, "Caption body");
+        assert_eq!(title, "Short Title");
+
+        let mut loaded = ImageMetadata::default();
+        let changed = sync_metadata_from_xmp(&photo, &mut loaded);
+        assert!(changed, "should import DC title/description");
+        let e = loaded.exif.expect("exif");
+        assert_eq!(e.get("ImageDescription").map(|s| s.as_str()), Some("Caption body"));
+        assert_eq!(e.get("XPTitle").map(|s| s.as_str()), Some("Short Title"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+
+    #[test]
+    fn sidecar_date_created_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("rustroom_date_xmp_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let photo = dir.join("shot.ARW");
+        fs::write(&photo, b"raw").unwrap();
+
+        let mut meta = ImageMetadata::default();
+        let mut exif = std::collections::HashMap::new();
+        exif.insert(
+            "DateTimeOriginal".to_string(),
+            "2024:06:15 18:30:00".to_string(),
+        );
+        exif.insert("City".to_string(), "Lyon".to_string());
+        meta.exif = Some(exif);
+
+        sync_metadata_to_xmp(&photo, &meta, true);
+        let written = fs::read_to_string(dir.join("shot.xmp")).unwrap();
+        assert!(
+            written.contains("DateCreated")
+                && (written.contains("2024-06-15") || written.contains("2024:06:15")),
+            "DateCreated: {}",
+            &written[..written.len().min(700)]
+        );
+        assert!(
+            written.contains("Lyon")
+                && (written.contains("photoshop:City") || written.contains("<photoshop:City>")),
+            "city: {}",
+            &written[..written.len().min(700)]
+        );
+
+        // Fresh load without exif — should import DateCreated + City
+        let mut loaded = ImageMetadata::default();
+        let changed = sync_metadata_from_xmp(&photo, &mut loaded);
+        assert!(changed, "should import date/city");
+        let e = loaded.exif.expect("exif");
+        let dto = e.get("DateTimeOriginal").map(|s| s.as_str()).unwrap_or("");
+        assert!(
+            dto.contains("2024") && dto.contains("06") && dto.contains("15"),
+            "DateTimeOriginal imported: {}",
+            dto
+        );
+        assert_eq!(e.get("City").map(|s| s.as_str()), Some("Lyon"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+
+    #[test]
+    fn sidecar_credit_source_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("rustroom_credit_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let photo = dir.join("c.ARW");
+        fs::write(&photo, b"raw").unwrap();
+        let mut meta = ImageMetadata::default();
+        let mut exif = std::collections::HashMap::new();
+        exif.insert("Credit".to_string(), "Agency X".to_string());
+        exif.insert("Source".to_string(), "Archive".to_string());
+        meta.exif = Some(exif);
+        sync_metadata_to_xmp(&photo, &meta, true);
+        let written = fs::read_to_string(dir.join("c.xmp")).unwrap();
+        assert!(
+            written.contains("Credit") && written.contains("Agency X"),
+            "credit: {}",
+            &written[..written.len().min(600)]
+        );
+        assert!(
+            written.contains("Source") && written.contains("Archive"),
+            "source: {}",
+            &written[..written.len().min(600)]
+        );
+        let mut loaded = ImageMetadata::default();
+        assert!(sync_metadata_from_xmp(&photo, &mut loaded));
+        let e = loaded.exif.expect("exif");
+        assert_eq!(e.get("Credit").map(|s| s.as_str()), Some("Agency X"));
+        assert_eq!(e.get("Source").map(|s| s.as_str()), Some("Archive"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+
+    #[test]
+    fn sidecar_instructions_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("rustroom_instr_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let photo = dir.join("i.ARW");
+        fs::write(&photo, b"raw").unwrap();
+        let mut meta = ImageMetadata::default();
+        let mut exif = std::collections::HashMap::new();
+        exif.insert("Instructions".to_string(), "Do not crop faces".to_string());
+        meta.exif = Some(exif);
+        sync_metadata_to_xmp(&photo, &meta, true);
+        let written = fs::read_to_string(dir.join("i.xmp")).unwrap();
+        assert!(
+            written.contains("Instructions") && written.contains("Do not crop faces"),
+            "instructions: {}",
+            &written[..written.len().min(600)]
+        );
+        let mut loaded = ImageMetadata::default();
+        assert!(sync_metadata_from_xmp(&photo, &mut loaded));
+        let e = loaded.exif.expect("exif");
+        assert_eq!(
+            e.get("Instructions").map(|s| s.as_str()),
+            Some("Do not crop faces")
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+
+    #[test]
+    fn sidecar_authors_country_code_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("rustroom_apcc_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let photo = dir.join("a.ARW");
+        fs::write(&photo, b"raw").unwrap();
+        let mut meta = ImageMetadata::default();
+        let mut exif = std::collections::HashMap::new();
+        exif.insert("AuthorsPosition".to_string(), "Staff Photographer".to_string());
+        exif.insert("CountryCode".to_string(), "FRA".to_string());
+        meta.exif = Some(exif);
+        sync_metadata_to_xmp(&photo, &meta, true);
+        let written = fs::read_to_string(dir.join("a.xmp")).unwrap();
+        assert!(
+            written.contains("AuthorsPosition") && written.contains("Staff Photographer"),
+            "authors: {}",
+            &written[..written.len().min(600)]
+        );
+        assert!(
+            written.contains("CountryCode") && written.contains("FRA"),
+            "country code: {}",
+            &written[..written.len().min(600)]
+        );
+        let mut loaded = ImageMetadata::default();
+        assert!(sync_metadata_from_xmp(&photo, &mut loaded));
+        let e = loaded.exif.expect("exif");
+        assert_eq!(
+            e.get("AuthorsPosition").map(|s| s.as_str()),
+            Some("Staff Photographer")
+        );
+        assert_eq!(e.get("CountryCode").map(|s| s.as_str()), Some("FRA"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+
+    #[test]
+    fn sidecar_usage_terms_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("rustroom_usage_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let photo = dir.join("u.ARW");
+        fs::write(&photo, b"raw").unwrap();
+        let mut meta = ImageMetadata::default();
+        let mut exif = std::collections::HashMap::new();
+        exif.insert(
+            "UsageTerms".to_string(),
+            "Editorial use only".to_string(),
+        );
+        meta.exif = Some(exif);
+        sync_metadata_to_xmp(&photo, &meta, true);
+        let written = fs::read_to_string(dir.join("u.xmp")).unwrap();
+        assert!(
+            written.contains("UsageTerms") && written.contains("Editorial use only"),
+            "usage: {}",
+            &written[..written.len().min(700)]
+        );
+        let mut loaded = ImageMetadata::default();
+        assert!(sync_metadata_from_xmp(&photo, &mut loaded));
+        let e = loaded.exif.expect("exif");
+        assert_eq!(
+            e.get("UsageTerms").map(|s| s.as_str()),
+            Some("Editorial use only")
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+
+    #[test]
+    fn sidecar_web_statement_copyright_status_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("rustroom_webstmt_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let photo = dir.join("w.ARW");
+        fs::write(&photo, b"raw").unwrap();
+        let mut meta = ImageMetadata::default();
+        let mut exif = std::collections::HashMap::new();
+        exif.insert(
+            "WebStatement".to_string(),
+            "https://example.com/rights".to_string(),
+        );
+        exif.insert("CopyrightStatus".to_string(), "Copyrighted".to_string());
+        meta.exif = Some(exif);
+        sync_metadata_to_xmp(&photo, &meta, true);
+        let written = fs::read_to_string(dir.join("w.xmp")).unwrap();
+        assert!(
+            written.contains("WebStatement") && written.contains("example.com/rights"),
+            "web: {}",
+            &written[..written.len().min(700)]
+        );
+        assert!(
+            written.contains("Marked") && written.contains("True"),
+            "marked: {}",
+            &written[..written.len().min(700)]
+        );
+        let mut loaded = ImageMetadata::default();
+        assert!(sync_metadata_from_xmp(&photo, &mut loaded));
+        let e = loaded.exif.expect("exif");
+        assert_eq!(
+            e.get("WebStatement").map(|s| s.as_str()),
+            Some("https://example.com/rights")
+        );
+        assert_eq!(
+            e.get("CopyrightStatus").map(|s| s.as_str()),
+            Some("Copyrighted")
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+
+    #[test]
+    fn sidecar_intellectual_genre_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("rustroom_genre_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let photo = dir.join("g.ARW");
+        fs::write(&photo, b"raw").unwrap();
+        let mut meta = ImageMetadata::default();
+        let mut exif = std::collections::HashMap::new();
+        exif.insert("IntellectualGenre".to_string(), "Feature".to_string());
+        meta.exif = Some(exif);
+        sync_metadata_to_xmp(&photo, &meta, true);
+        let written = fs::read_to_string(dir.join("g.xmp")).unwrap();
+        assert!(
+            written.contains("IntellectualGenre") && written.contains("Feature"),
+            "genre: {}",
+            &written[..written.len().min(600)]
+        );
+        let mut loaded = ImageMetadata::default();
+        assert!(sync_metadata_from_xmp(&photo, &mut loaded));
+        let e = loaded.exif.expect("exif");
+        assert_eq!(e.get("IntellectualGenre").map(|s| s.as_str()), Some("Feature"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+
+    #[test]
+    fn sidecar_event_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("rustroom_event_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let photo = dir.join("e.ARW");
+        fs::write(&photo, b"raw").unwrap();
+        let mut meta = ImageMetadata::default();
+        let mut exif = std::collections::HashMap::new();
+        exif.insert("Event".to_string(), "Summer Festival 2024".to_string());
+        meta.exif = Some(exif);
+        sync_metadata_to_xmp(&photo, &meta, true);
+        let written = fs::read_to_string(dir.join("e.xmp")).unwrap();
+        assert!(
+            written.contains("Event") && written.contains("Summer Festival 2024"),
+            "event: {}",
+            &written[..written.len().min(700)]
+        );
+        assert!(
+            written.contains("Iptc4xmpExt") || written.contains("xmlns:Iptc4xmpExt"),
+            "ext ns: {}",
+            &written[..written.len().min(400)]
+        );
+        let mut loaded = ImageMetadata::default();
+        assert!(sync_metadata_from_xmp(&photo, &mut loaded));
+        let e = loaded.exif.expect("exif");
+        assert_eq!(
+            e.get("Event").map(|s| s.as_str()),
+            Some("Summer Festival 2024")
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+
+    #[test]
+    fn sidecar_person_in_image_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("rustroom_people_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let photo = dir.join("p.ARW");
+        fs::write(&photo, b"raw").unwrap();
+        let mut meta = ImageMetadata::default();
+        let mut exif = std::collections::HashMap::new();
+        exif.insert(
+            "PersonInImage".to_string(),
+            "Ada Lovelace, Alan Turing".to_string(),
+        );
+        meta.exif = Some(exif);
+        sync_metadata_to_xmp(&photo, &meta, true);
+        let written = fs::read_to_string(dir.join("p.xmp")).unwrap();
+        assert!(
+            written.contains("PersonInImage")
+                && written.contains("Ada Lovelace")
+                && written.contains("Alan Turing"),
+            "people: {}",
+            &written[..written.len().min(800)]
+        );
+        let mut loaded = ImageMetadata::default();
+        assert!(sync_metadata_from_xmp(&photo, &mut loaded));
+        let e = loaded.exif.expect("exif");
+        let people = e.get("PersonInImage").map(|s| s.as_str()).unwrap_or("");
+        assert!(
+            people.contains("Ada Lovelace") && people.contains("Alan Turing"),
+            "imported: {}",
+            people
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+
+    #[test]
+    fn sidecar_scene_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("rustroom_scene_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let photo = dir.join("s.ARW");
+        fs::write(&photo, b"raw").unwrap();
+        let mut meta = ImageMetadata::default();
+        let mut exif = std::collections::HashMap::new();
+        exif.insert("Scene".to_string(), "Landscape, Outdoor".to_string());
+        meta.exif = Some(exif);
+        sync_metadata_to_xmp(&photo, &meta, true);
+        let written = fs::read_to_string(dir.join("s.xmp")).unwrap();
+        assert!(
+            written.contains("Scene")
+                && written.contains("Landscape")
+                && written.contains("Outdoor"),
+            "scene: {}",
+            &written[..written.len().min(700)]
+        );
+        let mut loaded = ImageMetadata::default();
+        assert!(sync_metadata_from_xmp(&photo, &mut loaded));
+        let e = loaded.exif.expect("exif");
+        let scene = e.get("Scene").map(|s| s.as_str()).unwrap_or("");
+        assert!(
+            scene.contains("Landscape") && scene.contains("Outdoor"),
+            "imported: {}",
+            scene
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+
+    #[test]
+    fn sidecar_subject_code_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("rustroom_subj_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let photo = dir.join("c.ARW");
+        fs::write(&photo, b"raw").unwrap();
+        let mut meta = ImageMetadata::default();
+        let mut exif = std::collections::HashMap::new();
+        exif.insert("SubjectCode".to_string(), "15062000, 15005000".to_string());
+        meta.exif = Some(exif);
+        sync_metadata_to_xmp(&photo, &meta, true);
+        let written = fs::read_to_string(dir.join("c.xmp")).unwrap();
+        assert!(
+            written.contains("SubjectCode")
+                && written.contains("15062000")
+                && written.contains("15005000"),
+            "subject: {}",
+            &written[..written.len().min(700)]
+        );
+        let mut loaded = ImageMetadata::default();
+        assert!(sync_metadata_from_xmp(&photo, &mut loaded));
+        let e = loaded.exif.expect("exif");
+        let codes = e.get("SubjectCode").map(|s| s.as_str()).unwrap_or("");
+        assert!(
+            codes.contains("15062000") && codes.contains("15005000"),
+            "imported: {}",
+            codes
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+
+    #[test]
+    fn sidecar_creator_work_url_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("rustroom_curl_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let photo = dir.join("u.ARW");
+        fs::write(&photo, b"raw").unwrap();
+        let mut meta = ImageMetadata::default();
+        let mut exif = std::collections::HashMap::new();
+        exif.insert(
+            "CreatorWorkURL".to_string(),
+            "https://photographer.example".to_string(),
+        );
+        meta.exif = Some(exif);
+        sync_metadata_to_xmp(&photo, &meta, true);
+        let written = fs::read_to_string(dir.join("u.xmp")).unwrap();
+        assert!(
+            written.contains("photographer.example")
+                && (written.contains("CreatorWorkURL") || written.contains("CiUrlWork")),
+            "url: {}",
+            &written[..written.len().min(700)]
+        );
+        let mut loaded = ImageMetadata::default();
+        assert!(sync_metadata_from_xmp(&photo, &mut loaded));
+        let e = loaded.exif.expect("exif");
+        assert_eq!(
+            e.get("CreatorWorkURL").map(|s| s.as_str()),
+            Some("https://photographer.example")
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+
+    #[test]
+    fn sidecar_job_identifier_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("rustroom_job_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let photo = dir.join("j.ARW");
+        fs::write(&photo, b"raw").unwrap();
+        let mut meta = ImageMetadata::default();
+        let mut exif = std::collections::HashMap::new();
+        exif.insert("JobIdentifier".to_string(), "JOB-2024-042".to_string());
+        meta.exif = Some(exif);
+        sync_metadata_to_xmp(&photo, &meta, true);
+        let written = fs::read_to_string(dir.join("j.xmp")).unwrap();
+        assert!(
+            written.contains("JOB-2024-042")
+                && (written.contains("TransmissionReference") || written.contains("JobIdentifier")),
+            "job: {}",
+            &written[..written.len().min(700)]
+        );
+        let mut loaded = ImageMetadata::default();
+        assert!(sync_metadata_from_xmp(&photo, &mut loaded));
+        let e = loaded.exif.expect("exif");
+        let job = e
+            .get("JobIdentifier")
+            .or_else(|| e.get("JobID"))
+            .map(|s| s.as_str())
+            .unwrap_or("");
+        assert_eq!(job, "JOB-2024-042");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+
+    #[test]
+    fn sidecar_digital_source_type_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("rustroom_dst_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let photo = dir.join("d.ARW");
+        fs::write(&photo, b"raw").unwrap();
+        let mut meta = ImageMetadata::default();
+        let mut exif = std::collections::HashMap::new();
+        let uri = "http://cv.iptc.org/newscodes/digitalsourcetype/digitalCapture";
+        exif.insert("DigitalSourceType".to_string(), uri.to_string());
+        meta.exif = Some(exif);
+        sync_metadata_to_xmp(&photo, &meta, true);
+        let written = fs::read_to_string(dir.join("d.xmp")).unwrap();
+        assert!(
+            written.contains("DigitalSourceType") && written.contains("digitalCapture"),
+            "dst: {}",
+            &written[..written.len().min(700)]
+        );
+        let mut loaded = ImageMetadata::default();
+        assert!(sync_metadata_from_xmp(&photo, &mut loaded));
+        let e = loaded.exif.expect("exif");
+        assert_eq!(
+            e.get("DigitalSourceType").map(|s| s.as_str()),
+            Some(uri)
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+
+    #[test]
+    fn sidecar_caption_writer_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("rustroom_cw_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let photo = dir.join("w.ARW");
+        fs::write(&photo, b"raw").unwrap();
+        let mut meta = ImageMetadata::default();
+        let mut exif = std::collections::HashMap::new();
+        exif.insert("CaptionWriter".to_string(), "Editor Bob".to_string());
+        meta.exif = Some(exif);
+        sync_metadata_to_xmp(&photo, &meta, true);
+        let written = fs::read_to_string(dir.join("w.xmp")).unwrap();
+        assert!(
+            written.contains("CaptionWriter") && written.contains("Editor Bob"),
+            "cw: {}",
+            &written[..written.len().min(700)]
+        );
+        let mut loaded = ImageMetadata::default();
+        assert!(sync_metadata_from_xmp(&photo, &mut loaded));
+        let e = loaded.exif.expect("exif");
+        assert_eq!(
+            e.get("CaptionWriter").map(|s| s.as_str()),
+            Some("Editor Bob")
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+
+    #[test]
+    fn sidecar_category_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("rustroom_cat_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let photo = dir.join("c.ARW");
+        fs::write(&photo, b"raw").unwrap();
+        let mut meta = ImageMetadata::default();
+        let mut exif = std::collections::HashMap::new();
+        exif.insert("Category".to_string(), "SPO".to_string());
+        exif.insert(
+            "SupplementalCategories".to_string(),
+            "Football, Night".to_string(),
+        );
+        meta.exif = Some(exif);
+        sync_metadata_to_xmp(&photo, &meta, true);
+        let written = fs::read_to_string(dir.join("c.xmp")).unwrap();
+        assert!(
+            written.contains("Category") && written.contains("SPO"),
+            "cat: {}",
+            &written[..written.len().min(700)]
+        );
+        assert!(
+            written.contains("SupplementalCategories")
+                && written.contains("Football")
+                && written.contains("Night"),
+            "supp: {}",
+            &written[..written.len().min(700)]
+        );
+        let mut loaded = ImageMetadata::default();
+        assert!(sync_metadata_from_xmp(&photo, &mut loaded));
+        let e = loaded.exif.expect("exif");
+        assert_eq!(e.get("Category").map(|s| s.as_str()), Some("SPO"));
+        let supp = e
+            .get("SupplementalCategories")
+            .map(|s| s.as_str())
+            .unwrap_or("");
+        assert!(
+            supp.contains("Football") && supp.contains("Night"),
+            "imported supp: {}",
+            supp
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+
+    #[test]
+    fn sidecar_urgency_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("rustroom_urg_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let photo = dir.join("u.ARW");
+        fs::write(&photo, b"raw").unwrap();
+        let mut meta = ImageMetadata::default();
+        let mut exif = std::collections::HashMap::new();
+        exif.insert("Urgency".to_string(), "1".to_string());
+        meta.exif = Some(exif);
+        sync_metadata_to_xmp(&photo, &meta, true);
+        let written = fs::read_to_string(dir.join("u.xmp")).unwrap();
+        assert!(
+            written.contains("Urgency") && written.contains('1'),
+            "urgency: {}",
+            &written[..written.len().min(600)]
+        );
+        let mut loaded = ImageMetadata::default();
+        assert!(sync_metadata_from_xmp(&photo, &mut loaded));
+        let e = loaded.exif.expect("exif");
+        assert_eq!(e.get("Urgency").map(|s| s.as_str()), Some("1"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+
+    #[test]
+    fn sidecar_creator_contact_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("rustroom_contact_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let photo = dir.join("c.ARW");
+        fs::write(&photo, b"raw").unwrap();
+        let mut meta = ImageMetadata::default();
+        let mut exif = std::collections::HashMap::new();
+        exif.insert("CiEmailWork".to_string(), "photo@example.com".to_string());
+        exif.insert("CiTelWork".to_string(), "+33 1 23 45 67 89".to_string());
+        meta.exif = Some(exif);
+        sync_metadata_to_xmp(&photo, &meta, true);
+        let written = fs::read_to_string(dir.join("c.xmp")).unwrap();
+        assert!(
+            written.contains("CiEmailWork") && written.contains("photo@example.com"),
+            "email: {}",
+            &written[..written.len().min(700)]
+        );
+        assert!(
+            written.contains("CiTelWork") && written.contains("+33"),
+            "phone: {}",
+            &written[..written.len().min(700)]
+        );
+        let mut loaded = ImageMetadata::default();
+        assert!(sync_metadata_from_xmp(&photo, &mut loaded));
+        let e = loaded.exif.expect("exif");
+        assert_eq!(
+            e.get("CiEmailWork").map(|s| s.as_str()),
+            Some("photo@example.com")
+        );
+        assert_eq!(
+            e.get("CiTelWork").map(|s| s.as_str()),
+            Some("+33 1 23 45 67 89")
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+
+    #[test]
+    fn sidecar_creator_address_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("rustroom_addr_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let photo = dir.join("a.ARW");
+        fs::write(&photo, b"raw").unwrap();
+        let mut meta = ImageMetadata::default();
+        let mut exif = std::collections::HashMap::new();
+        exif.insert("CiAdrExtadr".to_string(), "12 Rue de Rivoli".to_string());
+        exif.insert("CiAdrCity".to_string(), "Paris".to_string());
+        exif.insert("CiAdrRegion".to_string(), "IDF".to_string());
+        exif.insert("CiAdrPcode".to_string(), "75001".to_string());
+        exif.insert("CiAdrCtry".to_string(), "France".to_string());
+        meta.exif = Some(exif);
+        sync_metadata_to_xmp(&photo, &meta, true);
+        let written = fs::read_to_string(dir.join("a.xmp")).unwrap();
+        assert!(
+            written.contains("CiAdrCity") && written.contains("Paris"),
+            "addr: {}",
+            &written[..written.len().min(800)]
+        );
+        assert!(
+            written.contains("CiAdrExtadr") && written.contains("Rivoli"),
+            "street: {}",
+            &written[..written.len().min(800)]
+        );
+        let mut loaded = ImageMetadata::default();
+        assert!(sync_metadata_from_xmp(&photo, &mut loaded));
+        let e = loaded.exif.expect("exif");
+        assert_eq!(e.get("CiAdrCity").map(|s| s.as_str()), Some("Paris"));
+        assert_eq!(e.get("CiAdrPcode").map(|s| s.as_str()), Some("75001"));
+        assert_eq!(e.get("CiAdrCtry").map(|s| s.as_str()), Some("France"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+#[test]
+    fn label_and_rating_sync_to_xmp() {
+        use crate::image_processing::ImageMetadata;
+        let dir = std::env::temp_dir().join(format!("rr_label_xmp_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let photo = dir.join("shot.ARW");
+        fs::write(&photo, b"fake").unwrap();
+
+        let mut meta = ImageMetadata::default();
+        meta.rating = 4;
+        meta.tags = Some(vec!["color:red".to_string(), "user:holiday".to_string()]);
+        meta.adjustments = serde_json::json!({ "exposure": 0.1 });
+
+        sync_metadata_to_xmp(&photo, &meta, true);
+        let xmp_path = resolve_xmp_path(&photo).expect("xmp written");
+        let content = fs::read_to_string(&xmp_path).unwrap();
+        assert!(
+            content.contains("xmp:Rating") || content.contains("<xmp:Rating>"),
+            "rating in xmp"
+        );
+        assert!(
+            content.contains("4"),
+            "rating value present"
+        );
+        // Label should be capitalized for LR (Red not red)
+        assert!(
+            content.contains("xmp:Label") && content.contains("Red"),
+            "capitalized label Red: {}",
+            &content[..content.len().min(600)]
+        );
+        assert!(content.contains("holiday"), "keyword preserved");
+
+        // re-import into empty metadata
+        let mut meta2 = ImageMetadata::default();
+        let changed = sync_metadata_from_xmp(&photo, &mut meta2);
+        assert!(changed, "should import rating/label");
+        assert_eq!(meta2.rating, 4);
+        let tags = meta2.tags.unwrap_or_default();
+        assert!(
+            tags.iter().any(|t| t == "color:red"),
+            "label imported lowercase color tag: {:?}",
+            tags
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn extract_xmp_label_reads_attr_and_element() {
+        let attr = r#"<rdf:Description xmp:Label="Blue" xmp:Rating="3" />"#;
+        assert_eq!(extract_xmp_label(attr).as_deref(), Some("Blue"));
+        assert_eq!(extract_xmp_rating(attr), Some(3));
+        let elem = r#"<xmp:Label>Green</xmp:Label><xmp:Rating>5</xmp:Rating>"#;
+        assert_eq!(extract_xmp_label(elem).as_deref(), Some("Green"));
+        assert_eq!(extract_xmp_rating(elem), Some(5));
+    }
+
+    #[test]
+    fn flag_tag_syncs_to_xmp_keywords() {
+        use crate::image_processing::ImageMetadata;
+        let dir = std::env::temp_dir().join(format!("rr_flag_xmp_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let photo = dir.join("flagged.ARW");
+        fs::write(&photo, b"fake").unwrap();
+
+        let mut meta = ImageMetadata::default();
+        meta.tags = Some(vec!["flag:pick".to_string(), "color:blue".to_string()]);
+        sync_metadata_to_xmp(&photo, &meta, true);
+        let content = fs::read_to_string(resolve_xmp_path(&photo).unwrap()).unwrap();
+        assert!(content.contains("flag:pick") || content.contains("pick"), "flag keyword: {}", &content[..content.len().min(800)]);
+        assert!(content.contains("Blue") || content.contains("blue") || content.contains("xmp:Label"), "label present");
+
+        // clear flags
+        meta.tags = Some(vec!["color:blue".to_string()]);
+        sync_metadata_to_xmp(&photo, &meta, true);
+        let content2 = fs::read_to_string(resolve_xmp_path(&photo).unwrap()).unwrap();
+        assert!(!content2.contains("flag:pick"), "flag keyword removed");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn location_fields_sync_to_xmp() {
+        let dir = std::env::temp_dir().join(format!("rustroom_loc_{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let img = dir.join("photo.jpg");
+        fs::write(&img, b"fake").unwrap();
+        let mut meta = ImageMetadata::default();
+        let mut exif = std::collections::HashMap::new();
+        exif.insert("City".to_string(), "Paris".to_string());
+        exif.insert("Country".to_string(), "France".to_string());
+        exif.insert("Location".to_string(), "Louvre".to_string());
+        exif.insert("State".to_string(), "IDF".to_string());
+        exif.insert("Headline".to_string(), "Museum day".to_string());
+        meta.exif = Some(exif);
+        sync_metadata_to_xmp(&img, &meta, true);
+        let xmp = fs::read_to_string(img.with_extension("xmp")).unwrap();
+        assert!(xmp.contains("photoshop:City") || xmp.contains("<photoshop:City>Paris</photoshop:City>"), "city: {}", &xmp[..xmp.len().min(500)]);
+        assert!(xmp.contains("Paris"), "city value");
+        assert!(xmp.contains("France"), "country");
+        assert!(xmp.contains("Louvre"), "location");
+        assert!(xmp.contains("xmlns:photoshop="), "photoshop ns");
+        assert!(xmp.contains("xmlns:Iptc4xmpCore="), "iptc ns");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hierarchical_subject_sync_to_xmp() {
+        let dir = std::env::temp_dir().join(format!("rustroom_hier_{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let img = dir.join("photo.jpg");
+        fs::write(&img, b"fake").unwrap();
+        let mut meta = ImageMetadata::default();
+        meta.tags = Some(vec![
+            "user:travel".to_string(),
+            "user:travel/paris".to_string(),
+            "user:food".to_string(),
+        ]);
+        sync_metadata_to_xmp(&img, &meta, true);
+        let xmp = fs::read_to_string(img.with_extension("xmp")).unwrap();
+        assert!(xmp.contains("dc:subject"), "subject: {}", &xmp[..xmp.len().min(400)]);
+        assert!(xmp.contains("paris") || xmp.contains("travel"), "leaf keywords");
+        assert!(
+            xmp.contains("hierarchicalSubject") && xmp.contains("travel|paris"),
+            "hierarchical: {}",
+            &xmp[..xmp.len().min(800)]
+        );
+        assert!(xmp.contains("xmlns:lr="), "lr ns");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hierarchical_subject_import_from_xmp() {
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmlns:lr="http://ns.adobe.com/lightroom/1.0/">
+   <dc:subject>
+    <rdf:Bag>
+     <rdf:li>paris</rdf:li>
+     <rdf:li>food</rdf:li>
+     <rdf:li>flag:pick</rdf:li>
+    </rdf:Bag>
+   </dc:subject>
+   <lr:hierarchicalSubject>
+    <rdf:Bag>
+     <rdf:li>travel|paris</rdf:li>
+    </rdf:Bag>
+   </lr:hierarchicalSubject>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+        let tags = extract_xmp_tags(xmp);
+        assert!(tags.iter().any(|t| t == "user:paris"), "leaf paris: {:?}", tags);
+        assert!(tags.iter().any(|t| t == "user:food"), "food: {:?}", tags);
+        assert!(tags.iter().any(|t| t == "user:travel"), "parent travel: {:?}", tags);
+        assert!(
+            tags.iter().any(|t| t == "user:travel/paris"),
+            "hier path: {:?}",
+            tags
+        );
+        assert!(tags.iter().any(|t| t == "flag:pick"), "flag preserved: {:?}", tags);
+    }
+
+    #[test]
+    fn relative_adjustments_merge_math() {
+        // Mirrors apply_relative_adjustments_to_paths numeric merge (without AppHandle).
+        let mut map = serde_json::Map::new();
+        map.insert("exposure".to_string(), serde_json::json!(0.5));
+        map.insert("contrast".to_string(), serde_json::json!(10.0));
+        let deltas = serde_json::json!({ "exposure": 0.33, "contrast": -10.0, "shadows": 15.0 });
+        let delta_map = deltas.as_object().unwrap();
+        for (k, v) in delta_map {
+            let delta = v.as_f64().unwrap_or(0.0);
+            let current = map.get(k).and_then(|x| x.as_f64()).unwrap_or(0.0);
+            map.insert(k.clone(), serde_json::json!(current + delta));
+        }
+        assert!((map["exposure"].as_f64().unwrap() - 0.83).abs() < 1e-9);
+        assert!((map["contrast"].as_f64().unwrap() - 0.0).abs() < 1e-9);
+        assert!((map["shadows"].as_f64().unwrap() - 15.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn write_text_file_writes_utf8() {
+        let dir = std::env::temp_dir().join(format!("rr_write_text_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("gallery.html");
+        let body = "<!DOCTYPE html><html><body>ok</body></html>";
+        write_text_file(path.to_string_lossy().to_string(), body.to_string()).unwrap();
+        let read = fs::read_to_string(&path).unwrap();
+        assert_eq!(read, body);
+        // nested create
+        let nested = dir.join("sub").join("page.html");
+        write_text_file(nested.to_string_lossy().to_string(), "hi".to_string()).unwrap();
+        assert_eq!(fs::read_to_string(&nested).unwrap(), "hi");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+
+
+
+
+
+}
+
+/// Test-only access points for `crate::perf_bench`. Not compiled into the app.
+#[cfg(test)]
+pub(crate) mod bench_hooks {
+    use super::*;
+
+    /// Handle-free copy of `list_images_in_dir` (same logic, minus
+    /// `update_rotational_disk_flag` and the iCloud `enqueue_metadata` branch,
+    /// which need an AppHandle and are no-ops for local files).
+    pub(crate) fn list_images_in_dir_no_handle(
+        path: &str,
+        settings: &AppSettings,
+    ) -> std::result::Result<Vec<ImageFile>, String> {
+        let enable_xmp_sync = settings.enable_xmp_sync.unwrap_or(false);
+        let entries = fs::read_dir(path).map_err(|e| e.to_string())?;
+        let mut images = Vec::new();
+        let mut sidecars_by_filename: HashMap<String, Vec<Option<String>>> = HashMap::new();
+
+        for entry in entries.filter_map(std::result::Result::ok) {
+            let entry_path = entry.path();
+            let file_name = entry
+                .file_name()
+                .into_string()
+                .unwrap_or_else(|os| os.to_string_lossy().into_owned());
+
+            if file_name.ends_with(".rrdata") {
+                let base = &file_name[..file_name.len() - 7];
+                let (source_filename, copy_id) =
+                    if base.len() >= 7 && base.as_bytes()[base.len() - 7] == b'.' {
+                        let id = &base[base.len() - 6..];
+                        if id.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')) {
+                            (&base[..base.len() - 7], Some(id.to_string()))
+                        } else {
+                            (base, None)
+                        }
+                    } else {
+                        (base, None)
+                    };
+                sidecars_by_filename
+                    .entry(source_filename.to_string())
+                    .or_default()
+                    .push(copy_id);
+            } else if is_supported_image_file(&file_name) {
+                images.push((file_name, entry_path));
+            }
+        }
+
+        let tasks: Vec<_> = images
+            .into_iter()
+            .map(|(file_name, path_buf)| {
+                let sidecars = sidecars_by_filename
+                    .remove(&file_name)
+                    .unwrap_or_else(|| vec![None]);
+                let path_str = path_buf.to_string_lossy().into_owned();
+                (path_str, file_name, path_buf, sidecars)
+            })
+            .collect();
+
+        let mut result_list: Vec<ImageFile> = tasks
+            .into_par_iter()
+            .flat_map(|(path_str, file_name, path_buf, sidecars)| {
+                let modified = fs::metadata(&path_buf)
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let is_cloud_placeholder = is_cloud_placeholder(&path_buf);
+                let mut file_results = Vec::with_capacity(sidecars.len());
+                for copy_id_opt in sidecars {
+                    let (virtual_path, is_virtual_copy, sidecar_filename) = match copy_id_opt {
+                        Some(id) => (
+                            format!("{}?vc={}", path_str, id),
+                            true,
+                            format!("{}.{}.rrdata", file_name, id),
+                        ),
+                        None => (path_str.clone(), false, format!("{}.rrdata", file_name)),
+                    };
+                    let sidecar_path = path_buf.with_file_name(sidecar_filename);
+                    let _xmp_is_placeholder = enable_xmp_sync
+                        && resolve_xmp_path(&path_buf).is_some_and(|p| super::is_cloud_placeholder(&p));
+                    let _sidecar_placeholder = super::is_cloud_placeholder(&sidecar_path);
+                    let metadata =
+                        resolve_image_metadata(&path_buf, &sidecar_path, enable_xmp_sync, settings);
+                    file_results.push(ImageFile {
+                        path: virtual_path,
+                        modified,
+                        is_edited: metadata.is_edited,
+                        tags: metadata.tags,
+                        exif: None,
+                        is_virtual_copy,
+                        is_raw: metadata.is_raw,
+                        group_id: None,
+                        rating: metadata.rating,
+                        is_cloud_placeholder,
+                    });
+                }
+                file_results
+            })
+            .collect();
+
+        assign_group_ids(&mut result_list, settings);
+        Ok(result_list)
+    }
+
+    pub(crate) fn try_load_embedded_raw_preview(
+        source_path: &Path,
+        target_res: u32,
+    ) -> Option<DynamicImage> {
+        super::try_load_embedded_raw_preview(source_path, target_res)
+    }
+
+    pub(crate) fn encode_thumbnail(image: &DynamicImage, target_width: u32) -> Result<Vec<u8>> {
+        super::encode_thumbnail(image, target_width)
+    }
+
+    pub(crate) fn compute_thumbnail_cache_hash(
+        path_str: &str,
+        adjustments_bytes: &[u8],
+    ) -> Option<String> {
+        super::compute_thumbnail_cache_hash(path_str, adjustments_bytes)
     }
 }

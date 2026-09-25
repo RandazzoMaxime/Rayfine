@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
-import { Image as ImageIcon, Star, SlidersHorizontal } from 'lucide-react';
+import { Image as ImageIcon, Star, SlidersHorizontal, MapPin } from 'lucide-react';
 import clsx from 'clsx';
 import { Grid, useGridCallbackRef } from 'react-window';
 import { useTranslation } from 'react-i18next';
 import { ImageFile, SelectedImage, ThumbnailAspectRatio, GroupingMode } from '../ui/AppProperties';
 import { Color, COLOR_LABELS } from '../../utils/adjustments';
+import { findVirtualCopyStack } from '../../utils/imageGrouping';
 import Text from '../ui/Text';
 import { TextColors, TextVariants, TextWeights } from '../../types/typography';
 import { useProcessStore } from '../../store/useProcessStore';
@@ -29,6 +30,8 @@ interface ItemData {
   onRequestThumbnails?: (paths: string[]) => void;
   onContextMenu?: (event: any, path: string) => void;
   onImageSelect?: (path: string, event: any) => void;
+  onImageDoubleClick?: (path: string) => void;
+  onRate?: (rate: number, paths?: string[]) => void;
   itemHeight: number;
   setRatio: (index: number, ratio: number) => void;
 }
@@ -41,6 +44,8 @@ const FilmstripThumbnail = memo(
     isSelected,
     onContextMenu,
     onImageSelect,
+    onImageDoubleClick,
+    onRate,
     thumbnailAspectRatio,
     itemHeight: _itemHeight,
     index,
@@ -52,6 +57,8 @@ const FilmstripThumbnail = memo(
     isSelected: boolean;
     onContextMenu?: (event: any, path: string) => void;
     onImageSelect?: (path: string, event: any) => void;
+    onImageDoubleClick?: (path: string) => void;
+    onRate?: (rate: number, paths?: string[]) => void;
     thumbnailAspectRatio: ThumbnailAspectRatio;
     itemHeight: number;
     index: number;
@@ -82,14 +89,36 @@ const FilmstripThumbnail = memo(
     const rating = imageRatings?.[path] || 0;
     const colorTag = tags?.find((t: string) => t.startsWith('color:'))?.substring(6);
     const colorLabel = COLOR_LABELS.find((c: Color) => c.name === colorTag);
-    const isVirtualCopy = path.includes('?vc=');
+    const isVirtualCopy = path.includes('?vc=') || !!imageFile.is_virtual_copy;
+    // Badge also on master when stack has copies (best-effort: any sibling ?vc= for same physical)
+    const hasVcStack = (() => {
+      try {
+        const list = useLibraryStore.getState().imageList || [];
+        return findVirtualCopyStack(list, path).length >= 2;
+      } catch {
+        return false;
+      }
+    })();
     const displayEditIcon = useSettingsStore((s) => s.appSettings?.displayEditIcon ?? true);
     const showEditIcon = isEdited && displayEditIcon;
 
     const hasEditIcon = !!showEditIcon;
     const hasColorLabel = !!colorLabel;
     const hasRating = rating > 0;
-    const hasAnyOverlay = hasEditIcon || hasColorLabel || hasRating;
+    const flagTag = tags?.find((t: string) => t.startsWith('flag:'))?.substring(5);
+    const isPick = flagTag === 'pick';
+    const isReject = flagTag === 'reject';
+    const hasFlag = isPick || isReject;
+    const isRaw = !!imageFile?.is_raw;
+    const hasGps = (() => {
+      const e = imageFile?.exif || {};
+      const lat = e.GPSLatitude ?? e.gpsLatitude;
+      const lon = e.GPSLongitude ?? e.gpsLongitude;
+      if (lat == null || lon == null || lat === '' || lon === '') return false;
+      return Number.isFinite(parseFloat(String(lat))) && Number.isFinite(parseFloat(String(lon)));
+    })();
+    const inQuickCollection = useLibraryStore((s) => (s.quickCollectionPaths || []).includes(path));
+    const hasAnyOverlay = hasEditIcon || hasColorLabel || hasRating || hasFlag || inQuickCollection || hasGps;
 
     const cleanPath = path.split('?')[0];
     const filename = cleanPath.split(/[\\/]/).pop() || '';
@@ -153,23 +182,29 @@ const FilmstripThumbnail = memo(
       });
     }, []);
 
+    // Active = bottom edge highlight (classic filmstrip); multi-select = softer ring
     const ringClass = isActive
-      ? 'ring-2 ring-accent shadow-md'
+      ? 'ring-1 ring-white/80 shadow-md'
       : isSelected
-        ? 'ring-2 ring-gray-400'
-        : 'hover:ring-2 hover:ring-hover-color';
+        ? 'ring-1 ring-white/35'
+        : 'hover:ring-1 hover:ring-white/25';
 
-    const imageClasses = `w-full h-full group-hover:scale-[1.02] transition-transform duration-300`;
+    const imageClasses = clsx('w-full h-full group-hover:scale-[1.02] transition-transform duration-300', isReject && 'grayscale');
 
     return (
       <div
         className={clsx(
           'h-full w-full rounded-md overflow-hidden cursor-pointer shrink-0 group relative transition-all duration-150 bg-surface',
           ringClass,
+          isReject && 'opacity-45',
         )}
         onClick={(e: any) => {
           e.stopPropagation();
           onImageSelect?.(path, e);
+        }}
+        onDoubleClick={(e: any) => {
+          e.stopPropagation();
+          onImageDoubleClick?.(path);
         }}
         onContextMenu={(e: any) => onContextMenu?.(e, path)}
         style={{
@@ -177,6 +212,12 @@ const FilmstripThumbnail = memo(
         }}
         data-tooltip={truncatedTitle}
       >
+        {isActive && (
+          <div
+            className="filmstrip-active-edge absolute left-0 right-0 bottom-0 h-[3px] bg-white/90 z-20 pointer-events-none"
+            aria-hidden
+          />
+        )}
         {layers.length > 0 ? (
           <div className="absolute inset-0 w-full h-full">
             {layers.map((layer) => (
@@ -222,11 +263,42 @@ const FilmstripThumbnail = memo(
           )}
         />
 
-        <div className="absolute top-1 right-1 flex items-center justify-end z-10 pointer-events-none">
+        {hasFlag && (
           <div
             className={clsx(
-              'rounded-full h-5 px-1.5 flex items-center justify-center gap-0 shadow-md bg-black/30 pointer-events-auto transition-all duration-200 ease-out origin-top-right',
-              hasAnyOverlay ? 'opacity-100 scale-100' : 'opacity-0 scale-90 pointer-events-none',
+              'absolute top-0.5 left-0.5 z-10 px-1 py-0.5 rounded text-[8px] font-bold uppercase tracking-wide pointer-events-none shadow-md',
+              isPick ? 'bg-emerald-500/90 text-white' : 'bg-red-500/90 text-white',
+            )}
+          >
+            {isPick ? 'P' : 'X'}
+          </div>
+        )}
+        {hasGps && (
+          <div
+            className={clsx(
+              'absolute z-10 w-3.5 h-3.5 rounded-full bg-sky-500/90 text-white flex items-center justify-center pointer-events-none shadow',
+              hasFlag ? 'top-0.5 left-5' : 'top-0.5 left-0.5',
+            )}
+            title="GPS"
+          >
+            <MapPin size={8} className="fill-white" />
+          </div>
+        )}
+        {inQuickCollection && (
+          <div
+            className={clsx(
+              'absolute z-10 w-2.5 h-2.5 rounded-full bg-amber-400 ring-1 ring-black/40 pointer-events-none shadow',
+              hasFlag ? 'top-0.5 left-5' : 'top-0.5 left-0.5',
+            )}
+            title="Quick Collection"
+            aria-label="In Quick Collection"
+          />
+        )}
+        <div className="absolute top-0.5 right-0.5 flex items-center justify-end z-10 pointer-events-none">
+          <div
+            className={clsx(
+              'rounded-full h-4 px-1 flex items-center justify-center gap-0 shadow-md bg-black/35 pointer-events-auto transition-all duration-150 ease-out origin-top-right',
+              hasEditIcon || hasColorLabel ? 'opacity-100 scale-100' : 'opacity-0 scale-90 pointer-events-none',
             )}
           >
             <div
@@ -235,7 +307,7 @@ const FilmstripThumbnail = memo(
                 hasEditIcon ? 'max-w-3 opacity-100 scale-100' : 'max-w-0 opacity-0 scale-75 pointer-events-none',
               )}
             >
-              <SlidersHorizontal size={12} />
+              <SlidersHorizontal size={10} />
             </div>
 
             <div
@@ -246,42 +318,49 @@ const FilmstripThumbnail = memo(
               )}
             >
               <div
-                className="w-3 h-3 rounded-full transition-colors duration-200"
+                className="w-2.5 h-2.5 rounded-full transition-colors duration-200"
                 style={{ backgroundColor: colorLabel ? colorLabel.color : 'transparent' }}
               />
             </div>
 
-            <div
-              className={clsx(
-                'flex items-center gap-0.5 shrink-0 transition-all duration-200 ease-out overflow-hidden',
-                hasRating ? 'max-w-7 opacity-100 scale-100' : 'max-w-0 opacity-0 scale-75 pointer-events-none',
-                hasRating && (hasEditIcon || hasColorLabel) ? 'ml-1.5' : 'ml-0',
-              )}
-            >
-              <Text variant={TextVariants.small} color={TextColors.white}>
-                {rating}
-              </Text>
-              <Star size={12} className="text-white fill-white" />
-            </div>
           </div>
         </div>
 
-        {isVirtualCopy && (
+        {/* Develop filmstrip: no stars / RAW badge (Library shows them) */}
+        {(isVirtualCopy || hasVcStack) && (
           <>
             <div className="absolute bottom-0 right-0 w-1/2 h-1/2 bg-linear-to-tl from-black/30 via-black/0 to-transparent pointer-events-none z-0" />
 
-            <div className="absolute bottom-1 right-1 z-10">
+            <button
+              type="button"
+              className="absolute bottom-1 right-1 z-10 pointer-events-auto"
+              onClick={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                // Cycle master ↔ virtual copies for this physical file
+                const list = useLibraryStore.getState().imageList || [];
+                const stack = findVirtualCopyStack(list, path);
+                if (stack.length < 2) return;
+                const idx = stack.findIndex((img) => img.path === path);
+                const next = stack[(idx < 0 ? 0 : idx + 1) % stack.length];
+                onImageSelect?.(next.path, e);
+              }}
+              data-tooltip={t('ui.filmstrip.tooltips.virtualCopyCycle' as any, {
+                defaultValue: 'Click to cycle virtual copy stack',
+              })}
+            >
               <Text
                 as="div"
                 variant={TextVariants.small}
                 color={TextColors.white}
                 weight={TextWeights.bold}
-                className="shadow-md text-[10px] px-1 py-0.5 rounded-full bg-black/30"
-                data-tooltip={t('ui.filmstrip.tooltips.virtualCopy')}
+                className="shadow-md text-[10px] px-1 py-0.5 rounded-full bg-black/40 hover:bg-black/60"
               >
-                {t('ui.filmstrip.virtualCopyAbbreviation')}
+                {isVirtualCopy
+                  ? t('ui.filmstrip.virtualCopyAbbreviation')
+                  : t('ui.filmstrip.stackAbbreviation' as any, { defaultValue: 'Stack' })}
               </Text>
-            </div>
+            </button>
           </>
         )}
       </div>
@@ -299,6 +378,8 @@ const FilmstripCell = ({
   thumbnailAspectRatio,
   onContextMenu,
   onImageSelect,
+  onImageDoubleClick,
+  onRate,
   itemHeight,
   setRatio,
 }: any) => {
@@ -325,6 +406,8 @@ const FilmstripCell = ({
           isSelected={multiSelectedPaths.includes(imageFile.path)}
           onContextMenu={onContextMenu}
           onImageSelect={onImageSelect}
+          onImageDoubleClick={onImageDoubleClick}
+          onRate={onRate}
           thumbnailAspectRatio={thumbnailAspectRatio}
           itemHeight={itemHeight}
           index={columnIndex}
@@ -597,6 +680,8 @@ interface FilmStripProps {
   onClearSelection?(): void;
   onContextMenu?(event: any, path: string): void;
   onImageSelect?(path: string, event: any): void;
+  onImageDoubleClick?(path: string): void;
+  onRate?(rate: number, paths?: string[]): void;
   onRequestThumbnails?(paths: string[]): void;
   selectedImage?: SelectedImage;
   thumbnailAspectRatio: ThumbnailAspectRatio;
@@ -611,6 +696,8 @@ export default function Filmstrip({
   onClearSelection,
   onContextMenu,
   onImageSelect,
+  onImageDoubleClick,
+  onRate,
   onRequestThumbnails,
   selectedImage,
   thumbnailAspectRatio,
@@ -636,8 +723,12 @@ export default function Filmstrip({
   const groupingMode: GroupingMode = useSettingsStore((s) => s.appSettings?.grouping) ?? 'off';
   const fullImageList = useLibraryStore((s) => s.imageList);
 
+  // Prefer Develop selectedImage; fall back to Library active / multi-select (module filmstrips)
+  const libraryActivePath = useLibraryStore((s) => s.libraryActivePath);
+  const libraryMulti = useLibraryStore((s) => s.multiSelectedPaths);
+
   const filmstripActivePath = useMemo(() => {
-    const path = selectedImage?.path;
+    const path = selectedImage?.path || libraryActivePath || libraryMulti?.[0] || undefined;
     if (!path || groupingMode === 'off') return path;
     if (path.includes('?vc=')) return path;
     if (imageList.some((img) => img.path === path)) return path;
@@ -647,7 +738,7 @@ export default function Filmstrip({
       (img) => img.group_id === selected.group_id && !img.is_virtual_copy,
     );
     return primary?.path ?? path;
-  }, [selectedImage?.path, imageList, fullImageList, groupingMode]);
+  }, [selectedImage?.path, libraryActivePath, libraryMulti, imageList, fullImageList, groupingMode]);
 
   const handleImageSelect = (path: string, event: any) => {
     if (path !== selectedImage?.path) {
@@ -671,6 +762,8 @@ export default function Filmstrip({
             onContextMenu,
             onRequestThumbnails,
             onImageSelect: handleImageSelect,
+            onImageDoubleClick,
+            onRate,
             clickTriggeredScroll,
           }}
         />

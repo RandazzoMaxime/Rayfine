@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { homeDir } from '@tauri-apps/api/path';
@@ -8,8 +8,9 @@ import { useEditorStore } from '../store/useEditorStore';
 import { useUIStore } from '../store/useUIStore';
 import { useProcessStore } from '../store/useProcessStore';
 import { useSettingsStore } from '../store/useSettingsStore';
-import { Invokes, LibraryViewMode, ImageFile } from '../components/ui/AppProperties';
+import { Invokes, LibraryViewMode, ImageFile, Panel } from '../components/ui/AppProperties';
 import { INITIAL_ADJUSTMENTS, normalizeLoadedAdjustments } from '../utils/adjustments';
+import { denormalizeMaskCoordinates } from '../utils/maskUtils';
 import { globalImageCache } from '../utils/ImageLRUCache';
 import { debouncedSave, debouncedSetHistory } from './useEditorActions';
 
@@ -71,8 +72,19 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
 
     debouncedSave.flush();
     debouncedSetHistory.cancel();
+    // Free the editor's GPU textures (hundreds of MB to GBs for large RAWs); recreated on next open.
+    invoke('release_gpu_resources').catch(() => {});
 
     const lastActivePath = selectedImage?.path ?? null;
+
+    // Keep LR "Previous" when leaving Develop to Library
+    if (selectedImage?.path) {
+      const ed = useEditorStore.getState();
+      useEditorStore.getState().setEditor({
+        previousDevelopAdjustments: structuredClone(ed.adjustments),
+        previousDevelopPath: selectedImage.path,
+      });
+    }
 
     setEditor({
       hasRenderedFirstFrame: false,
@@ -85,6 +97,7 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
       activeMaskContainerId: null,
       activeAiPatchContainerId: null,
       isWbPickerActive: false,
+      isPointColorPickerActive: false,
       activeAiSubMaskId: null,
       transformedOriginalUrl: null,
     });
@@ -92,7 +105,7 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
     selectedImagePathRef.current = null;
 
     setLibrary({ libraryActivePath: lastActivePath });
-    setUI({ slideDirection: 1 });
+    setUI({ slideDirection: 1, activeView: 'library' });
 
     setEditor({ adjustments: INITIAL_ADJUSTMENTS });
     resetHistory(INITIAL_ADJUSTMENTS);
@@ -112,6 +125,35 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
       const { setUI } = useUIStore.getState();
 
       if (selectedImage?.path === path) return;
+
+      // LR "Previous": remember develop settings from the photo we are leaving
+      if (selectedImage?.path) {
+        const ed = useEditorStore.getState();
+        const snap = structuredClone(ed.adjustments);
+        useEditorStore.getState().setEditor({
+          previousDevelopAdjustments: snap,
+          previousDevelopPath: selectedImage.path,
+        });
+      }
+
+      // Entering Develop from Library (no prior selection): open Adjustments + left stack.
+      // When already developing and switching photos, keep the current right tool (Crop/Masks/…).
+      if (!selectedImage) {
+        const ui = useUIStore.getState();
+        setUI({
+          activeView: 'develop',
+          activeRightPanel: Panel.Adjustments,
+          renderedRightPanel: Panel.Adjustments,
+          uiVisibility: {
+            ...ui.uiVisibility,
+            developLeft: true,
+            filmstrip: ui.uiVisibility?.filmstrip ?? true,
+            folderTree: ui.uiVisibility?.folderTree ?? true,
+          },
+        });
+        // Classic Develop opens with histogram/waveform visible
+        useEditorStore.getState().setEditor({ isWaveformVisible: true });
+      }
 
       useEditorStore.getState().patchesSentToBackend.clear();
       debouncedSave.flush();
@@ -148,11 +190,15 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
 
       setEditor({
         showOriginal: false,
+        beforeAfterSplit: false,
+        softProofing: false,
+        softProofShowGamutWarning: false,
         activeMaskId: null,
         activeMaskContainerId: null,
         activeAiPatchContainerId: null,
         activeAiSubMaskId: null,
         isWbPickerActive: false,
+        isPointColorPickerActive: false,
         transformedOriginalUrl: null,
       });
 
@@ -190,7 +236,15 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
             if (selectedImagePathRef.current !== path) return;
             isBackendReadyRef.current = true;
             currentResRef.current = 0;
-            setEditor({ originalSize: { width: _result.width, height: _result.height } });
+            setEditor((state) => {
+              const w = _result.width;
+              const h = _result.height;
+              const adj = denormalizeMaskCoordinates(state.adjustments as any, w, h);
+              return {
+                originalSize: { width: w, height: h },
+                adjustments: adj,
+              };
+            });
           })
           .catch((err: any) => {
             if (String(err).includes('cancelled')) return;
@@ -205,6 +259,10 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
             let freshAdjustments: any;
             if (metadata.adjustments && !metadata.adjustments.is_null) {
               freshAdjustments = normalizeLoadedAdjustments(metadata.adjustments);
+              const sz = useEditorStore.getState().originalSize;
+              if (sz?.width && sz?.height) {
+                freshAdjustments = denormalizeMaskCoordinates(freshAdjustments, sz.width, sz.height);
+              }
             } else {
               freshAdjustments = { ...INITIAL_ADJUSTMENTS };
             }
@@ -275,7 +333,7 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
     ) => {
       const { appSettings, handleSettingsChange } = useSettingsStore.getState();
       const { pinnedFolders } = appSettings || { pinnedFolders: [] };
-      const { setLibrary, sortCriteria } = useLibraryStore.getState();
+      const { setLibrary } = useLibraryStore.getState();
       const { setUI } = useUIStore.getState();
       const { setProcess } = useProcessStore.getState();
       const { selectedImage, resetHistory, setEditor } = useEditorStore.getState();
@@ -323,11 +381,46 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
           }
         }
 
+        // Folder history (skip albums / preserveEditor restores / history back-forward)
+        let historyPatch: { folderHistory?: string[]; folderHistoryIndex?: number } = {};
+        if (
+          path &&
+          !preserveEditor &&
+          !String(path).startsWith('Album:') &&
+          !(window as any).__rustroomSkipFolderHistory
+        ) {
+          const { folderHistory, folderHistoryIndex } = useLibraryStore.getState();
+          const hist = Array.isArray(folderHistory) ? [...folderHistory] : [];
+          let idx = typeof folderHistoryIndex === 'number' ? folderHistoryIndex : -1;
+          // Navigating from middle of history: drop forward entries
+          if (idx >= 0 && idx < hist.length - 1) {
+            hist.splice(idx + 1);
+          }
+          // Don't push duplicate consecutive
+          if (hist[hist.length - 1] !== path) {
+            hist.push(path);
+            // cap
+            if (hist.length > 50) hist.splice(0, hist.length - 50);
+          }
+          idx = hist.length - 1;
+          historyPatch = { folderHistory: hist, folderHistoryIndex: idx };
+        }
+
         setLibrary({
           currentFolderPath: path,
           expandedFolders: newExpandedFolders,
+          ...historyPatch,
           ...(preserveEditor ? {} : { imageList: [], multiSelectedPaths: [], libraryActivePath: null }),
         });
+
+        // Track recent folders (LR-style Catalog → recent)
+        if (path && appSettings) {
+          const prev = Array.isArray(appSettings.recentFolders) ? appSettings.recentFolders : [];
+          const next = [path, ...prev.filter((p: string) => p !== path)].slice(0, 12);
+          if (JSON.stringify(next) !== JSON.stringify(prev)) {
+            handleSettingsChange({ ...appSettings, recentFolders: next } as any);
+          }
+        }
 
         if (!preserveEditor && selectedImage) {
           debouncedSave.flush();
@@ -356,34 +449,25 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
         });
         setLibrary({ imageRatings: initialRatings });
 
-        const exifSortKeys = ['date_taken', 'iso', 'shutter_speed', 'aperture', 'focal_length'];
-        const isExifSortActive = exifSortKeys.includes(sortCriteria.key);
-
         if (files.length > 0) {
           const paths = files.map((f: ImageFile) => f.path);
 
-          if (isExifSortActive) {
-            const exifDataMap: Record<string, any> = await invoke(Invokes.ReadExifForPaths, { paths });
-            const finalImageList = files.map((image) => ({
-              ...image,
-              exif: exifDataMap[image.path] || image.exif || null,
-            }));
-            setLibrary({ imageList: finalImageList });
-          } else {
-            setLibrary({ imageList: files });
-            invoke(Invokes.ReadExifForPaths, { paths })
-              .then((exifDataMap: any) => {
-                setLibrary((state) => ({
-                  imageList: state.imageList.map((image) => ({
-                    ...image,
-                    exif: exifDataMap[image.path] || image.exif || null,
-                  })),
-                }));
-              })
-              .catch((err) => {
-                console.error('Failed to read EXIF data in background:', err);
-              });
-          }
+          // Show the grid immediately (thumbnails load progressively); EXIF fills in afterwards
+          // and exif-based sorts (capture date, ISO…) re-sort once it arrives.
+          setLibrary({ imageList: files });
+          invoke(Invokes.ReadExifForPaths, { paths })
+            .then((exifDataMap: any) => {
+              if (useLibraryStore.getState().currentFolderPath !== path) return;
+              setLibrary((state) => ({
+                imageList: state.imageList.map((image) => ({
+                  ...image,
+                  exif: exifDataMap[image.path] || image.exif || null,
+                })),
+              }));
+            })
+            .catch((err) => {
+              console.error('Failed to read EXIF data in background:', err);
+            });
         } else {
           setLibrary({ imageList: files });
         }
@@ -595,6 +679,24 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
       useLibraryStore.getState().setLibrary({ isTreeLoading: false });
     });
   };
+
+
+  // Folder history back/forward (Alt+← / Alt+→)
+  useEffect(() => {
+    const onNav = (e: Event) => {
+      const path = (e as CustomEvent).detail?.path as string | undefined;
+      const fromHistory = !!(e as CustomEvent).detail?.fromHistory;
+      if (!path) return;
+      if (fromHistory) {
+        (window as any).__rustroomSkipFolderHistory = true;
+      }
+      void handleSelectSubfolder(path, false, undefined, false).finally(() => {
+        (window as any).__rustroomSkipFolderHistory = false;
+      });
+    };
+    window.addEventListener('rustroom:navigate-folder', onNav as EventListener);
+    return () => window.removeEventListener('rustroom:navigate-folder', onNav as EventListener);
+  }, [handleSelectSubfolder]);
 
   return {
     handleGoHome,

@@ -253,7 +253,7 @@ export default function AppModals(props: AppModalsProps) {
       />
       <CreateFolderModal
         isOpen={isCreateAlbumModalOpen}
-        onClose={() => setUI({ isCreateAlbumModalOpen: false })}
+        onClose={() => setUI({ isCreateAlbumModalOpen: false, pendingAlbumSeedPaths: null })}
         onSave={(name) => props.handleCreateAlbumItem(name, 'album')}
         title={t('contextMenus.albums.newAlbum')}
         placeholder={t('modals.createAlbum.placeholder')}

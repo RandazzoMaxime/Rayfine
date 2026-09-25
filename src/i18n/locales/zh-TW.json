@@ -15,7 +15,10 @@
       "reset": "重置",
       "shadows": "陰影",
       "toneMapper": "色調映射",
-      "whites": "白色"
+      "whites": "白色",
+      "presence": "Presence",
+      "blackAndWhite": "Black & White",
+      "tone": "色调"
     },
     "color": {
       "ariaSelectColor": "選擇 {{name}} 顏色",
@@ -63,7 +66,16 @@
       "vibrance": "鮮豔度",
       "wbPickerTooltip": "白平衡選取器",
       "wbPickerWgpuDisabled": "白平衡選取器：請在設定中停用 WGPU。",
-      "whiteBalance": "白平衡"
+      "whiteBalance": "白平衡",
+      "bwMix": "黑白混合",
+      "reds": "Reds",
+      "oranges": "Oranges",
+      "yellows": "Yellows",
+      "greens": "Greens",
+      "aquas": "Aquas",
+      "blues": "Blues",
+      "purples": "Purples",
+      "magentas": "Magentas"
     },
     "curves": {
       "channelTitle": "{{channel}} 通道",
@@ -92,7 +104,9 @@
       "resetAllParametric": "重置所有參數曲線",
       "resetAllPoint": "重置所有點曲線",
       "resetParametric": "重置 {{channel}} 參數曲線",
-      "resetPoint": "重置 {{channel}} 點曲線"
+      "resetPoint": "重置 {{channel}} 點曲線",
+      "pointShort": "點",
+      "paramShort": "參數"
     },
     "details": {
       "blueYellow": "藍/黃",
@@ -108,7 +122,14 @@
       "sharpening": "銳化",
       "sharpness": "銳度",
       "structure": "結構",
-      "threshold": "臨界值"
+      "threshold": "臨界值",
+      "luminanceDetail": "細節",
+      "luminanceContrast": "對比",
+      "radius": "半徑",
+      "sharpenDetail": "細節",
+      "masking": "遮罩",
+      "colorDetail": "細節",
+      "colorSmoothness": "平滑"
     },
     "effects": {
       "amount": "數量",
@@ -130,7 +151,52 @@
       "roughness": "粗糙度",
       "roundness": "圓度",
       "size": "大小",
-      "vignette": "暗角"
+      "vignette": "暗角",
+      "vignetteStyleHighlight": "高光優先",
+      "vignetteStyleColor": "色彩優先",
+      "vignetteStylePaint": "繪製疊加",
+      "highlights": "高光",
+      "grainSeed": "Seed",
+      "randomize": "Random"
+    },
+    "lens": {
+      "profile": "Profile Corrections",
+      "enableDistortion": "Remove chromatic aberration / distortion",
+      "enableVignette": "Enable profile vignette",
+      "enableTca": "Enable TCA",
+      "distortion": "Distortion amount",
+      "vignette": "Vignetting amount",
+      "tca": "TCA amount",
+      "defringe": "Defringe",
+      "defringePurple": "Purple Amount",
+      "defringePurpleHueLo": "Purple Hue Lo",
+      "defringePurpleHueHi": "Purple Hue Hi",
+      "defringeGreen": "Green Amount",
+      "defringeGreenHueLo": "Green Hue Lo",
+      "defringeGreenHueHi": "Green Hue Hi",
+      "manualCa": "手動色差",
+      "profileScale": "Profile Amount",
+      "profileDistortionScale": "Distortion Scale",
+      "profileVignetteScale": "Vignetting Scale"
+    },
+    "transform": {
+      "distortion": "Distortion",
+      "vertical": "Vertical",
+      "horizontal": "Horizontal",
+      "rotate": "Rotate",
+      "aspect": "Aspect",
+      "scale": "Scale",
+      "xOffset": "X Offset",
+      "yOffset": "Y Offset",
+      "geometry": "幾何",
+      "aspectScale": "比例與縮放",
+      "upright": "直立",
+      "uprightOff": "關",
+      "uprightAuto": "自動",
+      "uprightLevel": "水平",
+      "uprightVertical": "垂直",
+      "uprightFull": "完整",
+      "constrainToWarp": "Constrain Crop to Warp"
     }
   },
   "contextMenus": {
@@ -200,7 +266,10 @@
       "resetAdjustments": "重置調整",
       "stitchPanorama": "拼接全景圖",
       "tagging": "標籤",
-      "undo": "復原"
+      "undo": "復原",
+      "reimportXmp": "Reload Develop from XMP",
+      "showXmp": "Show XMP sidecar",
+      "exportDevelopXmp": "將 Develop 寫入 XMP"
     },
     "folders": {
       "changeIcon": "更換圖示",
@@ -282,7 +351,12 @@
       "failedMove": "移動檔案失敗：{{err}}",
       "failedMoveError": "移動失敗：{{err}}",
       "failedMoveInvalid": "移動失敗：未找到目標組或目標組無效。",
-      "failedRemoveImages": "移除影像失敗：{{err}}"
+      "failedRemoveImages": "移除影像失敗：{{err}}",
+      "reimportedXmp": "Develop settings reloaded from XMP",
+      "reimportedXmpCount": "Develop reloaded from XMP ({{count}})",
+      "reimportXmpFailed": "XMP reimport failed ({{count}})",
+      "xmpNotFound": "No XMP sidecar found next to the image",
+      "exportedDevelopXmp": "Develop 已寫入 XMP 側車"
     }
   },
   "editor": {
@@ -298,7 +372,9 @@
         "color": "顏色",
         "curves": "曲線",
         "details": "細節",
-        "effects": "效果"
+        "effects": "效果",
+        "optics": "Optics",
+        "geometry": "Transform"
       },
       "title": "調整",
       "tooltips": {
@@ -664,7 +740,10 @@
         "importPresetsTitle": "匯入預設",
         "legacyPreset": "舊版預設",
         "presetFile": "預設檔案",
-        "rapidRawPreset": "RapidRAW 預設"
+        "rapidRawPreset": "RapidRAW 預設",
+        "importFolderTitle": "Import Lightroom Preset Folder",
+        "exportXmpTitle": "Export preset as XMP",
+        "exportXmpFolderTitle": "Choose folder for Lightroom XMP export"
       },
       "menu": {
         "configurePreset": "配置預設",
@@ -677,12 +756,16 @@
         "newPreset": "新建預設",
         "overwrite": "覆蓋",
         "renameFolder": "重新命名資料夾",
-        "sortAll": "全部按字母排序"
+        "sortAll": "全部按字母排序",
+        "exportXmp": "Export as Lightroom XMP"
       },
       "status": {
         "empty": "尚未儲存預設。建立您自己的預設、從檔案匯入或探索社群預設。",
         "getCommunity": "取得社群預設",
-        "loading": "載入預設中..."
+        "loading": "載入預設中...",
+        "exportedXmp": "Exported {{count}} XMP presets",
+        "importedFolder": "Imported Lightroom presets from folder",
+        "importedFiles": "Imported {{count}} preset files"
       },
       "supports": {
         "cropTransform": "裁剪與變換",
@@ -694,7 +777,9 @@
         "explore": "探索社群預設",
         "export": "將所有預設匯出為 .rrpreset 檔案",
         "import": "從 .rrpreset 檔案匯入預設",
-        "saveNew": "儲存為新預設"
+        "saveNew": "儲存為新預設",
+        "importFolder": "Import all .xmp / .lrtemplate presets from a folder",
+        "exportAllXmp": "Export all presets as Lightroom XMP files"
       },
       "types": {
         "folder": "資料夾",
@@ -889,7 +974,8 @@
         "all": "所有型別",
         "nonRawOnly": "僅非 RAW",
         "rawOnly": "僅 RAW"
-      }
+      },
+      "reset": "重設"
     },
     "folders": {
       "addFolder": "新增資料夾",
@@ -916,7 +1002,8 @@
         "collapse": "摺疊",
         "expand": "展開",
         "sortFolders": "對資料夾排序"
-      }
+      },
+      "catalog": "目錄"
     },
     "grid": {
       "columns": {
@@ -1254,7 +1341,17 @@
       "organizeByDate": "按日期組織到子資料夾",
       "sourceFiles": "原始檔",
       "startImport": "開始匯入",
-      "title": "匯入設定"
+      "title": "匯入設定",
+      "buildPreviews": "Build previews during import",
+      "applyPreset": "Apply develop preset on import",
+      "applyPresetNone": "None",
+      "copyAsDng": "Copy as DNG (not yet applied)",
+      "dontImportDuplicates": "Don't import suspected duplicates",
+      "addToCollection": "Add to collection (not yet applied)",
+      "renderPreviews": "Preview quality",
+      "previewMinimal": "Minimal",
+      "previewStandard": "Standard",
+      "preview1to1": "1:1"
     },
     "lensCorrection": {
       "amount": "數量",
@@ -1480,7 +1577,7 @@
       "themeDesc": "更改應用程式的外觀和風格。",
       "title": "通用設定",
       "xmpSync": "XMP 後設資料同步",
-      "xmpSyncDesc": "將評分、顏色標籤和標籤同步到標準 XMP 附屬檔案，以便與其他照片編輯器相容。"
+      "xmpSyncDesc": "Sync ratings, labels, tags, and Develop settings (crs) to standard .xmp sidecars for Lightroom and other editors."
     },
     "keybinds": {
       "actions": {
@@ -1531,7 +1628,15 @@
         "zoom_in": "放大",
         "zoom_in_step": "放大（步進）",
         "zoom_out": "縮小",
-        "zoom_out_step": "縮小（步進）"
+        "zoom_out_step": "縮小（步進）",
+        "go_to_library": "Go to Library",
+        "go_to_develop": "Go to Develop",
+        "reimport_xmp": "Reload Develop from XMP",
+        "export_develop_xmp": "將 Develop 寫入 XMP",
+        "create_snapshot": "Create Develop Snapshot",
+        "flag_pick": "Flag as Pick",
+        "flag_reject": "Flag as Reject",
+        "flag_unflag": "Remove Flag"
       },
       "sections": {
         "editing": "編輯",
@@ -1828,6 +1933,51 @@
         "showClipping": "顯示裁剪警告",
         "vectorscope": "向量示波器"
       }
+    },
+    "moduleBar": {
+      "library": "Library",
+      "develop": "Develop",
+      "map": "Map",
+      "book": "Book",
+      "slideshow": "Slideshow",
+      "print": "Print",
+      "web": "Web",
+      "tooltips": {
+        "library": "Library",
+        "develop": "Develop",
+        "comingSoon": "Coming soon"
+      },
+      "community": "社群"
+    },
+    "developLeft": {
+      "title": "Develop",
+      "navigator": "Navigator",
+      "presets": "Presets",
+      "history": "History",
+      "historyImport": "Import / Original",
+      "historyStep": "Step {{n}}",
+      "noPresets": "No presets yet. Import Lightroom XMP files.",
+      "openPresetsPanel": "Open Presets panel",
+      "hide": "Hide left panel",
+      "show": "Show Navigator / Presets / History",
+      "snapshots": "Snapshots",
+      "snapshotsSoon": "Snapshots coming soon.",
+      "createSnapshot": "Create snapshot",
+      "deleteSnapshot": "Delete snapshot",
+      "noSnapshots": "No snapshots for this image yet.",
+      "snapshotName": "Snapshot {{n}}",
+      "snapshotCreated": "Snapshot “{{name}}” created",
+      "snapshotNeedImage": "Open an image to create a snapshot",
+      "exportXmp": "Export current settings as XMP",
+      "exportXmpDone": "XMP exported",
+      "xmpIn": "XMP in",
+      "xmpOut": "XMP out",
+      "renameSnapshot": "重新命名快照",
+      "renameSnapshotHint": "Double-click to rename",
+      "fit": "適合",
+      "zoomFit": "Fit to window",
+      "zoom100": "Zoom 100%",
+      "presetApplied": "Applied {{name}}"
     }
   }
 }

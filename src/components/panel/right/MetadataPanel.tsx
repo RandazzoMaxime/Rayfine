@@ -198,9 +198,14 @@ function EditableMetadataItem({ label, value, onSave }: EditableMetadataItemProp
 
 const EDITABLE_FIELDS = [
   { key: 'ImageDescription', label: 'title' },
+  { key: 'Headline', label: 'headline' },
   { key: 'Artist', label: 'author' },
   { key: 'Copyright', label: 'copyright' },
   { key: 'UserComment', label: 'comments' },
+  { key: 'City', label: 'city' },
+  { key: 'State', label: 'state' },
+  { key: 'Country', label: 'country' },
+  { key: 'Location', label: 'location' },
 ];
 
 const KEY_CAMERA_SETTINGS_MAP: CameraSettings = {
@@ -382,12 +387,12 @@ export default function MetadataPanel() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="p-4 flex justify-between items-center shrink-0 border-b border-surface">
+      <div className="px-2.5 py-1.5 flex justify-between items-center shrink-0 border-b border-border-color/40">
         <Text variant={TextVariants.title}>{t('editor.metadata.title')}</Text>
       </div>
-      <div className="grow overflow-y-auto p-4 custom-scrollbar">
+      <div className="grow overflow-y-auto px-2.5 py-1.5 custom-scrollbar">
         {selectedImage ? (
-          <div className="flex flex-col gap-6">
+          <div className="flex flex-col gap-2">
             <div>
               <Text variant={TextVariants.heading} className="mb-3">
                 {t('editor.metadata.fileInfo.title')}
@@ -454,7 +459,7 @@ export default function MetadataPanel() {
                     return (
                       <div
                         key={item.key}
-                        className="flex items-center gap-2 bg-surface border border-surface px-3 py-2 rounded-xl cursor-default"
+                        className="flex items-center gap-2 bg-surface border border-surface px-2.5 py-1.5 rounded-xl cursor-default"
                         data-tooltip={item.label}
                       >
                         {Icon && (
@@ -477,7 +482,7 @@ export default function MetadataPanel() {
                 </div>
 
                 <div
-                  className="flex items-center gap-2 bg-surface border border-surface px-3 py-2 rounded-xl cursor-default"
+                  className="flex items-center gap-2 bg-surface border border-surface px-2.5 py-1.5 rounded-xl cursor-default"
                   data-tooltip={lensSetting.label}
                 >
                   {LensIcon && (
@@ -537,7 +542,10 @@ export default function MetadataPanel() {
                           return (
                             <EditableMetadataItem
                               key={field.key}
-                              label={t(`editor.metadata.fields.${field.label}`)}
+                              label={t(`editor.metadata.fields.${field.label}` as any, {
+                                defaultValue:
+                                  field.label.charAt(0).toUpperCase() + field.label.slice(1),
+                              })}
                               value={displayValue}
                               onSave={(newVal) => {
                                 handleUpdateExif(targetPaths, { [field.key]: newVal });
@@ -744,7 +752,7 @@ export default function MetadataPanel() {
                 <Text variant={TextVariants.heading} className="mb-3">
                   {t('editor.metadata.gps.title')}
                 </Text>
-                <div className="bg-surface border border-surface rounded-xl p-3 flex flex-col gap-3">
+                <div className="bg-surface border border-surface rounded-xl p-3 flex flex-col gap-2">
                   <div className="relative rounded-md overflow-hidden shadow-sm">
                     <iframe
                       className="pointer-events-none"

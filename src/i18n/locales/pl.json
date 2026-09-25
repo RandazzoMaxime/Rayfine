@@ -15,7 +15,10 @@
       "reset": "Resetuj",
       "shadows": "Cienie",
       "toneMapper": "Mapowanie tonów",
-      "whites": "Biele"
+      "whites": "Biele",
+      "presence": "Presence",
+      "blackAndWhite": "Black & White",
+      "tone": "Ton"
     },
     "color": {
       "ariaSelectColor": "Wybierz kolor {{name}}",
@@ -63,7 +66,16 @@
       "vibrance": "Jaskrawość",
       "wbPickerTooltip": "Próbnik balansu bieli",
       "wbPickerWgpuDisabled": "Próbnik BB: Wyłącz WGPU w Ustawieniach.",
-      "whiteBalance": "Balans bieli"
+      "whiteBalance": "Balans bieli",
+      "bwMix": "B&W Mix",
+      "reds": "Reds",
+      "oranges": "Oranges",
+      "yellows": "Yellows",
+      "greens": "Greens",
+      "aquas": "Aquas",
+      "blues": "Blues",
+      "purples": "Purples",
+      "magentas": "Magentas"
     },
     "curves": {
       "channelTitle": "Kanał {{channel}}",
@@ -92,7 +104,9 @@
       "resetAllParametric": "Resetuj wszystkie krzywe parametryczne",
       "resetAllPoint": "Resetuj wszystkie krzywe punktowe",
       "resetParametric": "Resetuj krzywą parametryczną ({{channel}})",
-      "resetPoint": "Resetuj krzywą punktową ({{channel}})"
+      "resetPoint": "Resetuj krzywą punktową ({{channel}})",
+      "pointShort": "Point",
+      "paramShort": "Param"
     },
     "details": {
       "blueYellow": "Niebieski/Żółty",
@@ -108,7 +122,14 @@
       "sharpening": "Wyostrzanie",
       "sharpness": "Ostrość",
       "structure": "Struktura",
-      "threshold": "Próg"
+      "threshold": "Próg",
+      "luminanceDetail": "Detail",
+      "luminanceContrast": "Contrast",
+      "radius": "Promień",
+      "sharpenDetail": "Detail",
+      "masking": "Maskowanie",
+      "colorDetail": "Detail",
+      "colorSmoothness": "Gładkość"
     },
     "effects": {
       "amount": "Ilość",
@@ -130,7 +151,52 @@
       "roughness": "Szorstkość",
       "roundness": "Zaokrąglenie",
       "size": "Rozmiar",
-      "vignette": "Winieta"
+      "vignette": "Winieta",
+      "vignetteStyleHighlight": "Światła",
+      "vignetteStyleColor": "Priorytet koloru",
+      "vignetteStylePaint": "Nakładka",
+      "highlights": "Światła",
+      "grainSeed": "Seed",
+      "randomize": "Random"
+    },
+    "lens": {
+      "profile": "Profile Corrections",
+      "enableDistortion": "Remove chromatic aberration / distortion",
+      "enableVignette": "Enable profile vignette",
+      "enableTca": "Enable TCA",
+      "distortion": "Distortion amount",
+      "vignette": "Vignetting amount",
+      "tca": "TCA amount",
+      "defringe": "Defringe",
+      "defringePurple": "Purple Amount",
+      "defringePurpleHueLo": "Purple Hue Lo",
+      "defringePurpleHueHi": "Purple Hue Hi",
+      "defringeGreen": "Green Amount",
+      "defringeGreenHueLo": "Green Hue Lo",
+      "defringeGreenHueHi": "Green Hue Hi",
+      "manualCa": "CA ręczna",
+      "profileScale": "Profile Amount",
+      "profileDistortionScale": "Distortion Scale",
+      "profileVignetteScale": "Vignetting Scale"
+    },
+    "transform": {
+      "distortion": "Distortion",
+      "vertical": "Vertical",
+      "horizontal": "Horizontal",
+      "rotate": "Rotate",
+      "aspect": "Aspect",
+      "scale": "Scale",
+      "xOffset": "X Offset",
+      "yOffset": "Y Offset",
+      "geometry": "Geometria",
+      "aspectScale": "Proporcje i skala",
+      "upright": "Upright",
+      "uprightOff": "Wył.",
+      "uprightAuto": "Auto",
+      "uprightLevel": "Poziom",
+      "uprightVertical": "Pion",
+      "uprightFull": "Pełny",
+      "constrainToWarp": "Constrain Crop to Warp"
     }
   },
   "contextMenus": {
@@ -202,7 +268,10 @@
       "resetAdjustments": "Resetuj ustawienia",
       "stitchPanorama": "Złóż panoramę",
       "tagging": "Tagowanie",
-      "undo": "Cofnij"
+      "undo": "Cofnij",
+      "reimportXmp": "Reload Develop from XMP",
+      "showXmp": "Show XMP sidecar",
+      "exportDevelopXmp": "Zapisz Develop do XMP"
     },
     "folders": {
       "changeIcon": "Zmień ikonę",
@@ -314,7 +383,12 @@
       "failedMove": "Nie udało się przenieść plików: {{err}}",
       "failedMoveError": "Nie udało się przenieść: {{err}}",
       "failedMoveInvalid": "Nie udało się przenieść: Grupa docelowa nie znaleziona lub nieprawidłowa.",
-      "failedRemoveImages": "Nie udało się usunąć obrazów: {{err}}"
+      "failedRemoveImages": "Nie udało się usunąć obrazów: {{err}}",
+      "reimportedXmp": "Develop settings reloaded from XMP",
+      "reimportedXmpCount": "Develop reloaded from XMP ({{count}})",
+      "reimportXmpFailed": "XMP reimport failed ({{count}})",
+      "xmpNotFound": "No XMP sidecar found next to the image",
+      "exportedDevelopXmp": "Develop zapisany do sidecara XMP"
     }
   },
   "editor": {
@@ -330,7 +404,9 @@
         "color": "Kolor",
         "curves": "Krzywe",
         "details": "Detale",
-        "effects": "Efekty"
+        "effects": "Efekty",
+        "optics": "Optics",
+        "geometry": "Transform"
       },
       "title": "Ustawienia",
       "tooltips": {
@@ -708,7 +784,10 @@
         "importPresetsTitle": "Importuj presety",
         "legacyPreset": "Przestarzały preset",
         "presetFile": "Plik presetu",
-        "rapidRawPreset": "Preset RapidRAW"
+        "rapidRawPreset": "Preset RapidRAW",
+        "importFolderTitle": "Import Lightroom Preset Folder",
+        "exportXmpTitle": "Export preset as XMP",
+        "exportXmpFolderTitle": "Choose folder for Lightroom XMP export"
       },
       "menu": {
         "configurePreset": "Konfiguruj preset",
@@ -721,12 +800,16 @@
         "newPreset": "Nowy preset",
         "overwrite": "Nadpisz",
         "renameFolder": "Zmień nazwę folderu",
-        "sortAll": "Sortuj wszystko alfabetycznie"
+        "sortAll": "Sortuj wszystko alfabetycznie",
+        "exportXmp": "Export as Lightroom XMP"
       },
       "status": {
         "empty": "Brak zapisanych presetów. Utwórz własne, zaimportuj z pliku lub odkryj presety społeczności.",
         "getCommunity": "Pobierz presety społeczności",
-        "loading": "Wczytywanie presetów..."
+        "loading": "Wczytywanie presetów...",
+        "exportedXmp": "Exported {{count}} XMP presets",
+        "importedFolder": "Imported Lightroom presets from folder",
+        "importedFiles": "Imported {{count}} preset files"
       },
       "supports": {
         "cropTransform": "Kadrowanie i przekształcanie",
@@ -738,7 +821,9 @@
         "explore": "Odkryj presety społeczności",
         "export": "Eksportuj wszystkie presety do pliku .rrpreset",
         "import": "Importuj presety z pliku .rrpreset",
-        "saveNew": "Zapisz jako nowy preset"
+        "saveNew": "Zapisz jako nowy preset",
+        "importFolder": "Import all .xmp / .lrtemplate presets from a folder",
+        "exportAllXmp": "Export all presets as Lightroom XMP files"
       },
       "types": {
         "folder": "Folder",
@@ -937,7 +1022,8 @@
         "all": "Wszystkie typy",
         "nonRawOnly": "Tylko nie-RAW",
         "rawOnly": "Tylko RAW"
-      }
+      },
+      "reset": "Reset"
     },
     "folders": {
       "addFolder": "Dodaj folder",
@@ -964,7 +1050,8 @@
         "collapse": "Zwiń",
         "expand": "Rozwiń",
         "sortFolders": "Sortuj foldery"
-      }
+      },
+      "catalog": "Katalog"
     },
     "grid": {
       "columns": {
@@ -1310,7 +1397,17 @@
       "organizeByDate": "Organizuj w podfolderach według daty",
       "sourceFiles": "Pliki źródłowe",
       "startImport": "Rozpocznij import",
-      "title": "Ustawienia importu"
+      "title": "Ustawienia importu",
+      "buildPreviews": "Build previews during import",
+      "applyPreset": "Apply develop preset on import",
+      "applyPresetNone": "None",
+      "copyAsDng": "Copy as DNG (not yet applied)",
+      "dontImportDuplicates": "Don't import suspected duplicates",
+      "addToCollection": "Add to collection (not yet applied)",
+      "renderPreviews": "Preview quality",
+      "previewMinimal": "Minimal",
+      "previewStandard": "Standard",
+      "preview1to1": "1:1"
     },
     "lensCorrection": {
       "amount": "Ilość",
@@ -1548,7 +1645,7 @@
       "themeDesc": "Zmień wygląd aplikacji.",
       "title": "Ustawienia ogólne",
       "xmpSync": "Synchronizacja metadanych XMP",
-      "xmpSyncDesc": "Synchronizuj oceny, etykiety kolorów i tagi do standardowych plików XMP w celu zachowania kompatybilności z innymi edytorami zdjęć."
+      "xmpSyncDesc": "Sync ratings, labels, tags, and Develop settings (crs) to standard .xmp sidecars for Lightroom and other editors."
     },
     "keybinds": {
       "actions": {
@@ -1599,7 +1696,15 @@
         "zoom_in": "Przybliż",
         "zoom_in_step": "Przybliż (krokowo)",
         "zoom_out": "Oddal",
-        "zoom_out_step": "Oddal (krokowo)"
+        "zoom_out_step": "Oddal (krokowo)",
+        "go_to_library": "Go to Library",
+        "go_to_develop": "Go to Develop",
+        "reimport_xmp": "Reload Develop from XMP",
+        "export_develop_xmp": "Zapisz Develop do XMP",
+        "create_snapshot": "Create Develop Snapshot",
+        "flag_pick": "Flag as Pick",
+        "flag_reject": "Flag as Reject",
+        "flag_unflag": "Remove Flag"
       },
       "sections": {
         "editing": "Edycja",
@@ -1898,6 +2003,51 @@
         "showClipping": "Pokaż ostrzeżenia przed przycięciem",
         "vectorscope": "Wektroskop"
       }
+    },
+    "moduleBar": {
+      "library": "Library",
+      "develop": "Develop",
+      "map": "Map",
+      "book": "Book",
+      "slideshow": "Slideshow",
+      "print": "Print",
+      "web": "Web",
+      "tooltips": {
+        "library": "Library",
+        "develop": "Develop",
+        "comingSoon": "Coming soon"
+      },
+      "community": "Społeczność"
+    },
+    "developLeft": {
+      "title": "Develop",
+      "navigator": "Navigator",
+      "presets": "Presets",
+      "history": "History",
+      "historyImport": "Import / Original",
+      "historyStep": "Step {{n}}",
+      "noPresets": "No presets yet. Import Lightroom XMP files.",
+      "openPresetsPanel": "Open Presets panel",
+      "hide": "Hide left panel",
+      "show": "Show Navigator / Presets / History",
+      "snapshots": "Snapshots",
+      "snapshotsSoon": "Snapshots coming soon.",
+      "createSnapshot": "Create snapshot",
+      "deleteSnapshot": "Delete snapshot",
+      "noSnapshots": "No snapshots for this image yet.",
+      "snapshotName": "Snapshot {{n}}",
+      "snapshotCreated": "Snapshot “{{name}}” created",
+      "snapshotNeedImage": "Open an image to create a snapshot",
+      "exportXmp": "Export current settings as XMP",
+      "exportXmpDone": "XMP exported",
+      "xmpIn": "XMP in",
+      "xmpOut": "XMP out",
+      "renameSnapshot": "Rename snapshot",
+      "renameSnapshotHint": "Double-click to rename",
+      "fit": "Fit",
+      "zoomFit": "Fit to window",
+      "zoom100": "Zoom 100%",
+      "presetApplied": "Applied {{name}}"
     }
   }
 }

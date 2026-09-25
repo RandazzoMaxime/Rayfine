@@ -1,5 +1,50 @@
 import { create } from 'zustand';
+
+const QC_STORAGE_KEY = 'rustroom.quickCollection.v1';
+
+function loadQuickCollection(): string[] {
+  try {
+    const raw = localStorage.getItem(QC_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((p) => typeof p === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveQuickCollection(paths: string[]) {
+  try {
+    localStorage.setItem(QC_STORAGE_KEY, JSON.stringify(paths.slice(0, 5000)));
+  } catch {
+    /* quota / private mode */
+  }
+}
+
+const TARGET_COLLECTION_KEY = 'rustroom.targetCollection.v1';
+
+function loadTargetCollectionId(): string | null {
+  try {
+    const v = localStorage.getItem(TARGET_COLLECTION_KEY);
+    if (v === null || v === '' || v === 'qc') return null;
+    return v;
+  } catch {
+    return null;
+  }
+}
+
+function saveTargetCollectionId(id: string | null) {
+  try {
+    if (id == null) localStorage.setItem(TARGET_COLLECTION_KEY, 'qc');
+    else localStorage.setItem(TARGET_COLLECTION_KEY, id);
+  } catch {
+    /* ignore */
+  }
+}
+
 import {
+  EditedStatus,
+  FlagStatus,
   FilterCriteria,
   ImageFile,
   RawStatus,
@@ -30,12 +75,56 @@ interface LibraryState {
   expandedAlbumGroups: Set<string>;
 
   // Images & Selection
+  /** Paths from the most recent import batch (LR "Previous Import"). */
+  lastImportedPaths: string[];
+  /** When true, library view is limited to lastImportedPaths. */
+  showPreviousImportOnly: boolean;
+  /** LR-style Quick Collection path set (session-scoped). */
+  quickCollectionPaths: string[];
+  /** When true, library view is limited to quickCollectionPaths. */
+  showQuickCollectionOnly: boolean;
+  /** LR Filters → Selected: show only multi-selected (or active) photos. */
+  showSelectedOnly: boolean;
+  /**
+   * LR Target Collection: null = Quick Collection; otherwise album id.
+   * **B** adds/removes selection to this target.
+   */
+  targetCollectionId: string | null;
   imageList: Array<ImageFile>;
   imageRatings: Record<string, number>;
   multiSelectedPaths: Array<string>;
   selectionAnchorPath: string | null;
   libraryActivePath: string | null;
   libraryActiveAdjustments: Adjustments;
+  /**
+   * LR Library Painter: click thumbnails to spray attributes instead of selecting.
+   * - keyword: value is bare hierarchical path (travel/paris)
+   * - rating: 0–5
+   * - color: label name or null to clear
+   * - flag: 'pick' | 'reject' | null to unflag
+   */
+  libraryPainter: {
+    kind: 'keyword' | 'rating' | 'color' | 'flag';
+    value: string | number | null;
+  } | null;
+  /** @deprecated use libraryPainter; kept as mirror for keyword mode */
+  keywordPaintTag: string | null;
+  /**
+   * LR Copy Metadata clipboard: IPTC/EXIF fields to paste onto other photos.
+   * Keys match RapidRAW exif map (Artist, Copyright, ImageDescription, City, …).
+   */
+  copiedMetadata: Record<string, string> | null;
+  /**
+   * Manual / auto stack ids currently expanded (not collapsed in grid).
+   * Values are effective group keys: "stack:<id>" or RAW/JPEG group_id.
+   */
+  expandedStackIds: string[];
+  /**
+   * LR-style folder navigation history (physical folder paths only).
+   * folderHistoryIndex points at the current entry.
+   */
+  folderHistory: string[];
+  folderHistoryIndex: number;
 
   // Sorting & Filtering
   sortCriteria: SortCriteria;
@@ -67,15 +156,27 @@ export const useLibraryStore = create<LibraryState>((set) => ({
   activeAlbumId: null,
   expandedAlbumGroups: new Set<string>(),
 
+  lastImportedPaths: [],
+  showPreviousImportOnly: false,
+  quickCollectionPaths: typeof window !== 'undefined' ? loadQuickCollection() : [],
+  showQuickCollectionOnly: false,
+  showSelectedOnly: false,
+  targetCollectionId: typeof window !== 'undefined' ? loadTargetCollectionId() : null,
   imageList: [],
   imageRatings: {},
   multiSelectedPaths: [],
   selectionAnchorPath: null,
   libraryActivePath: null,
+  libraryPainter: null,
+  keywordPaintTag: null,
+  copiedMetadata: null,
+  expandedStackIds: [],
+  folderHistory: [],
+  folderHistoryIndex: -1,
   libraryActiveAdjustments: INITIAL_ADJUSTMENTS,
 
   sortCriteria: { key: 'name', order: SortDirection.Ascending },
-  filterCriteria: { colors: [], rating: 0, rawStatus: RawStatus.All },
+  filterCriteria: { colors: [], rating: 0, rawStatus: RawStatus.All, editedStatus: EditedStatus.All, flagStatus: FlagStatus.All },
   searchCriteria: { tags: [], text: '', mode: 'OR' },
 
   isTreeLoading: false,
@@ -83,17 +184,40 @@ export const useLibraryStore = create<LibraryState>((set) => ({
   libraryScrollTop: 0,
   listColumnWidths: {
     thumbnail: 4,
-    name: 20,
-    date: 15,
-    rating: 8,
-    color: 8,
-    shutter: 10,
-    aperture: 10,
-    iso: 10,
-    focal: 15,
+    name: 12,
+    date: 10,
+    rating: 7,
+    flag: 5,
+    edited: 5,
+    fileType: 6,
+    gps: 4,
+    urgency: 4,
+    creator: 10,
+    credit: 8,
+    city: 8,
+    country: 8,
+    state: 7,
+    headline: 10,
+    color: 7,
+    shutter: 8,
+    aperture: 7,
+    iso: 6,
+    focal: 7,
+    camera: 12,
+    lens: 11,
   },
 
-  setLibrary: (updater) => set((state) => (typeof updater === 'function' ? updater(state) : updater)),
+  setLibrary: (updater) =>
+    set((state) => {
+      const patch = typeof updater === 'function' ? updater(state) : updater;
+      if (patch.quickCollectionPaths) {
+        saveQuickCollection(patch.quickCollectionPaths);
+      }
+      if ('targetCollectionId' in patch) {
+        saveTargetCollectionId(patch.targetCollectionId ?? null);
+      }
+      return patch;
+    }),
 
   clearSelection: () => set({ multiSelectedPaths: [], libraryActivePath: null }),
 

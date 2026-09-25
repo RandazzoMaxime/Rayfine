@@ -1016,7 +1016,7 @@ export default function AIPanel() {
       collisionDetection={pointerWithin}
     >
       <div className="flex flex-col h-full select-none overflow-hidden" onContextMenu={handlePanelContextMenu}>
-        <div className="p-4 flex justify-between items-center shrink-0 border-b border-surface">
+        <div className="px-3 py-2 flex justify-between items-center shrink-0 border-b border-border-color/40">
           <Text variant={TextVariants.title}>{t('editor.ai.inpaintingTitle')}</Text>
           <button
             className="p-2 rounded-full hover:bg-surface transition-colors"

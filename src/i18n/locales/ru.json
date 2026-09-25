@@ -15,7 +15,10 @@
       "reset": "Сбросить",
       "shadows": "Тени",
       "toneMapper": "Тональное отображение",
-      "whites": "Светлые тона"
+      "whites": "Светлые тона",
+      "presence": "Presence",
+      "blackAndWhite": "Black & White",
+      "tone": "Тон"
     },
     "color": {
       "ariaSelectColor": "Выбрать цвет: {{name}}",
@@ -63,7 +66,16 @@
       "vibrance": "Красочность",
       "wbPickerTooltip": "Пипетка баланса белого",
       "wbPickerWgpuDisabled": "Пипетка ББ: отключите WGPU в настройках.",
-      "whiteBalance": "Баланс белого"
+      "whiteBalance": "Баланс белого",
+      "bwMix": "B&W Mix",
+      "reds": "Reds",
+      "oranges": "Oranges",
+      "yellows": "Yellows",
+      "greens": "Greens",
+      "aquas": "Aquas",
+      "blues": "Blues",
+      "purples": "Purples",
+      "magentas": "Magentas"
     },
     "curves": {
       "channelTitle": "Канал {{channel}}",
@@ -92,7 +104,9 @@
       "resetAllParametric": "Сбросить все параметрические кривые",
       "resetAllPoint": "Сбросить все точечные кривые",
       "resetParametric": "Сбросить параметрическую кривую {{channel}}",
-      "resetPoint": "Сбросить точечную кривую {{channel}}"
+      "resetPoint": "Сбросить точечную кривую {{channel}}",
+      "pointShort": "Точки",
+      "paramShort": "Парам."
     },
     "details": {
       "blueYellow": "Синий/Желтый",
@@ -108,7 +122,14 @@
       "sharpening": "Резкость",
       "sharpness": "Резкость",
       "structure": "Структура",
-      "threshold": "Порог"
+      "threshold": "Порог",
+      "luminanceDetail": "Детализация",
+      "luminanceContrast": "Контраст",
+      "radius": "Радиус",
+      "sharpenDetail": "Детализация",
+      "masking": "Маскирование",
+      "colorDetail": "Детализация",
+      "colorSmoothness": "Сглаживание"
     },
     "effects": {
       "amount": "Величина",
@@ -130,7 +151,52 @@
       "roughness": "Шероховатость",
       "roundness": "Округлость",
       "size": "Размер",
-      "vignette": "Виньетирование"
+      "vignette": "Виньетирование",
+      "vignetteStyleHighlight": "Света",
+      "vignetteStyleColor": "Цвет",
+      "vignetteStylePaint": "Наложение",
+      "highlights": "Света",
+      "grainSeed": "Зерно",
+      "randomize": "Случайно"
+    },
+    "lens": {
+      "profile": "Profile Corrections",
+      "enableDistortion": "Remove chromatic aberration / distortion",
+      "enableVignette": "Enable profile vignette",
+      "enableTca": "Enable TCA",
+      "distortion": "Distortion amount",
+      "vignette": "Vignetting amount",
+      "tca": "TCA amount",
+      "defringe": "Defringe",
+      "defringePurple": "Purple Amount",
+      "defringePurpleHueLo": "Purple Hue Lo",
+      "defringePurpleHueHi": "Purple Hue Hi",
+      "defringeGreen": "Green Amount",
+      "defringeGreenHueLo": "Green Hue Lo",
+      "defringeGreenHueHi": "Green Hue Hi",
+      "manualCa": "Ручная ХА",
+      "profileScale": "Profile Amount",
+      "profileDistortionScale": "Distortion Scale",
+      "profileVignetteScale": "Vignetting Scale"
+    },
+    "transform": {
+      "distortion": "Distortion",
+      "vertical": "Vertical",
+      "horizontal": "Horizontal",
+      "rotate": "Rotate",
+      "aspect": "Aspect",
+      "scale": "Scale",
+      "xOffset": "X Offset",
+      "yOffset": "Y Offset",
+      "geometry": "Геометрия",
+      "aspectScale": "Кадр и масштаб",
+      "upright": "Upright",
+      "uprightOff": "Выкл.",
+      "uprightAuto": "Авто",
+      "uprightLevel": "Уровень",
+      "uprightVertical": "Вертикаль",
+      "uprightFull": "Полный",
+      "constrainToWarp": "Constrain Crop to Warp"
     }
   },
   "contextMenus": {
@@ -202,7 +268,10 @@
       "resetAdjustments": "Сбросить настройки",
       "stitchPanorama": "Сшить панораму",
       "tagging": "Теги",
-      "undo": "Отменить"
+      "undo": "Отменить",
+      "reimportXmp": "Reload Develop from XMP",
+      "showXmp": "Show XMP sidecar",
+      "exportDevelopXmp": "Записать Develop в XMP"
     },
     "folders": {
       "changeIcon": "Изменить значок",
@@ -314,7 +383,12 @@
       "failedMove": "Не удалось переместить файлы: {{err}}",
       "failedMoveError": "Не удалось переместить: {{err}}",
       "failedMoveInvalid": "Не удалось переместить: целевая группа не найдена или недействительна.",
-      "failedRemoveImages": "Не удалось удалить изображения: {{err}}"
+      "failedRemoveImages": "Не удалось удалить изображения: {{err}}",
+      "reimportedXmp": "Develop settings reloaded from XMP",
+      "reimportedXmpCount": "Develop reloaded from XMP ({{count}})",
+      "reimportXmpFailed": "XMP reimport failed ({{count}})",
+      "xmpNotFound": "No XMP sidecar found next to the image",
+      "exportedDevelopXmp": "Develop записан в XMP sidecar"
     }
   },
   "editor": {
@@ -330,7 +404,9 @@
         "color": "Цвет",
         "curves": "Кривые",
         "details": "Детали",
-        "effects": "Эффекты"
+        "effects": "Эффекты",
+        "optics": "Optics",
+        "geometry": "Transform"
       },
       "title": "Настройки",
       "tooltips": {
@@ -708,7 +784,10 @@
         "importPresetsTitle": "Импортировать пресеты",
         "legacyPreset": "Старый пресет",
         "presetFile": "Файл пресета",
-        "rapidRawPreset": "Пресет RapidRAW"
+        "rapidRawPreset": "Пресет RapidRAW",
+        "importFolderTitle": "Import Lightroom Preset Folder",
+        "exportXmpTitle": "Export preset as XMP",
+        "exportXmpFolderTitle": "Choose folder for Lightroom XMP export"
       },
       "menu": {
         "configurePreset": "Настроить пресет",
@@ -721,12 +800,16 @@
         "newPreset": "Новый пресет",
         "overwrite": "Перезаписать",
         "renameFolder": "Переименовать папку",
-        "sortAll": "Сортировать всё по алфавиту"
+        "sortAll": "Сортировать всё по алфавиту",
+        "exportXmp": "Export as Lightroom XMP"
       },
       "status": {
         "empty": "Пока нет сохраненных пресетов. Создайте свои, импортируйте из файла или изучите пресеты сообщества.",
         "getCommunity": "Загрузить пресеты сообщества",
-        "loading": "Загрузка пресетов..."
+        "loading": "Загрузка пресетов...",
+        "exportedXmp": "Exported {{count}} XMP presets",
+        "importedFolder": "Imported Lightroom presets from folder",
+        "importedFiles": "Imported {{count}} preset files"
       },
       "supports": {
         "cropTransform": "Кадрирование и трансформация",
@@ -738,7 +821,9 @@
         "explore": "Обзор пресетов сообщества",
         "export": "Экспортировать все пресеты в файл .rrpreset",
         "import": "Импортировать пресеты из файла .rrpreset",
-        "saveNew": "Сохранить как новый пресет"
+        "saveNew": "Сохранить как новый пресет",
+        "importFolder": "Import all .xmp / .lrtemplate presets from a folder",
+        "exportAllXmp": "Export all presets as Lightroom XMP files"
       },
       "types": {
         "folder": "Папка",
@@ -937,7 +1022,8 @@
         "all": "Все типы файлов",
         "nonRawOnly": "Только не-RAW",
         "rawOnly": "Только RAW"
-      }
+      },
+      "reset": "Сброс"
     },
     "folders": {
       "addFolder": "Добавить папку",
@@ -964,7 +1050,8 @@
         "collapse": "Свернуть",
         "expand": "Развернуть",
         "sortFolders": "Сортировать папки"
-      }
+      },
+      "catalog": "Каталог"
     },
     "grid": {
       "columns": {
@@ -1310,7 +1397,17 @@
       "organizeByDate": "Распределять по подпапкам на основе даты",
       "sourceFiles": "Исходные файлы",
       "startImport": "Начать импорт",
-      "title": "Параметры импорта"
+      "title": "Параметры импорта",
+      "buildPreviews": "Build previews during import",
+      "applyPreset": "Apply develop preset on import",
+      "applyPresetNone": "None",
+      "copyAsDng": "Copy as DNG (not yet applied)",
+      "dontImportDuplicates": "Don't import suspected duplicates",
+      "addToCollection": "Add to collection (not yet applied)",
+      "renderPreviews": "Preview quality",
+      "previewMinimal": "Minimal",
+      "previewStandard": "Standard",
+      "preview1to1": "1:1"
     },
     "lensCorrection": {
       "amount": "Интенсивность",
@@ -1548,7 +1645,7 @@
       "themeDesc": "Изменить внешний вид интерфейса приложения.",
       "title": "Общие настройки",
       "xmpSync": "Синхронизация метаданных XMP",
-      "xmpSyncDesc": "Записывать рейтинги, цветовые метки и теги в стандартные файлы сопутствующих данных XMP для совместимости с другими фоторедакторами."
+      "xmpSyncDesc": "Sync ratings, labels, tags, and Develop settings (crs) to standard .xmp sidecars for Lightroom and other editors."
     },
     "keybinds": {
       "actions": {
@@ -1599,7 +1696,15 @@
         "zoom_in": "Приблизить",
         "zoom_in_step": "Приблизить по шагам",
         "zoom_out": "Отдалить",
-        "zoom_out_step": "Отдалить по шагам"
+        "zoom_out_step": "Отдалить по шагам",
+        "go_to_library": "Go to Library",
+        "go_to_develop": "Go to Develop",
+        "reimport_xmp": "Reload Develop from XMP",
+        "export_develop_xmp": "Записать Develop в XMP",
+        "create_snapshot": "Создать снимок Develop",
+        "flag_pick": "Отметить как выбранное",
+        "flag_reject": "Отметить как отклонённое",
+        "flag_unflag": "Снять флаг"
       },
       "sections": {
         "editing": "Редактирование",
@@ -1898,6 +2003,51 @@
         "showClipping": "Показать предупреждения о переэкспозиции",
         "vectorscope": "Вектороскоп"
       }
+    },
+    "moduleBar": {
+      "library": "Library",
+      "develop": "Develop",
+      "map": "Map",
+      "book": "Book",
+      "slideshow": "Slideshow",
+      "print": "Print",
+      "web": "Web",
+      "tooltips": {
+        "library": "Library",
+        "develop": "Develop",
+        "comingSoon": "Coming soon"
+      },
+      "community": "Сообщество"
+    },
+    "developLeft": {
+      "title": "Develop",
+      "navigator": "Navigator",
+      "presets": "Presets",
+      "history": "History",
+      "historyImport": "Import / Original",
+      "historyStep": "Step {{n}}",
+      "noPresets": "No presets yet. Import Lightroom XMP files.",
+      "openPresetsPanel": "Open Presets panel",
+      "hide": "Hide left panel",
+      "show": "Show Navigator / Presets / History",
+      "snapshots": "Snapshots",
+      "snapshotsSoon": "Snapshots coming soon.",
+      "createSnapshot": "Create snapshot",
+      "deleteSnapshot": "Delete snapshot",
+      "noSnapshots": "No snapshots for this image yet.",
+      "snapshotName": "Snapshot {{n}}",
+      "snapshotCreated": "Snapshot “{{name}}” created",
+      "snapshotNeedImage": "Open an image to create a snapshot",
+      "exportXmp": "Export current settings as XMP",
+      "exportXmpDone": "XMP exported",
+      "xmpIn": "XMP in",
+      "xmpOut": "XMP out",
+      "renameSnapshot": "Переименовать снимок",
+      "renameSnapshotHint": "Double-click to rename",
+      "fit": "Вписать",
+      "zoomFit": "Fit to window",
+      "zoom100": "Zoom 100%",
+      "presetApplied": "Применено: {{name}}"
     }
   }
 }

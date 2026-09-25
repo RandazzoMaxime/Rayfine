@@ -57,6 +57,9 @@ pub struct ImageMetadata {
     pub tags: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exif: Option<std::collections::HashMap<String, String>>,
+    /// Develop snapshots (named adjustment states), optional for backward compat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshots: Option<Value>,
 }
 
 impl Default for ImageMetadata {
@@ -67,6 +70,7 @@ impl Default for ImageMetadata {
             adjustments: Value::Null,
             tags: None,
             exif: None,
+            snapshots: None,
         }
     }
 }
@@ -3427,4 +3431,38 @@ pub fn calculate_auto_adjustments(
     let results = perform_auto_analysis(&original_image);
 
     Ok(auto_results_to_json(&results))
+}
+
+
+#[cfg(test)]
+mod metadata_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn snapshots_roundtrip_in_metadata() {
+        let meta = ImageMetadata {
+            version: 1,
+            rating: 3,
+            adjustments: json!({"exposure": 0.5}),
+            tags: None,
+            exif: None,
+            snapshots: Some(json!([
+                {"id": "a", "name": "Snap 1", "createdAt": 1, "adjustments": {"exposure": 1.0}}
+            ])),
+        };
+        let s = serde_json::to_string(&meta).unwrap();
+        let back: ImageMetadata = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.rating, 3);
+        assert!(back.snapshots.is_some());
+        let arr = back.snapshots.unwrap();
+        assert_eq!(arr.as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn metadata_without_snapshots_still_deserializes() {
+        let s = r#"{"version":1,"rating":0,"adjustments":null}"#;
+        let back: ImageMetadata = serde_json::from_str(s).unwrap();
+        assert!(back.snapshots.is_none());
+    }
 }

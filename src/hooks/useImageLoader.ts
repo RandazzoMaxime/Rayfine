@@ -6,6 +6,7 @@ import { useLibraryStore } from '../store/useLibraryStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { Invokes } from '../components/ui/AppProperties';
 import { INITIAL_ADJUSTMENTS, normalizeLoadedAdjustments } from '../utils/adjustments';
+import { denormalizeMaskCoordinates } from '../utils/maskUtils';
 
 export function useImageLoader(cachedEditStateRef: React.RefObject<any>) {
   const selectedImage = useEditorStore((s) => s.selectedImage);
@@ -57,7 +58,10 @@ export function useImageLoader(cachedEditStateRef: React.RefObject<any>) {
           if (!isEffectActive) return;
 
           const { width, height } = loadImageResult;
-          setEditor({ originalSize: { width, height } });
+          setEditor((state) => ({
+            originalSize: { width, height },
+            adjustments: denormalizeMaskCoordinates(state.adjustments as any, width, height),
+          }));
 
           if (appSettings?.editorPreviewResolution) {
             const maxSize = appSettings.editorPreviewResolution;

@@ -11,6 +11,7 @@ import {
   useSensors,
 } from '@dnd-kit/core';
 import { useTranslation } from 'react-i18next';
+import { toast } from 'react-toastify';
 import { PresetListType, usePresets, UserPreset } from '../../../hooks/usePresets';
 import { useContextMenu } from '../../../context/ContextMenuContext';
 import {
@@ -488,8 +489,12 @@ export default function PresetsPanel({ onNavigateToCommunity }: PresetsPanelProp
     deleteItem,
     duplicatePreset,
     exportPresetsToFile,
+    exportPresetToXmp,
+    exportPresetsToXmpDirectory,
     importPresetsFromFile,
     importLegacyPresetsFromFile,
+    importLegacyPresetsFromPaths,
+    importLegacyPresetsFromDirectory,
     isLoading,
     movePreset,
     overwritePreset,
@@ -959,31 +964,64 @@ export default function PresetsPanel({ onNavigateToCommunity }: PresetsPanelProp
 
   const handleImportPresets = async () => {
     try {
-      const selectedPath = await openDialog({
+      const selected = await openDialog({
         filters: [
           { name: t('editor.presets.dialog.allPresetFiles'), extensions: ['rrpreset', 'xmp', 'lrtemplate'] },
           { name: t('editor.presets.dialog.rapidRawPreset'), extensions: ['rrpreset'] },
           { name: t('editor.presets.dialog.legacyPreset'), extensions: ['xmp', 'lrtemplate'] },
         ],
-        multiple: false,
+        multiple: true,
         title: t('editor.presets.dialog.importPresetsTitle'),
       });
 
-      if (typeof selectedPath === 'string') {
-        const isLegacy =
-          selectedPath.toLowerCase().endsWith('.xmp') || selectedPath.toLowerCase().endsWith('.lrtemplate');
+      if (!selected) return;
 
-        if (isLegacy) {
-          await importLegacyPresetsFromFile(selectedPath);
-        } else {
-          await importPresetsFromFile(selectedPath);
-        }
+      const paths = Array.isArray(selected) ? selected : [selected];
+      const legacyPaths = paths.filter(
+        (p) => p.toLowerCase().endsWith('.xmp') || p.toLowerCase().endsWith('.lrtemplate'),
+      );
+      const rrPaths = paths.filter((p) => p.toLowerCase().endsWith('.rrpreset'));
 
+      if (legacyPaths.length === 1) {
+        await importLegacyPresetsFromFile(legacyPaths[0]);
+      } else if (legacyPaths.length > 1) {
+        await importLegacyPresetsFromPaths(legacyPaths);
+      }
+
+      for (const rr of rrPaths) {
+        await importPresetsFromFile(rr);
+      }
+
+      if (legacyPaths.length || rrPaths.length) {
         setFolderPreviewsGenerated(new Set<string>());
         setPreviews({});
+        toast.success(
+          t('editor.presets.status.importedFiles', {
+            count: legacyPaths.length + rrPaths.length,
+          }),
+        );
       }
     } catch (error) {
       console.error('Failed to import presets:', error);
+      toast.error(String(error));
+    }
+  };
+
+  const handleImportPresetsFromFolder = async () => {
+    try {
+      const selectedDir = await openDialog({
+        directory: true,
+        multiple: false,
+        title: t('editor.presets.dialog.importFolderTitle'),
+      });
+      if (typeof selectedDir !== 'string') return;
+      await importLegacyPresetsFromDirectory(selectedDir);
+      setFolderPreviewsGenerated(new Set<string>());
+      setPreviews({});
+      toast.success(t('editor.presets.status.importedFolder'));
+    } catch (error) {
+      console.error('Failed to import presets from folder:', error);
+      toast.error(String(error));
     }
   };
 
@@ -1009,6 +1047,31 @@ export default function PresetsPanel({ onNavigateToCommunity }: PresetsPanelProp
     }
   };
 
+  const handleExportXmp = async (item: UserPreset) => {
+    const preset = item.preset;
+    if (!preset) return;
+    // Parent folder name → crs:Group (LR preset folder)
+    let group: string | null = null;
+    for (const root of presets) {
+      if (root.folder?.children?.some((c: any) => c.id === preset.id)) {
+        group = root.folder.name || null;
+        break;
+      }
+    }
+    try {
+      const filePath = await saveDialog({
+        defaultPath: `${preset.name}.xmp`.replace(/[<>:"/\\|?*]/g, '_'),
+        filters: [{ name: t('editor.presets.dialog.legacyPreset'), extensions: ['xmp'] }],
+        title: t('editor.presets.dialog.exportXmpTitle'),
+      });
+      if (filePath) {
+        await exportPresetToXmp(preset.name, preset.adjustments, filePath, group);
+      }
+    } catch (error) {
+      console.error('Failed to export preset as XMP:', error);
+    }
+  };
+
   const handleExportAllPresets = async () => {
     if (presets.length === 0) {
       return;
@@ -1025,6 +1088,25 @@ export default function PresetsPanel({ onNavigateToCommunity }: PresetsPanelProp
       }
     } catch (error) {
       console.error('Failed to export all presets:', error);
+    }
+  };
+
+  const handleExportAllAsXmp = async () => {
+    if (presets.length === 0) {
+      return;
+    }
+    try {
+      const directory = await openDialog({
+        directory: true,
+        multiple: false,
+        title: t('editor.presets.dialog.exportXmpFolderTitle'),
+      });
+      if (typeof directory !== 'string') return;
+      const count = await exportPresetsToXmpDirectory(presets, directory);
+      // soft feedback via console; toast if available
+      toast.success(t('editor.presets.status.exportedXmp', { count }));
+    } catch (error) {
+      console.error('Failed to export presets as XMP folder:', error);
     }
   };
 
@@ -1089,6 +1171,11 @@ export default function PresetsPanel({ onNavigateToCommunity }: PresetsPanelProp
           label: t('editor.presets.menu.exportPreset'),
           onClick: () => handleExport(item),
         },
+        {
+          icon: FileDown,
+          label: t('editor.presets.menu.exportXmp'),
+          onClick: () => handleExportXmp(item),
+        },
         { type: OPTION_SEPARATOR },
         {
           icon: Trash2,
@@ -1135,7 +1222,7 @@ export default function PresetsPanel({ onNavigateToCommunity }: PresetsPanelProp
   return (
     <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
       <div className="flex flex-col h-full">
-        <div className="p-4 flex justify-between items-center shrink-0 border-b border-surface">
+        <div className="px-2.5 py-1.5 flex justify-between items-center shrink-0 border-b border-border-color/40">
           <Text variant={TextVariants.title}>{t('editor.presets.title')}</Text>
           <div className="flex items-center gap-1">
             <button
@@ -1155,11 +1242,27 @@ export default function PresetsPanel({ onNavigateToCommunity }: PresetsPanelProp
             </button>
             <button
               className="p-2 rounded-full hover:bg-surface transition-colors"
+              disabled={isLoading}
+              onClick={handleImportPresetsFromFolder}
+              data-tooltip={t('editor.presets.tooltips.importFolder')}
+            >
+              <FolderOpen size={18} />
+            </button>
+            <button
+              className="p-2 rounded-full hover:bg-surface transition-colors"
               disabled={presets.length === 0 || isLoading}
               onClick={handleExportAllPresets}
               data-tooltip={t('editor.presets.tooltips.export')}
             >
               <FileDown size={18} />
+            </button>
+            <button
+              className="p-2 rounded-full hover:bg-surface transition-colors text-[10px] font-bold"
+              disabled={presets.length === 0 || isLoading}
+              onClick={handleExportAllAsXmp}
+              data-tooltip={t('editor.presets.tooltips.exportAllXmp')}
+            >
+              XMP
             </button>
             <button
               className="p-2 rounded-full hover:bg-surface transition-colors"

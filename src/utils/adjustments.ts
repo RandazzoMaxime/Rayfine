@@ -244,6 +244,10 @@ export interface Adjustments {
   transformScale: number;
   transformXOffset: number;
   transformYOffset: number;
+  /** crs:PerspectiveUpright 0–5 (5 = Guided) */
+  perspectiveUpright?: number;
+  /** Normalized guide lines for Guided Upright [[x1,y1,x2,y2], ...] 0–1 */
+  guidedUprightLines?: number[][];
   vibrance: number;
   vignetteAmount: number;
   vignetteFeather: number;
@@ -354,21 +358,25 @@ export interface MaskContainer {
 }
 
 export interface Sections {
-  [index: string]: Array<string>;
   basic: Array<string>;
-  curves: Array<string>;
   color: Array<string>;
+  curves: Array<string>;
   details: Array<string>;
   effects: Array<string>;
+  optics: Array<string>;
+  geometry: Array<string>;
+  calibration: Array<string>;
 }
 
 export interface SectionVisibility {
-  [index: string]: boolean;
   basic: boolean;
-  curves: boolean;
   color: boolean;
+  curves: boolean;
   details: boolean;
   effects: boolean;
+  optics: boolean;
+  geometry: boolean;
+  calibration: boolean;
 }
 
 export const COLOR_LABELS: Array<Color> = [
@@ -474,6 +482,9 @@ export const INITIAL_MASK_ADJUSTMENTS: MaskAdjustments = {
     color: true,
     details: true,
     effects: true,
+    optics: true,
+    geometry: true,
+    calibration: true,
   },
   shadows: 0,
   sharpness: 0,
@@ -569,6 +580,9 @@ export const INITIAL_ADJUSTMENTS: Adjustments = {
     color: true,
     details: true,
     effects: true,
+    optics: true,
+    geometry: true,
+    calibration: true,
   },
   shadows: 0,
   sharpness: 0,
@@ -586,6 +600,8 @@ export const INITIAL_ADJUSTMENTS: Adjustments = {
   transformScale: 100,
   transformXOffset: 0,
   transformYOffset: 0,
+  perspectiveUpright: 0,
+  guidedUprightLines: [],
   vibrance: 0,
   vignetteAmount: 0,
   vignetteFeather: 50,
@@ -846,31 +862,37 @@ export const COPYABLE_ADJUSTMENT_KEYS: string[] = Object.values(ADJUSTMENT_GROUP
   .flatMap((group) => group.keys);
 
 export const ADJUSTMENT_SECTIONS: Sections = {
+  // Develop panel order aligned with common Lightroom Classic structure:
+  // Basic (tone) → Tone Curve → Color (WB / presence / HSL / grading) → Detail → Optics → Transform → Effects
   basic: [
+    BasicAdjustment.Exposure,
+    'toneMapper',
     BasicAdjustment.Brightness,
     BasicAdjustment.Contrast,
     BasicAdjustment.Highlights,
     BasicAdjustment.Shadows,
     BasicAdjustment.Whites,
     BasicAdjustment.Blacks,
-    BasicAdjustment.Exposure,
-    'toneMapper',
-  ],
-  curves: ['curves', 'pointCurves', 'parametricCurve', 'curveMode'],
-  color: [
-    ColorAdjustment.Saturation,
     ColorAdjustment.Temperature,
     ColorAdjustment.Tint,
     ColorAdjustment.Vibrance,
+    ColorAdjustment.Saturation,
+  ],
+  color: [
+    ColorAdjustment.Temperature,
+    ColorAdjustment.Tint,
+    ColorAdjustment.Vibrance,
+    ColorAdjustment.Saturation,
     ColorAdjustment.Hsl,
     ColorAdjustment.ColorGrading,
-    'colorCalibration',
     ColorAdjustment.Hue,
   ],
+  calibration: ['colorCalibration'],
+  curves: ['curves', 'pointCurves', 'parametricCurve', 'curveMode'],
   details: [
     DetailsAdjustment.Clarity,
-    DetailsAdjustment.Dehaze,
     DetailsAdjustment.Structure,
+    DetailsAdjustment.Dehaze,
     DetailsAdjustment.Centré,
     DetailsAdjustment.Sharpness,
     DetailsAdjustment.SharpnessThreshold,
@@ -903,5 +925,25 @@ export const ADJUSTMENT_SECTIONS: Sections = {
     Effect.LensBlurMaxDepth,
     Effect.LensBlurMinFade,
     Effect.LensBlurMaxFade,
+  ],
+  // LR-like Optics / Geometry (compact develop panels)
+  optics: [
+    LensAdjustment.LensCorrectionMode,
+    LensAdjustment.LensDistortionEnabled,
+    LensAdjustment.LensVignetteEnabled,
+    LensAdjustment.LensTcaEnabled,
+    LensAdjustment.LensDistortionAmount,
+    LensAdjustment.LensVignetteAmount,
+    LensAdjustment.LensTcaAmount,
+  ],
+  geometry: [
+    TransformAdjustment.TransformDistortion,
+    TransformAdjustment.TransformVertical,
+    TransformAdjustment.TransformHorizontal,
+    TransformAdjustment.TransformRotate,
+    TransformAdjustment.TransformAspect,
+    TransformAdjustment.TransformScale,
+    TransformAdjustment.TransformXOffset,
+    TransformAdjustment.TransformYOffset,
   ],
 };

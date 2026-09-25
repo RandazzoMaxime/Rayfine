@@ -7,15 +7,23 @@ import { ToastContainer, toast, Slide } from 'react-toastify';
 import clsx from 'clsx';
 
 import TitleBar from './window/TitleBar';
+import ModuleBar from './components/panel/ModuleBar';
 import FolderTree from './components/panel/FolderTree';
 import SettingsPanel from './components/panel/SettingsPanel';
 import ExportPanel from './components/panel/right/ExportPanel';
+import LibraryRightPanel from './components/panel/library/LibraryRightPanel';
 import Resizer from './components/ui/Resizer';
 import GlobalTooltip from './components/ui/GlobalTooltip';
 import AppModals from './components/modals/AppModals';
 
 import EditorView from './components/views/EditorView';
 import LibraryView from './components/views/LibraryView';
+import MapModuleView from './components/views/MapModuleView';
+import BorderModuleView from './components/views/BorderModuleView';
+import WebModuleView from './components/views/WebModuleView';
+import ModuleFilmstrip from './components/views/ModuleFilmstrip';
+import { STUB_MODULES } from './components/panel/ModuleBar';
+
 
 import { ContextMenuProvider } from './context/ContextMenuContext';
 import { useSettingsStore } from './store/useSettingsStore';
@@ -99,6 +107,7 @@ function App() {
 
   const {
     isFullScreen,
+    lightsOut,
     isWindowFullScreen,
     isInstantTransition,
     isLayoutReady,
@@ -109,11 +118,13 @@ function App() {
     compactEditorPanelHeightOverride,
     activeRightPanel,
     isSettingsOpen,
+    activeView,
     setUI,
     setRightPanel,
   } = useUIStore(
     useShallow((state) => ({
       isFullScreen: state.isFullScreen,
+      lightsOut: state.lightsOut,
       isWindowFullScreen: state.isWindowFullScreen,
       isInstantTransition: state.isInstantTransition,
       isLayoutReady: state.isLayoutReady,
@@ -124,10 +135,12 @@ function App() {
       compactEditorPanelHeightOverride: state.compactEditorPanelHeightOverride,
       activeRightPanel: state.activeRightPanel,
       isSettingsOpen: state.isSettingsOpen,
+      activeView: state.activeView,
       setUI: state.setUI,
       setRightPanel: state.setRightPanel,
     })),
   );
+  const mapImageList = useUIStore((state) => state.mapImageList);
 
   const { rootPaths, currentFolderPath, expandedFolders, multiSelectedPaths, setLibrary } = useLibraryStore(
     useShallow((state) => ({
@@ -249,7 +262,7 @@ function App() {
   );
   const compactEditorPanelCollapsedHeight = 96;
 
-  const { handleCopyAdjustments, handlePasteAdjustments, handleResetAdjustments, handleZoomChange } =
+  const { handleCopyAdjustments, handlePasteAdjustments, handleMatchPrevious, handleSyncSettings, handleResetAdjustments, handleZoomChange } =
     useEditorActions();
 
   const navigationRefs = {
@@ -289,6 +302,7 @@ function App() {
     handleLibraryImageSingleClick,
     handleImageClick,
     handleSetColorLabel,
+    handleSetFlag,
     refreshAllFolderTrees,
     handleTogglePinFolder,
     handleCreateAlbumItem,
@@ -320,6 +334,14 @@ function App() {
       }
     }
   }, [currentFolderPath, handleSelectSubfolder, handleSelectAlbum]);
+
+  useEffect(() => {
+    const onRefresh = () => {
+      void handleLibraryRefresh();
+    };
+    window.addEventListener('rustroom:library-refresh', onRefresh);
+    return () => window.removeEventListener('rustroom:library-refresh', onRefresh);
+  }, [handleLibraryRefresh]);
 
   const {
     executeDelete,
@@ -366,6 +388,7 @@ function App() {
     refreshImageList: handleLibraryRefresh,
     executeDelete,
     handleTogglePinFolder,
+    handleSelectSubfolder,
   });
 
   useTauriListeners({
@@ -393,6 +416,27 @@ function App() {
       setTimeout(() => setUI({ isInstantTransition: false }), 100);
     }
   }, [isFullScreen, setUI]);
+
+
+  // Soft proof Create Proof Copy / other modules: open path in Develop
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const path = (e as CustomEvent)?.detail?.path as string | undefined;
+      if (path) handleImageSelect(path);
+    };
+    window.addEventListener('rustroom:open-image', onOpen as EventListener);
+    return () => window.removeEventListener('rustroom:open-image', onOpen as EventListener);
+  }, [handleImageSelect]);
+
+  useEffect(() => {
+    const onGo = (e: Event) => {
+      const folder = (e as CustomEvent)?.detail?.folder as string | undefined;
+      if (folder) handleSelectSubfolder(folder, false, undefined, true, false);
+    };
+    window.addEventListener('rustroom:go-to-folder', onGo as EventListener);
+    return () => window.removeEventListener('rustroom:go-to-folder', onGo as EventListener);
+  }, [handleSelectSubfolder]);
+
 
   useKeyboardShortcuts({
     sortedImageList,
@@ -540,7 +584,7 @@ function App() {
   const handleRightPanelSelect = useCallback(
     (panelId: Panel) => {
       setRightPanel(panelId);
-      setEditor({ activeMaskId: null, activeAiSubMaskId: null, isWbPickerActive: false });
+      setEditor({ activeMaskId: null, activeAiSubMaskId: null, isWbPickerActive: false, isPointColorPickerActive: false });
     },
     [setRightPanel, setEditor],
   );
@@ -578,10 +622,18 @@ function App() {
   );
 
   const hasRoots = rootPaths && rootPaths.length > 0;
-  const hasMainContent = hasRoots || !!selectedImage;
+  // No welcome screen: Library (with its panels and Import bar) is always the landing view.
+  const hasMainContent = hasRoots || !!selectedImage || activeView === 'library';
+
+  // Land straight in the last session on launch (replaces the "Continue session" splash).
+  const autoContinuedRef = useRef(false);
+  useEffect(() => {
+    if (autoContinuedRef.current || !appSettings || hasRoots) return;
+    autoContinuedRef.current = true;
+    if (appSettings.rootFolders?.length || appSettings.lastRootPath) handleContinueSession();
+  }, [appSettings, hasRoots, handleContinueSession]);
 
   const renderFolderTree = () => {
-    if (!hasRoots) return null;
 
     return (
       <div
@@ -614,7 +666,8 @@ function App() {
     );
   };
 
-  const shouldHideFolderTree = isAndroid;
+  const shouldHideFolderTree =
+    isAndroid || !!selectedImage || STUB_MODULES.includes(activeView as any); // Develop + stub modules have own left rail
   const isWgpuActive = appSettings?.useWgpuRenderer !== false && selectedImage?.isReady && hasRenderedFirstFrame;
   const useMacWindowShell = osPlatform === 'macos' && !appSettings?.decorations && !isWindowFullScreen && !isFullScreen;
 
@@ -632,7 +685,13 @@ function App() {
         className={clsx(
           'flex flex-col h-screen font-sans text-text-primary overflow-hidden select-none',
           useMacWindowShell && 'macos-window-shell',
-          isWgpuActive ? 'bg-transparent' : 'bg-bg-primary',
+          isWgpuActive
+            ? 'bg-transparent'
+            : lightsOut === 2
+              ? 'bg-black'
+              : lightsOut === 1
+                ? 'bg-bg-primary brightness-[0.72]'
+                : 'bg-bg-primary',
         )}
       >
         <div
@@ -644,6 +703,26 @@ function App() {
         >
           {appSettings?.decorations || (!isWindowFullScreen && <TitleBar />)}
         </div>
+        {!isFullScreen && hasMainContent && (
+          <ModuleBar
+            isInstantTransition={isInstantTransition}
+            onBackToLibrary={handleBackToLibrary}
+            onOpenDevelop={(path) => {
+              // handleImageSelect already forces Adjustments open
+              if (path) {
+                handleImageSelect(path);
+                return;
+              }
+              const { libraryActivePath, multiSelectedPaths } = useLibraryStore.getState();
+              const target = libraryActivePath || multiSelectedPaths[0];
+              if (target) {
+                handleImageSelect(target);
+              } else {
+                toast.info('Select a photo in the Library to open Develop');
+              }
+            }}
+          />
+        )}
         <div
           className={clsx(
             'flex-1 flex flex-col min-h-0',
@@ -662,7 +741,45 @@ function App() {
                   onDone={finishExternalEdit}
                 />
               )}
-              {selectedImage ? (
+              {STUB_MODULES.includes(activeView as any) ? (
+                <div className="flex flex-col flex-1 min-h-0 w-full">
+                  <div className="flex-1 min-h-0 flex flex-col">
+                    {activeView === 'map' ? (
+                      <MapModuleView
+                        onBackToLibrary={() => { setUI({ activeView: 'library' }); handleBackToLibrary(); }}
+                        onOpenDevelop={(path) => handleImageSelect(path)}
+                      />
+                    ) : activeView === 'border' ? (
+                      <BorderModuleView
+                        onBackToLibrary={() => { setUI({ activeView: 'library' }); handleBackToLibrary(); }}
+                        imageList={sortedImageList}
+                        onRequestThumbnails={requestThumbnails}
+                      />
+                    ) : (
+                      <WebModuleView onBackToLibrary={() => { setUI({ activeView: 'library' }); handleBackToLibrary(); }} />
+                    )}
+                  </div>
+                  {/* Border renders its own photo strip (click/drag into the layout) */}
+                  {activeView !== 'border' && (
+                  <ModuleFilmstrip
+                    imageList={activeView === 'map' && mapImageList ? mapImageList : sortedImageList}
+                    onImageSelect={(path, e) => handleLibraryImageSingleClick(path, e)}
+                    onImageDoubleClick={handleImageSelect}
+                    onContextMenu={handleThumbnailContextMenu}
+                    onRate={handleRate}
+                    onSetColorLabel={handleSetColorLabel}
+                    onSetFlag={handleSetFlag}
+                    onRequestThumbnails={requestThumbnails}
+                    onCopy={handleCopyAdjustments}
+                    onPaste={() => handlePasteAdjustments()}
+                    onMatchPrevious={handleMatchPrevious}
+                    isMatchPreviousDisabled={!useEditorStore.getState().previousDevelopAdjustments}
+                    onSyncSettings={handleSyncSettings}
+                    isSyncSettingsDisabled={(useLibraryStore.getState().multiSelectedPaths?.length || 0) < 2}
+                  />
+                  )}
+                </div>
+              ) : selectedImage ? (
                 <EditorView
                   transformWrapperRef={transformWrapperRef}
                   isResizing={isResizing}
@@ -680,6 +797,10 @@ function App() {
                   handleClearSelection={handleClearSelection}
                   handleCopyAdjustments={handleCopyAdjustments}
                   handlePasteAdjustments={handlePasteAdjustments}
+                  handleMatchPrevious={handleMatchPrevious}
+                  handleSyncSettings={handleSyncSettings}
+                  handleSetColorLabel={handleSetColorLabel}
+                  handleSetFlag={handleSetFlag}
                   handleRate={handleRate}
                   handleZoomChange={handleZoomChange}
                   handleRightPanelSelect={handleRightPanelSelect}
@@ -700,6 +821,8 @@ function App() {
                   handleLibraryImageSingleClick={handleLibraryImageSingleClick}
                   handleImageSelect={handleImageSelect}
                   handleRate={handleRate}
+                  handleSetColorLabel={handleSetColorLabel}
+                  handleSetFlag={handleSetFlag}
                   handleThumbnailContextMenu={handleThumbnailContextMenu}
                   handleMainLibraryContextMenu={handleMainLibraryContextMenu}
                   handleContinueSession={handleContinueSession}
@@ -709,6 +832,8 @@ function App() {
                   handleLibraryRefresh={handleLibraryRefresh}
                   handleCopyAdjustments={handleCopyAdjustments}
                   handlePasteAdjustments={handlePasteAdjustments}
+                  handleMatchPrevious={handleMatchPrevious}
+                  handleSyncSettings={handleSyncSettings}
                   handleResetAdjustments={handleResetAdjustments}
                   requestThumbnails={requestThumbnails}
                 />
@@ -727,7 +852,12 @@ function App() {
                 </div>
               )}
             </div>
-            {!selectedImage && isLibraryExportPanelVisible && (
+            {/* Library right rail (LR public structure): always on in Library; Export overlays same slot */}
+            {!selectedImage &&
+              !STUB_MODULES.includes(activeView as any) &&
+              !isFullScreen &&
+              hasMainContent &&
+              uiVisibility.libraryRight !== false && (
               <Resizer direction={Orientation.Vertical} onMouseDown={createResizeHandler('right', rightPanelWidth)} />
             )}
             <div
@@ -735,19 +865,37 @@ function App() {
                 'shrink-0 overflow-hidden',
                 !isResizing && !isInstantTransition && 'transition-all duration-300 ease-in-out',
               )}
-              style={{ width: isLibraryExportPanelVisible && !isFullScreen ? `${rightPanelWidth}px` : '0px' }}
+              style={{
+                width:
+                  !selectedImage &&
+                  !STUB_MODULES.includes(activeView as any) &&
+                  !isFullScreen &&
+                  hasMainContent &&
+                  uiVisibility.libraryRight !== false
+                    ? `${rightPanelWidth}px`
+                    : '0px',
+              }}
             >
-              <ExportPanel
-                exportState={exportState}
-                multiSelectedPaths={multiSelectedPaths}
-                selectedImage={null}
-                setExportState={setExportState}
-                appSettings={appSettings}
-                onSettingsChange={handleSettingsChange}
-                rootPaths={rootPaths}
-                isVisible={isLibraryExportPanelVisible}
-                onClose={() => setUI({ isLibraryExportPanelVisible: false })}
-              />
+              <div style={{ width: `${rightPanelWidth}px` }} className="h-full">
+                {isLibraryExportPanelVisible ? (
+                  <ExportPanel
+                    exportState={exportState}
+                    multiSelectedPaths={multiSelectedPaths}
+                    selectedImage={null}
+                    setExportState={setExportState}
+                    appSettings={appSettings}
+                    onSettingsChange={handleSettingsChange}
+                    rootPaths={rootPaths}
+                    isVisible={isLibraryExportPanelVisible}
+                    onClose={() => setUI({ isLibraryExportPanelVisible: false })}
+                  />
+                ) : (
+                  !selectedImage &&
+                  !STUB_MODULES.includes(activeView as any) &&
+                  hasMainContent &&
+                  uiVisibility.libraryRight !== false && <LibraryRightPanel />
+                )}
+              </div>
             </div>
           </div>
         </div>

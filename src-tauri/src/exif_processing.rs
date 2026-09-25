@@ -808,6 +808,8 @@ pub fn write_image_with_metadata(
     output_format: &str,
     keep_metadata: bool,
     strip_gps: bool,
+    color_space: Option<&str>,
+    resolution_dpi: Option<u32>,
 ) -> Result<(), String> {
     // FIXME: temporary solution until I find a way to write metadata to TIFF
     if !keep_metadata || output_format.to_lowercase() == "tiff" {
@@ -1198,7 +1200,24 @@ pub fn write_image_with_metadata(
 
     metadata.set_tag(ExifTag::Software("RapidRAW".to_string()));
     metadata.set_tag(ExifTag::Orientation(vec![1u16]));
-    metadata.set_tag(ExifTag::ColorSpace(vec![1u16]));
+    // EXIF ColorSpace: 1 = sRGB, 2 = Adobe RGB, 65535 = Uncalibrated (wide gamut / P3 / ProPhoto)
+    let cs_tag: u16 = match color_space.unwrap_or("srgb").to_ascii_lowercase().as_str() {
+        "srgb" => 1,
+        "adobe-rgb" | "adobe_rgb" | "adobergb" => 2,
+        _ => 65535,
+    };
+    metadata.set_tag(ExifTag::ColorSpace(vec![cs_tag]));
+
+    // Resolution (DPI) — LR export print/screen metadata
+    let dpi = resolution_dpi.unwrap_or(240).clamp(1, 10000);
+    let dpi_rat = || uR64 {
+        nominator: dpi,
+        denominator: 1,
+    };
+    metadata.set_tag(ExifTag::XResolution(vec![dpi_rat()]));
+    metadata.set_tag(ExifTag::YResolution(vec![dpi_rat()]));
+    // 2 = inches
+    metadata.set_tag(ExifTag::ResolutionUnit(vec![2u16]));
 
     if let Err(e) = metadata.write_to_vec(image_bytes, file_type) {
         log::warn!("Failed to write metadata: {}", e);

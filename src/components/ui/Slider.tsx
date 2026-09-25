@@ -511,8 +511,8 @@ const Slider = ({
   const numericValue = isNaN(Number(value)) ? 0 : Number(value);
 
   return (
-    <div className={`mb-2 group ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`} ref={containerRef}>
-      <div className="flex justify-between items-center mb-1">
+    <div className={`mb-1 group ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`} ref={containerRef}>
+      <div className="flex justify-between items-center mb-0.5">
         <div
           className={`grid ${typeof label === 'string' && !disabled ? 'cursor-pointer' : ''}`}
           onClick={typeof label === 'string' && !disabled ? handleReset : undefined}
@@ -522,7 +522,7 @@ const Slider = ({
         >
           <span
             aria-hidden={isLabelHovered && typeof label === 'string'}
-            className={`col-start-1 row-start-1 text-sm font-medium text-text-secondary select-none transition-opacity duration-200 ease-in-out ${
+            className={`col-start-1 row-start-1 text-xs font-medium text-text-secondary select-none transition-opacity duration-200 ease-in-out ${
               isLabelHovered && typeof label === 'string' ? 'opacity-0' : 'opacity-100'
             }`}
           >
@@ -531,7 +531,7 @@ const Slider = ({
           {typeof label === 'string' && (
             <span
               aria-hidden={!isLabelHovered}
-              className={`col-start-1 row-start-1 text-sm font-medium text-text-primary select-none transition-opacity duration-200 ease-in-out pointer-events-none ${
+              className={`col-start-1 row-start-1 text-xs font-medium text-text-primary select-none transition-opacity duration-200 ease-in-out pointer-events-none ${
                 isLabelHovered ? 'opacity-100' : 'opacity-0'
               }`}
             >
@@ -539,10 +539,10 @@ const Slider = ({
             </span>
           )}
         </div>
-        <div className="w-12 text-right">
+        <div className="w-11 text-right">
           {isEditing ? (
             <input
-              className="w-full text-sm text-right bg-card-active border border-gray-500 rounded-sm px-1 py-0 outline-none focus:ring-1 focus:ring-blue-500 text-text-primary"
+              className="w-full text-xs text-right bg-card-active border border-gray-500 rounded-sm px-1 py-0 outline-none focus:ring-1 focus:ring-blue-500 text-text-primary"
               disabled={disabled}
               max={max}
               min={min}
@@ -556,7 +556,7 @@ const Slider = ({
             />
           ) : (
             <span
-              className={`text-sm text-text-primary w-full text-right select-none ${disabled ? '' : 'cursor-text'}`}
+              className={`text-xs text-text-primary w-full text-right select-none ${disabled ? '' : 'cursor-text'}`}
               onClick={disabled ? undefined : handleValueClick}
               onDoubleClick={disabled ? undefined : handleReset}
               data-tooltip={disabled ? undefined : t('ui.slider.clickToEdit')}
@@ -568,7 +568,7 @@ const Slider = ({
         </div>
       </div>
 
-      <div className="relative w-full h-5">
+      <div className="relative w-full h-4">
         <div
           className={`absolute top-1/2 left-0 w-full h-1.5 -translate-y-1/4 rounded-full pointer-events-none ${
             trackClassName || 'bg-card-active'

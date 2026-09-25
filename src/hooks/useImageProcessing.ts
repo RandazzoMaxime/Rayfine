@@ -30,6 +30,7 @@ export function useImageProcessing(
   const baseRenderSize = useEditorStore((state) => state.baseRenderSize);
   const originalSize = useEditorStore((state) => state.originalSize);
   const showOriginal = useEditorStore((state) => state.showOriginal);
+  const beforeAfterSplit = useEditorStore((state) => state.beforeAfterSplit);
   const isSliderDragging = useEditorStore((state) => state.isSliderDragging);
   const transformedOriginalUrl = useEditorStore((state) => state.transformedOriginalUrl);
   const setEditor = useEditorStore((state) => state.setEditor);
@@ -482,7 +483,7 @@ export function useImageProcessing(
   }, [geometricAdjustmentsKey, selectedImage?.path, setEditor]);
 
   useEffect(() => {
-    if (showOriginal && selectedImage?.isReady && displaySize.width > 0 && !isSliderDragging) {
+    if ((showOriginal || beforeAfterSplit) && selectedImage?.isReady && displaySize.width > 0 && !isSliderDragging) {
       let targetRes = calculateTargetRes();
       if (targetRes > currentOriginalResRef.current) {
         requestHiFiOriginalZoom(adjustments, targetRes);
@@ -494,6 +495,7 @@ export function useImageProcessing(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     showOriginal,
+    beforeAfterSplit,
     displaySize.width,
     displaySize.height,
     calculateTargetRes,
@@ -506,7 +508,7 @@ export function useImageProcessing(
   useEffect(() => {
     let isEffectActive = true;
     const generate = async () => {
-      if (showOriginal && selectedImage?.path && !transformedOriginalUrl) {
+      if ((showOriginal || beforeAfterSplit) && selectedImage?.path && !transformedOriginalUrl) {
         try {
           const targetRes = calculateTargetRes();
           const base64Data: string = await invoke('generate_original_transformed_preview', {
@@ -520,7 +522,7 @@ export function useImageProcessing(
         } catch (e) {
           if (isEffectActive) {
             console.error('Failed to generate original preview:', e);
-            setEditor({ showOriginal: false });
+            setEditor({ showOriginal: false, beforeAfterSplit: false });
           }
         }
       }
@@ -529,7 +531,7 @@ export function useImageProcessing(
     return () => {
       isEffectActive = false;
     };
-  }, [showOriginal, selectedImage?.path, adjustments, transformedOriginalUrl, calculateTargetRes, setEditor]);
+  }, [showOriginal, beforeAfterSplit, selectedImage?.path, adjustments, transformedOriginalUrl, calculateTargetRes, setEditor]);
 
   return {
     applyAdjustments,

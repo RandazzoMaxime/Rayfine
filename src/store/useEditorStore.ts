@@ -37,6 +37,21 @@ interface EditorState {
   transformedOriginalUrl: string | null;
   interactivePatch: InteractivePatch | null;
   showOriginal: boolean;
+  /** LR-style vertical split: original | left, edited | right */
+  beforeAfterSplit: boolean;
+  /** vertical = left/right (default); horizontal = top/bottom */
+  beforeAfterOrientation: 'vertical' | 'horizontal' | 'two-up';
+  /** LR Soft Proofing shell (profile simulation UI; not full ICC) */
+  softProofing: boolean;
+  softProofProfile: string;
+  softProofIntent: 'perceptual' | 'relative' | 'absolute';
+  softProofSimulatePaper: boolean;
+  softProofShowGamutWarning: boolean;
+  /**
+   * LR Loupe Info overlay on Develop canvas (I key):
+   * off → basic (filename + camera settings) → full (+ camera/lens/dims)
+   */
+  developInfoMode: 'off' | 'basic' | 'full';
 
   // Analytics
   histogram: ChannelConfig | null;
@@ -58,7 +73,11 @@ interface EditorState {
   overlayMode: OverlayMode;
   overlayRotation: number;
   isStraightenActive: boolean;
+  /** Draw up to 2 guide lines for Upright Guided (PerspectiveUpright=5) */
+  isGuidedUprightActive: boolean;
   isWbPickerActive: boolean;
+  /** When true, canvas click samples RGB → HSL and adds a Point Color pin */
+  isPointColorPickerActive: boolean;
   liveRotation: number | null;
   brushSettings: BrushSettings | null;
 
@@ -68,6 +87,8 @@ interface EditorState {
   activeAiPatchContainerId: string | null;
   activeAiSubMaskId: string | null;
   isMaskControlHovered: boolean;
+  /** When false, hide the red/colored mask overlay preview while masking (LR O-ish). */
+  showMaskOverlay: boolean;
   isGeneratingAiMask: boolean;
   isGeneratingAi: boolean;
   isAIConnectorConnected: boolean;
@@ -78,6 +99,9 @@ interface EditorState {
   copiedSectionAdjustments: any | null;
   copiedMask: MaskContainer | null;
   copiedAdjustments: Adjustments | null;
+  /** Last Develop settings from the previously active photo (LR "Previous" / Match Previous) */
+  previousDevelopAdjustments: Adjustments | null;
+  previousDevelopPath: string | null;
 
   // Actions
   setEditor: (updater: Partial<EditorState> | ((state: EditorState) => Partial<EditorState>)) => void;
@@ -98,11 +122,19 @@ export const useEditorStore = create<EditorState>((set) => ({
   finalPreviewUrl: null,
   uncroppedAdjustedPreviewUrl: null,
   showOriginal: false,
+  beforeAfterSplit: false,
+  beforeAfterOrientation: 'vertical',
+  softProofing: false,
+  softProofProfile: 'sRGB',
+  softProofIntent: 'relative',
+  softProofSimulatePaper: true,
+  softProofShowGamutWarning: false,
+  developInfoMode: 'off',
   histogram: null,
   waveform: null,
   isWaveformVisible: false,
   activeWaveformChannel: 'luma',
-  waveformHeight: 220,
+  waveformHeight: 150,
 
   isSliderDragging: false,
   interactivePatch: null,
@@ -122,18 +154,23 @@ export const useEditorStore = create<EditorState>((set) => ({
   overlayRotation: 0,
   transformedOriginalUrl: null,
   isStraightenActive: false,
+  isGuidedUprightActive: false,
   isWbPickerActive: false,
+  isPointColorPickerActive: false,
   liveRotation: null,
 
   copiedSectionAdjustments: null,
   copiedMask: null,
   brushSettings: { size: 50, feather: 50, tool: ToolType.Brush },
   copiedAdjustments: null,
+  previousDevelopAdjustments: null,
+  previousDevelopPath: null,
 
   isGeneratingAiMask: false,
   isAIConnectorConnected: false,
   isGeneratingAi: false,
   isMaskControlHovered: false,
+  showMaskOverlay: true,
   hasRenderedFirstFrame: false,
   patchesSentToBackend: new Set<string>(),
 

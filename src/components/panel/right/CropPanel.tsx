@@ -266,6 +266,7 @@ export default function CropPanel() {
     [selectedImage, orientationSteps, rotation, adjustments.crop, setAdjustments],
   );
 
+
   useEffect(() => {
     if (activePreset?.value === ORIGINAL_RATIO) {
       const newOriginalRatio = getEffectiveOriginalRatio();
@@ -392,6 +393,96 @@ export default function CropPanel() {
     }));
   };
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const activeTag = document.activeElement?.tagName.toLowerCase();
+      if (activeTag === 'input' || activeTag === 'textarea') return;
+      if (e.ctrlKey || e.metaKey) return;
+
+      // Shift+A: cycle crop aspect presets (free → original → square → …)
+      if (e.key.toLowerCase() === 'a' && e.shiftKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        const list = PRESETS;
+        let idx = 0;
+        if (aspectRatio === null) {
+          idx = 0; // free
+        } else {
+          const originalRatio = getEffectiveOriginalRatio();
+          const found = list.findIndex((p) => {
+            if (p.value === null) return false;
+            if (p.value === ORIGINAL_RATIO) {
+              return (
+                originalRatio != null &&
+                Math.abs(aspectRatio - originalRatio) < RATIO_TOLERANCE
+              );
+            }
+            return (
+              Math.abs(aspectRatio - (p.value as number)) < RATIO_TOLERANCE ||
+              Math.abs(aspectRatio - 1 / (p.value as number)) < RATIO_TOLERANCE
+            );
+          });
+          idx = found >= 0 ? found : 0;
+        }
+        const next = list[(idx + 1) % list.length];
+        if (next.value === null) {
+          applyAspectRatio(null);
+        } else if (next.value === ORIGINAL_RATIO) {
+          applyAspectRatio(getEffectiveOriginalRatio());
+        } else {
+          const base = next.value as number;
+          const usePortrait = preferPortrait && base !== 1;
+          applyAspectRatio(usePortrait ? 1 / base : base);
+        }
+        return;
+      }
+
+      // Shift+R: reset crop / transforms (same as Reset in Crop panel)
+      if (e.key.toLowerCase() === 'r' && e.shiftKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        handleReset();
+      }
+
+      // Shift+O: cycle crop guide overlay (none → thirds → …)
+      if (e.key.toLowerCase() === 'o' && e.shiftKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        const list = OVERLAYS;
+        const cur = activeOverlay || 'none';
+        const idx = Math.max(0, list.findIndex((o) => o.id === cur));
+        const next = list[(idx + 1) % list.length];
+        setOverlay(next.id as OverlayMode);
+        return;
+      }
+
+      // Shift+/: rotate golden spiral / triangle overlay when active
+      if ((e.key === '/' || e.code === 'Slash') && e.shiftKey) {
+        const rotatable = activeOverlay === 'goldenSpiral' || activeOverlay === 'goldenTriangle';
+        if (rotatable) {
+          e.preventDefault();
+          e.stopPropagation();
+          e.stopImmediatePropagation();
+          setOverlayRotation((r) => (r + 90) % 360);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [
+    PRESETS,
+    OVERLAYS,
+    aspectRatio,
+    applyAspectRatio,
+    getEffectiveOriginalRatio,
+    preferPortrait,
+    handleReset,
+    activeOverlay,
+    setOverlay,
+    setOverlayRotation,
+  ]);
+
   const isPresetActive = (preset: CropPreset) => preset === activePreset;
   const isOrientationToggleDisabled = !aspectRatio || aspectRatio === 1 || activePreset?.value === ORIGINAL_RATIO;
 
@@ -477,7 +568,7 @@ export default function CropPanel() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="p-4 flex justify-between items-center shrink-0 border-b border-surface">
+      <div className="px-2.5 py-1.5 flex justify-between items-center shrink-0 border-b border-border-color/40">
         <Text variant={TextVariants.title}>{t('editor.crop.title')}</Text>
         <button
           className="p-2 rounded-full hover:bg-surface transition-colors"
@@ -488,11 +579,11 @@ export default function CropPanel() {
         </button>
       </div>
 
-      <div className="grow overflow-y-auto p-4 space-y-8">
+      <div className="grow overflow-y-auto px-2.5 py-1.5 space-y-2">
         {selectedImage ? (
           <>
-            <div className="space-y-4">
-              <Text variant={TextVariants.heading} className="mb-2 flex items-center justify-between">
+            <div className="space-y-2">
+              <Text variant={TextVariants.heading} className="mb-1 flex items-center justify-between">
                 {t('editor.crop.aspectRatioHeading')}
                 <div className="flex items-center gap-2">
                   <button
@@ -516,11 +607,11 @@ export default function CropPanel() {
                   </button>
                 </div>
               </Text>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-3 gap-1">
                 {PRESETS.map((preset: CropPreset) => (
                   <motion.div
                     className={clsx(
-                      'px-2 py-1.5 rounded-md transition-colors text-center cursor-pointer',
+                      'px-1.5 py-1 rounded-md transition-colors text-center cursor-pointer text-[11px]',
                       isPresetActive(preset) ? 'bg-accent' : 'bg-surface hover:bg-card-active',
                     )}
                     key={preset.name}
@@ -536,7 +627,7 @@ export default function CropPanel() {
               <div>
                 <motion.div
                   className={clsx(
-                    'w-full px-2 py-1.5 rounded-md transition-colors cursor-pointer text-center',
+                    'w-full px-1.5 py-1 rounded-md transition-colors cursor-pointer text-center text-[11px]',
                     isCustomActive ? 'bg-accent' : 'bg-surface hover:bg-card-active',
                   )}
                   onClick={() => {
@@ -594,11 +685,11 @@ export default function CropPanel() {
               </div>
             </div>
 
-            <div className="space-y-4">
+            <div className="space-y-2">
               <Text variant={TextVariants.heading} className="mb-2">
                 {t('editor.crop.rotationHeading')}
               </Text>
-              <div className="bg-surface px-4 pt-3 pb-4 rounded-lg">
+              <div className="bg-surface px-3 pt-2 pb-3 rounded-md">
                 <Slider
                   label={
                     <div className="flex items-center gap-2">
@@ -645,13 +736,13 @@ export default function CropPanel() {
               </div>
             </div>
 
-            <div className="space-y-4">
+            <div className="space-y-2">
               <Text variant={TextVariants.heading} className="mb-2">
                 {t('editor.crop.orientationHeading')}
               </Text>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-2 gap-1.5">
                 <motion.div
-                  className="flex flex-col items-center justify-center p-3 cursor-pointer rounded-lg transition-colors bg-surface text-text-secondary hover:bg-card-active hover:text-text-primary"
+                  className="flex flex-col items-center justify-center p-2 cursor-pointer rounded-md transition-colors bg-surface text-text-secondary hover:bg-card-active hover:text-text-primary"
                   onClick={() => handleStepRotate(-90)}
                   data-tooltip={t('editor.crop.tooltips.rotateLeft')}
                   whileTap={{ scale: 0.98 }}
@@ -661,7 +752,7 @@ export default function CropPanel() {
                   <span className="text-xs mt-2 transition-none">{t('editor.crop.labels.rotateLeft')}</span>
                 </motion.div>
                 <motion.div
-                  className="flex flex-col items-center justify-center p-3 cursor-pointer rounded-lg transition-colors bg-surface text-text-secondary hover:bg-card-active hover:text-text-primary"
+                  className="flex flex-col items-center justify-center p-2 cursor-pointer rounded-md transition-colors bg-surface text-text-secondary hover:bg-card-active hover:text-text-primary"
                   onClick={() => handleStepRotate(90)}
                   data-tooltip={t('editor.crop.tooltips.rotateRight')}
                   whileTap={{ scale: 0.98 }}
@@ -708,11 +799,11 @@ export default function CropPanel() {
               </div>
             </div>
 
-            <div className="space-y-4">
+            <div className="space-y-2">
               <Text variant={TextVariants.heading} className="mb-2">
                 {t('editor.crop.geometryHeading')}
               </Text>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-2 gap-1.5">
                 <motion.div
                   className="flex flex-col items-center justify-center p-3 cursor-pointer rounded-lg transition-colors bg-surface text-text-secondary hover:bg-card-active hover:text-text-primary group"
                   onClick={() => setIsTransformModalOpen(true)}

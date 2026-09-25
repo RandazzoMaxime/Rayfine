@@ -33,6 +33,7 @@ export enum Invokes {
   AddTagForPaths = 'add_tag_for_paths',
   ApplyAdjustments = 'apply_adjustments',
   ApplyAdjustmentsToPaths = 'apply_adjustments_to_paths',
+  ApplyRelativeAdjustmentsToPaths = 'apply_relative_adjustments_to_paths',
   ApplyAutoAdjustmentsToPaths = 'apply_auto_adjustments_to_paths',
   ApplyDenoising = 'apply_denoising',
   CalculateAutoAdjustments = 'calculate_auto_adjustments',
@@ -43,6 +44,7 @@ export enum Invokes {
   ClearAllTags = 'clear_all_tags',
   ClearThumbnailCache = 'clear_thumbnail_cache',
   CopyFiles = 'copy_files',
+  CopyFileTo = 'copy_file_to',
   CreateFolder = 'create_folder',
   CreateVirtualCopy = 'create_virtual_copy',
   CullImages = 'cull_images',
@@ -67,8 +69,15 @@ export enum Invokes {
   GetPinnedFolderTrees = 'get_pinned_folder_trees',
   GetSupportedFileTypes = 'get_supported_file_types',
   HandleExportPresetsToFile = 'handle_export_presets_to_file',
+  ExportPresetToXmp = 'export_preset_to_xmp',
+  ReimportDevelopFromXmp = 'reimport_develop_from_xmp',
+  ReimportDevelopFromXmpPaths = 'reimport_develop_from_xmp_paths',
+  ExportPresetsToXmpDirectory = 'export_presets_to_xmp_directory',
   HandleImportPresetsFromFile = 'handle_import_presets_from_file',
   HandleImportLegacyPresetsFromFile = 'handle_import_legacy_presets_from_file',
+  HandleImportLegacyPresetsFromPaths = 'handle_import_legacy_presets_from_paths',
+  HandleImportLegacyPresetsFromDirectory = 'handle_import_legacy_presets_from_directory',
+  ParseLegacyPresetFiles = 'parse_legacy_preset_files',
   ImportFiles = 'import_files',
   InvokeGenerativeReplace = 'invoke_generative_replace',
   InvokeGenerativeReplaseWithMaskDef = 'invoke_generative_replace_with_mask_def',
@@ -76,6 +85,7 @@ export enum Invokes {
   ListImagesRecursive = 'list_images_recursive',
   LoadImage = 'load_image',
   LoadMetadata = 'load_metadata',
+  SaveImageSnapshots = 'save_image_snapshots',
   LoadPresets = 'load_presets',
   LoadSettings = 'load_settings',
   MoveFiles = 'move_files',
@@ -93,7 +103,11 @@ export enum Invokes {
   SaveSettings = 'save_settings',
   SetColorLabelForPaths = 'set_color_label_for_paths',
   SetRatingForPaths = 'set_rating_for_paths',
+  SetFlagForPaths = 'set_flag_for_paths',
+  WriteTextFile = 'write_text_file',
   ShowInFinder = 'show_in_finder',
+  ShowXmpSidecar = 'show_xmp_sidecar',
+  ExportDevelopToXmp = 'export_develop_to_xmp',
   StartBackgroundIndexing = 'start_background_indexing',
   StitchPanorama = 'stitch_panorama',
   MergeHdr = 'merge_hdr',
@@ -131,6 +145,14 @@ export enum RawStatus {
   NonRawOnly = 'nonRawOnly',
   RawOnly = 'rawOnly',
 }
+
+export enum FlagStatus {
+  All = 'all',
+  Pick = 'pick',
+  Reject = 'reject',
+  Unflagged = 'unflagged',
+}
+
 
 export enum SortDirection {
   Ascending = 'asc',
@@ -179,6 +201,8 @@ export interface AppSettings {
   filterCriteria?: FilterCriteria;
   lastFolderState?: any;
   pinnedFolders?: any;
+  /** Recently visited library folders (paths), newest first. */
+  recentFolders?: string[];
   lastRootPath: string | null;
   rootFolders?: string[];
   libraryViewMode?: LibraryViewMode;
@@ -195,6 +219,8 @@ export interface AppSettings {
   myLenses?: any;
   enableFolderImageCounts?: boolean;
   displayEditIcon?: boolean;
+  /** LR View Options: always show file names under grid thumbnails. */
+  showGridFilenames?: boolean;
   linearRawMode?: string;
   enableXmpSync?: boolean;
   createXmpIfMissing?: boolean;
@@ -222,7 +248,33 @@ export interface AppSettings {
   requireMatchingExif?: boolean;
   groupEditedFiles?: boolean;
   groupPreferredType?: GroupPreference; // legacy
+  /** When true (default), rating/flag/color in Library advances to next photo (LR culling). */
+  autoAdvanceOnCull?: boolean;
+  /**
+   * LR-style: hide rejected photos from Library/Filmstrip views
+   * (independent of flag filter; rejects still exist for "Delete Rejected").
+   */
+  hideRejectedPhotos?: boolean;
+  /** Saved Library attribute filter presets (LR-style). */
+  libraryFilterPresets?: Array<{ id: string; name: string; criteria: FilterCriteria }>;
+  /** Last-used Library import dialog settings (LR-style remember). */
+  lastImportSettings?: {
+    filenameTemplate?: string;
+    organizeByDate?: boolean;
+    dateFolderFormat?: string;
+    deleteAfterImport?: boolean;
+    skipDuplicates?: boolean;
+    buildPreviews?: boolean;
+    previewQuality?: 'minimal' | 'standard' | 'one_to_one';
+    copyAsDng?: boolean;
+    developPresetId?: string | null;
+    keywords?: string[];
+    creator?: string | null;
+    copyright?: string | null;
+    caption?: string | null;
+  };
 }
+
 
 export interface BrushSettings {
   feather: number;
@@ -248,6 +300,105 @@ export interface FilterCriteria {
   rating: number;
   rawStatus: RawStatus;
   editedStatus?: EditedStatus;
+  flagStatus?: FlagStatus;
+  /** Empty string / undefined = all cameras; otherwise matches "Make Model" substring */
+  camera?: string;
+  /** Substring match on EXIF City (IPTC location) */
+  city?: string;
+  /** Substring match on EXIF Country (IPTC location) */
+  country?: string;
+  /** Substring match against image tags (user: stripped) */
+  keyword?: string;
+  /** Inclusive date range (YYYY-MM-DD) */
+  dateFrom?: string;
+  dateTo?: string;
+  /** Which date to use for dateFrom/dateTo filters (default capture) */
+  dateField?: 'capture' | 'modified';
+  /** Lens model substring (from EXIF LensModel / Lens) */
+  lens?: string;
+  /** Inclusive ISO range (from EXIF PhotographicSensitivity / ISOSpeedRatings) */
+  isoMin?: number;
+  isoMax?: number;
+  /** GPS presence: undefined/'all' = any; 'yes' = has GPS; 'no' = no GPS */
+  hasGps?: 'all' | 'yes' | 'no';
+  /** Inclusive aperture (f-number) range from EXIF FNumber */
+  apertureMin?: number;
+  apertureMax?: number;
+  /** Inclusive focal length (mm) range from EXIF FocalLength */
+  focalMin?: number;
+  focalMax?: number;
+  /**
+   * Inclusive shutter speed range in seconds (from EXIF ExposureTime).
+   * Examples: 1/250 → 0.004, 1/60 → ~0.0167, 1 → 1.0
+   */
+  shutterMin?: number;
+  shutterMax?: number;
+  /** File extension filter, e.g. "arw", "jpg" (no dot); undefined = all */
+  fileExt?: string;
+  /** Substring match on caption/title (EXIF ImageDescription / XPComment / XPTitle) */
+  caption?: string;
+  /** Caption presence: undefined/'all' | 'yes' | 'no' */
+  hasCaption?: 'all' | 'yes' | 'no';
+  /** People (PersonInImage) presence: undefined/'all' | 'yes' | 'no' */
+  hasPeople?: 'all' | 'yes' | 'no';
+  /** Event presence: undefined/'all' | 'yes' | 'no' */
+  hasEvent?: 'all' | 'yes' | 'no';
+  /** Scene presence: undefined/'all' | 'yes' | 'no' */
+  hasScene?: 'all' | 'yes' | 'no';
+  /** Genre (IntellectualGenre) presence: undefined/'all' | 'yes' | 'no' */
+  hasGenre?: 'all' | 'yes' | 'no';
+  /** IPTC Subject Code presence: undefined/'all' | 'yes' | 'no' */
+  hasSubjectCode?: 'all' | 'yes' | 'no';
+  /** photoshop:Category presence: undefined/'all' | 'yes' | 'no' */
+  hasCategory?: 'all' | 'yes' | 'no';
+  /** Job Identifier presence: undefined/'all' | 'yes' | 'no' */
+  hasJobId?: 'all' | 'yes' | 'no';
+  /** photoshop:Urgency set (1-8): undefined/'all' | 'yes' | 'no' */
+  hasUrgency?: 'all' | 'yes' | 'no';
+  /** Urgency max level inclusive (1=high … 8=low); when set with hasUrgency yes, filter urgency <= max */
+  urgencyMax?: number;
+  /** Caption writer presence */
+  hasCaptionWriter?: 'all' | 'yes' | 'no';
+  /** Digital source type presence */
+  hasDigitalSource?: 'all' | 'yes' | 'no';
+  /** Headline presence */
+  hasHeadline?: 'all' | 'yes' | 'no';
+  /** Title (XPTitle/dc:title) presence */
+  hasTitle?: 'all' | 'yes' | 'no';
+  /** Credit presence */
+  hasCredit?: 'all' | 'yes' | 'no';
+  /** Source presence */
+  hasSource?: 'all' | 'yes' | 'no';
+  /** Instructions presence */
+  hasInstructions?: 'all' | 'yes' | 'no';
+  /** Creator / Artist presence */
+  hasCreator?: 'all' | 'yes' | 'no';
+  /** Rights / Copyright / UsageTerms presence */
+  hasRights?: 'all' | 'yes' | 'no';
+  /** Job Title / AuthorsPosition presence */
+  hasJobTitle?: 'all' | 'yes' | 'no';
+  /** City presence (IPTC) */
+  hasCity?: 'all' | 'yes' | 'no';
+  /** Country presence (IPTC) */
+  hasCountry?: 'all' | 'yes' | 'no';
+  /** State / Province presence (IPTC) */
+  hasState?: 'all' | 'yes' | 'no';
+  /** Sub-location / Location presence (IPTC Iptc4xmpCore:Location) */
+  hasSubLocation?: 'all' | 'yes' | 'no';
+  /** Country code (ISO) presence — Iptc4xmpCore:CountryCode */
+  hasCountryCode?: 'all' | 'yes' | 'no';
+  /** Rights Usage Terms presence only (xmpRights:UsageTerms) */
+  hasUsageTerms?: 'all' | 'yes' | 'no';
+  /** IPTC location presence (City/Country/Location/State): undefined/'all' | 'yes' | 'no' */
+  hasLocation?: 'all' | 'yes' | 'no';
+  /** Frame orientation from EXIF pixel size (when available) */
+  orientation?: 'all' | 'landscape' | 'portrait' | 'square';
+  /** Keyword presence: undefined/'all' = any; 'yes' = has user: tags; 'no' = untagged */
+  /** Manual stack presence: undefined/'all' | 'yes' | 'no' */
+  hasStack?: 'all' | 'yes' | 'no';
+  hasKeywords?: 'all' | 'yes' | 'no';
+  /** Virtual copies: undefined/'all' | 'yes' | 'no' */
+  virtualCopies?: 'all' | 'yes' | 'no';
 }
 
 export interface Folder {
@@ -268,6 +419,9 @@ export interface ImageFile {
   is_cloud_placeholder: boolean;
   is_raw: boolean;
   group_id: string | null;
+  /** Optional pixel size when known (orientation filters prefer these). */
+  width?: number;
+  height?: number;
 }
 
 export interface Option {
@@ -295,6 +449,8 @@ export interface Preset {
   includeMasks?: boolean;
   includeCropTransform?: boolean;
   presetType?: 'tool' | 'style';
+  /** LR crs:Group when exporting XMP (optional) */
+  group?: string | null;
 }
 
 export interface Progress {
@@ -332,6 +488,9 @@ export enum LibraryDisplayMode {
   Grid = 'grid',
   Cull = 'cull',
   List = 'list',
+  Compare = 'compare',
+  Survey = 'survey',
+  Loupe = 'loupe',
 }
 
 export enum ThumbnailSize {
@@ -349,6 +508,9 @@ export interface TransformState {
 export interface UiVisibility {
   folderTree: boolean;
   filmstrip: boolean;
+  developLeft: boolean;
+  /** Library right rail (Histogram / QD / Keywording / Metadata) */
+  libraryRight?: boolean;
 }
 
 export interface WaveformData {

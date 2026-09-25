@@ -186,13 +186,157 @@ export function useTauriListeners({
             progress: { current: event.payload.current, total: event.payload.total },
           });
       }),
-      listen('import-complete', () => {
-        if (isEffectActive) {
-          useProcessStore.getState().setImportState({ status: Status.Success });
-          refs.current.refreshAllFolderTrees();
-          const currentPath = useLibraryStore.getState().currentFolderPath;
-          if (currentPath) {
-            refs.current.handleSelectSubfolder(currentPath, false);
+      listen('import-complete', async (event: any) => {
+        if (!isEffectActive) return;
+        useProcessStore.getState().setImportState({ status: Status.Success });
+        refs.current.refreshAllFolderTrees();
+        const currentPath = useLibraryStore.getState().currentFolderPath;
+        const destinationFolder =
+          event?.payload?.destinationFolder || currentPath;
+        if (destinationFolder) {
+          refs.current.handleSelectSubfolder(destinationFolder, false);
+        } else if (currentPath) {
+          refs.current.handleSelectSubfolder(currentPath, false);
+        }
+
+        // Optional: apply a develop preset only to the files just imported (not the whole folder)
+        const developPresetId = event?.payload?.developPresetId as string | null | undefined;
+        const importedPaths = (event?.payload?.importedPaths as string[] | undefined) || [];
+        const buildPreviews = event?.payload?.buildPreviews as boolean | undefined;
+        const keywords = (event?.payload?.keywords as string[] | undefined) || [];
+        const importCreator = (event?.payload?.creator as string | null | undefined) || '';
+        const importCopyright = (event?.payload?.copyright as string | null | undefined) || '';
+        const importCaption = (event?.payload?.caption as string | null | undefined) || '';
+        const copyAsDng = !!(event?.payload?.copyAsDng);
+        if (copyAsDng) {
+          const { toast } = await import('react-toastify');
+          const passthrough = Number(event?.payload?.dngPassthrough ?? 0);
+          const deferred = Number(event?.payload?.dngDeferred ?? 0);
+          if (passthrough > 0 && deferred === 0) {
+            toast.success(
+              `Copy as DNG: ${passthrough} file(s) already DNG — kept as .dng.`,
+            );
+          } else if (passthrough > 0 && deferred > 0) {
+            toast.info(
+              `Copy as DNG: ${passthrough} already DNG kept as .dng; ${deferred} RAW kept as originals (conversion deferred).`,
+            );
+          } else {
+            toast.info(
+              `Copy as DNG: ${deferred || 'files'} imported as originals (RAW→DNG conversion not enabled yet).`,
+            );
+          }
+        }
+        if (importedPaths.length > 0) {
+          useLibraryStore.getState().setLibrary({
+            lastImportedPaths: importedPaths,
+            showPreviousImportOnly: false,
+          });
+          // LR-style import summary: click toast → Previous Import scope
+          try {
+            const { toast } = await import('react-toastify');
+            const n = importedPaths.length;
+            toast.success(
+              n === 1
+                ? 'Import complete — 1 photo · click to view'
+                : `Import complete — ${n} photos · click to view`,
+              {
+                autoClose: 7000,
+                onClick: () => {
+                  useLibraryStore.getState().setLibrary({
+                    showPreviousImportOnly: true,
+                    showQuickCollectionOnly: false,
+                    showSelectedOnly: false,
+                    activeAlbumId: null,
+                    multiSelectedPaths: [...importedPaths],
+                    libraryActivePath: importedPaths[importedPaths.length - 1],
+                    selectionAnchorPath: importedPaths[0],
+                  });
+                },
+              },
+            );
+          } catch {
+            /* toast optional */
+          }
+        }
+        const hasIptc = !!(importCreator || importCopyright || importCaption);
+        if ((developPresetId || buildPreviews || keywords.length > 0 || hasIptc) && importedPaths.length > 0) {
+          try {
+            const { invoke } = await import('@tauri-apps/api/core');
+            const { Invokes } = await import('../components/ui/AppProperties');
+            if (developPresetId) {
+              const presetItems: any[] = await invoke(Invokes.LoadPresets);
+              let presetAdj: any = null;
+              for (const item of presetItems) {
+                if (item.preset?.id === developPresetId) {
+                  presetAdj = item.preset.adjustments;
+                  break;
+                }
+                if (item.folder?.children) {
+                  const child = item.folder.children.find((c: any) => c.id === developPresetId);
+                  if (child) {
+                    presetAdj = child.adjustments;
+                    break;
+                  }
+                }
+              }
+              if (presetAdj) {
+                await invoke(Invokes.ApplyAdjustmentsToPaths, {
+                  paths: importedPaths,
+                  adjustments: presetAdj,
+                });
+              }
+            }
+            // LR-style "Build Previews" on import: queue thumbnail generation for new files
+            if (keywords.length > 0) {
+              // Expand hierarchical keywords (travel/paris → travel + travel/paris)
+              const expanded = new Set<string>();
+              for (const kw of keywords) {
+                const bare = String(kw)
+                  .trim()
+                  .toLowerCase()
+                  .replace(/^user:/, '')
+                  .replace(/\s*>\s*/g, '/')
+                  .replace(/\s*\|\s*/g, '/');
+                if (!bare) continue;
+                const parts = bare.split('/').map((p) => p.trim()).filter(Boolean);
+                let acc = '';
+                for (const part of parts) {
+                  acc = acc ? `${acc}/${part}` : part;
+                  expanded.add(`user:${acc}`);
+                }
+              }
+              for (const tag of expanded) {
+                try {
+                  await invoke(Invokes.AddTagForPaths, { paths: importedPaths, tag });
+                } catch (e) {
+                  console.warn('import keyword failed', tag, e);
+                }
+              }
+            }
+            if (hasIptc) {
+              const updates: Record<string, string> = {};
+              if (importCreator) {
+                updates.Artist = importCreator;
+                updates.Creator = importCreator;
+              }
+              if (importCopyright) {
+                updates.Copyright = importCopyright;
+              }
+              if (importCaption) {
+                updates.ImageDescription = importCaption;
+                updates.XPTitle = importCaption;
+              }
+              try {
+                await invoke(Invokes.UpdateExifFields, { paths: importedPaths, updates });
+              } catch (e) {
+                console.warn('import IPTC failed', e);
+              }
+            }
+            if (buildPreviews) {
+              await invoke('update_thumbnail_queue', { paths: importedPaths });
+            }
+          } catch (err) {
+            console.error('Failed post-import develop/preview work:', err);
           }
         }
       }),

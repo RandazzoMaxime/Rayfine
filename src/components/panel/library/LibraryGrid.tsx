@@ -23,8 +23,26 @@ function ListHeader({ widths, setWidths, containerRef, sortCriteria, onSortChang
     widths.name +
     widths.date +
     widths.rating +
+    (widths.flag || 0) +
+    (widths.edited || 0) +
+    (widths.fileType || 0) +
+    (widths.gps || 0) +
+    (widths.urgency || 0) +
+    (widths.creator || 0) +
+    (widths.credit || 0) +
+    (widths.city || 0) +
+    (widths.country || 0) +
+    (widths.state || 0) +
+    (widths.headline || 0) +
     widths.color +
-    (showExifCols ? widths.shutter + widths.aperture + widths.iso + widths.focal : 0);
+    (showExifCols
+      ? widths.shutter +
+        widths.aperture +
+        widths.iso +
+        widths.focal +
+        (widths.camera || 0) +
+        (widths.lens || 0)
+      : 0);
 
   const handleResize = (e: React.MouseEvent, leftCol: string, rightCol: string) => {
     e.preventDefault();
@@ -105,14 +123,90 @@ function ListHeader({ widths, setWidths, containerRef, sortCriteria, onSortChang
   };
 
   return (
-    <div className="flex items-center w-full h-9 bg-bg-secondary/80 backdrop-blur-sm border-b border-border-color/50 shrink-0">
+    <div className="flex items-center w-full h-8 bg-bg-secondary/80 backdrop-blur-sm border-b border-border-color/50 shrink-0">
       <Column title="" widthKey="thumbnail" nextKey="name" />
       <Column title={t('library.grid.columns.name')} widthKey="name" nextKey="date" sortKey="name" />
-      <Column title={t('library.grid.columns.modified')} widthKey="date" nextKey="rating" sortKey="date" />
-      <Column title={t('library.grid.columns.rating')} widthKey="rating" nextKey="color" sortKey="rating" />
+      <Column
+        title={t('library.grid.columns.captureTime' as any, { defaultValue: 'Capture Time' })}
+        widthKey="date"
+        nextKey="rating"
+        sortKey="date_taken"
+      />
+      <Column title={t('library.grid.columns.rating')} widthKey="rating" nextKey="flag" sortKey="rating" />
+      <Column
+        title={t('library.grid.columns.flag' as any, { defaultValue: 'Flag' })}
+        widthKey="flag"
+        nextKey="edited"
+        sortKey="flag"
+      />
+      <Column
+        title={t('library.grid.columns.edited' as any, { defaultValue: 'Edit' })}
+        widthKey="edited"
+        nextKey="fileType"
+        sortKey="edited"
+      />
+      <Column
+        title={t('library.grid.columns.fileType' as any, { defaultValue: 'Type' })}
+        widthKey="fileType"
+        nextKey="gps"
+        sortKey="file_type"
+      />
+      <Column
+        title={t('library.grid.columns.gps' as any, { defaultValue: 'GPS' })}
+        widthKey="gps"
+        nextKey="urgency"
+        sortKey="has_gps"
+      />
+      <Column
+        title={t('library.grid.columns.urgency' as any, { defaultValue: 'Urg' })}
+        widthKey="urgency"
+        nextKey="creator"
+        sortKey="urgency"
+      />
+      <Column
+        title={t('library.grid.columns.creator' as any, { defaultValue: 'Creator' })}
+        widthKey="creator"
+        nextKey="credit"
+        sortKey="creator"
+      />
+      <Column
+        title={t('library.grid.columns.credit' as any, { defaultValue: 'Credit' })}
+        widthKey="credit"
+        nextKey="city"
+        sortKey="credit"
+      />
+      <Column
+        title={t('library.grid.columns.city' as any, { defaultValue: 'City' })}
+        widthKey="city"
+        nextKey="country"
+        sortKey="city"
+      />
+      <Column
+        title={t('library.grid.columns.country' as any, { defaultValue: 'Country' })}
+        widthKey="country"
+        nextKey="state"
+        sortKey="country"
+      />
+      <Column
+        title={t('library.grid.columns.state' as any, { defaultValue: 'State' })}
+        widthKey="state"
+        nextKey="headline"
+        sortKey="state"
+      />
+      <Column
+        title={t('library.grid.columns.headline' as any, { defaultValue: 'Headline' })}
+        widthKey="headline"
+        nextKey="color"
+        sortKey="headline"
+      />
       {showExifCols ? (
         <>
-          <Column title={t('library.grid.columns.label')} widthKey="color" nextKey="shutter" />
+          <Column
+            title={t('library.grid.columns.label')}
+            widthKey="color"
+            nextKey="shutter"
+            sortKey="color"
+          />
           <Column
             title={t('library.grid.columns.shutter')}
             widthKey="shutter"
@@ -121,10 +215,21 @@ function ListHeader({ widths, setWidths, containerRef, sortCriteria, onSortChang
           />
           <Column title={t('library.grid.columns.aperture')} widthKey="aperture" nextKey="iso" sortKey="aperture" />
           <Column title={t('library.grid.columns.iso')} widthKey="iso" nextKey="focal" sortKey="iso" />
-          <Column title={t('library.grid.columns.focal')} widthKey="focal" sortKey="focal_length" />
+          <Column title={t('library.grid.columns.focal')} widthKey="focal" nextKey="camera" sortKey="focal_length" />
+          <Column
+            title={t('library.grid.columns.camera' as any, { defaultValue: 'Camera' })}
+            widthKey="camera"
+            nextKey="lens"
+            sortKey="camera"
+          />
+          <Column
+            title={t('library.grid.columns.lens' as any, { defaultValue: 'Lens' })}
+            widthKey="lens"
+            sortKey="lens"
+          />
         </>
       ) : (
-        <Column title={t('library.grid.columns.label')} widthKey="color" />
+        <Column title={t('library.grid.columns.label')} widthKey="color" sortKey="color" />
       )}
     </div>
   );
@@ -175,6 +280,7 @@ export default function LibraryGrid(props: any) {
     thumbnailSizeOptions,
     onThumbnailSizeChange,
     groupBadgeInfo,
+    onRate,
   } = props;
   const { listColumnWidths, setLibrary, sortCriteria, setSortCriteria } = useLibraryStore(
     useShallow((state) => ({
@@ -291,8 +397,9 @@ export default function LibraryGrid(props: any) {
     if (gridSize.width === 0 || imageList.length === 0) return null;
 
     const isListView = libraryDisplayMode === LibraryDisplayMode.List;
-    const OUTER_PADDING = isListView ? 0 : 12;
-    const ITEM_GAP = isListView ? 0 : 12;
+    // Tighter grid spacing (closer to classic dense photo-library grids)
+    const OUTER_PADDING = isListView ? 0 : 8;
+    const ITEM_GAP = isListView ? 0 : 4;
     const minThumbWidth = thumbnailSizeOptions.find((o: any) => o.id === thumbnailSize)?.size || 240;
 
     const availableWidth = gridSize.width - OUTER_PADDING * 2;
@@ -306,12 +413,28 @@ export default function LibraryGrid(props: any) {
       listColumnWidths.name +
       listColumnWidths.date +
       listColumnWidths.rating +
+      (listColumnWidths.flag || 0) +
+      (listColumnWidths.edited || 0) +
+      (listColumnWidths.fileType || 0) +
+      (listColumnWidths.gps || 0) +
+      (listColumnWidths.urgency || 0) +
+      (listColumnWidths.creator || 0) +
+      (listColumnWidths.credit || 0) +
+      (listColumnWidths.city || 0) +
+      (listColumnWidths.country || 0) +
+      (listColumnWidths.state || 0) +
+      (listColumnWidths.headline || 0) +
       listColumnWidths.color +
       (showExifCols
-        ? listColumnWidths.shutter + listColumnWidths.aperture + listColumnWidths.iso + listColumnWidths.focal
+        ? listColumnWidths.shutter +
+          listColumnWidths.aperture +
+          listColumnWidths.iso +
+          listColumnWidths.focal +
+          (listColumnWidths.camera || 0) +
+          (listColumnWidths.lens || 0)
         : 0);
 
-    const listRowHeight = Math.max(36, Math.min(300, (availableWidth * listColumnWidths.thumbnail) / totalBase));
+    const listRowHeight = Math.max(32, Math.min(300, (availableWidth * listColumnWidths.thumbnail) / totalBase));
     const rowHeight = isListView ? listRowHeight : itemWidth + ITEM_GAP;
     const headerHeight = 40;
 
@@ -468,6 +591,7 @@ export default function LibraryGrid(props: any) {
       queueThumbnailRequest,
       onToggleRecursiveFolder: handleToggleRecursiveFolder,
       groupBadgeInfo,
+      onRate,
     };
   }, [
     gridData,
@@ -484,6 +608,7 @@ export default function LibraryGrid(props: any) {
     queueThumbnailRequest,
     handleToggleRecursiveFolder,
     groupBadgeInfo,
+    onRate,
   ]);
 
   const getItemSize = useCallback(

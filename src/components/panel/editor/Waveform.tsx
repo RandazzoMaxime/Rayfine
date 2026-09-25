@@ -1,5 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
-import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
+import { useEffect, useRef } from 'react';
 import { AlertOctagon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { WaveformData } from '../../ui/AppProperties';
@@ -59,7 +58,7 @@ const HistogramView = ({ histogram }: { histogram: any }) => {
   const redMax = Math.max(...(histogram.red || [0]));
   const greenMax = Math.max(...(histogram.green || [0]));
   const blueMax = Math.max(...(histogram.blue || [0]));
-  const globalMax = Math.max(redMax, greenMax, blueMax, 1);
+  const globalMax = Math.max(redMax, greenMax, blueMax, 1) / 0.9;
 
   const getFill = (data: number[]) => {
     const pathData = data.map((val, i) => `${(i / 255) * 255},${255 - (val / globalMax) * 255}`).join(' L');
@@ -101,74 +100,6 @@ const HistogramView = ({ histogram }: { histogram: any }) => {
       })}
     </svg>
   );
-};
-
-const FakeHistogramLoader = () => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    let animationFrameId: number;
-    let time = 0;
-    let lastTime = 0;
-
-    const ANIMATION_SPEED = 1.0;
-
-    const render = (currentTime: number) => {
-      if (lastTime === 0) lastTime = currentTime;
-
-      let dt = (currentTime - lastTime) / 1000;
-      lastTime = currentTime;
-
-      if (dt > 0.05) dt = 0.05;
-
-      time += dt * ANIMATION_SPEED;
-
-      ctx.clearRect(0, 0, 256, 256);
-      ctx.globalCompositeOperation = 'screen';
-
-      const drawChannel = (
-        color: string,
-        strokeColor: string,
-        offset: number,
-        amplitude: number,
-        phaseSpeed: number,
-      ) => {
-        ctx.beginPath();
-        ctx.moveTo(0, 256);
-        for (let x = 0; x <= 256; x += 4) {
-          const noise = Math.sin(x * 0.2 + time * phaseSpeed * 2) * 0.5;
-          const wave = Math.sin(x * 0.03 + time * phaseSpeed + offset) * amplitude;
-
-          const baseHeight = 1;
-
-          const y = 256 - baseHeight - Math.max(0, wave + noise);
-          ctx.lineTo(x, y);
-        }
-        ctx.lineTo(256, 256);
-        ctx.fillStyle = color;
-        ctx.fill();
-        ctx.strokeStyle = strokeColor;
-        ctx.lineWidth = 1;
-        ctx.stroke();
-      };
-
-      drawChannel('rgba(255, 107, 107, 0.55)', 'rgba(255, 107, 107, 0.3)', 0, 5, 0.8);
-      drawChannel('rgba(107, 203, 119, 0.55)', 'rgba(107, 203, 119, 0.3)', 2, 4, -1.0);
-      drawChannel('rgba(77, 150, 255, 0.55)', 'rgba(77, 150, 255, 0.3)', 4, 6, 0.6);
-
-      animationFrameId = requestAnimationFrame(render);
-    };
-
-    animationFrameId = requestAnimationFrame(render);
-    return () => cancelAnimationFrame(animationFrameId);
-  }, []);
-
-  return <canvas ref={canvasRef} width={256} height={256} className="w-full h-full opacity-60" />;
 };
 
 const useRawRgbaCanvas = (
@@ -220,231 +151,42 @@ const WaveformCanvas = ({
   );
 };
 
-const FakeWaveformLoader = ({ mode }: { mode: string }) => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const lastTimeRef = useRef<number>(0);
-  const spawnAccumulatorRef = useRef<number>(0);
-
-  const MAX_PARTICLES = 10000;
-  const particles = useRef(
-    Array.from({ length: MAX_PARTICLES }, () => ({
-      x: 0,
-      y: 0,
-      targetX: 0,
-      targetY: 0,
-      life: 0,
-      maxLife: 1,
-      r: 255,
-      g: 255,
-      b: 255,
-      active: false,
-    })),
-  ).current;
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d', { alpha: true });
-    if (!ctx) return;
-
-    const WIDTH = 256;
-    const HEIGHT = 256;
-    canvas.width = WIDTH;
-    canvas.height = HEIGHT;
-
-    particles.forEach((p) => (p.active = false));
-    lastTimeRef.current = 0;
-    spawnAccumulatorRef.current = 0;
-    let isPrewarmed = false;
-
-    const imgData = ctx.createImageData(WIDTH, HEIGHT);
-    const data = imgData.data;
-
-    const gridBuffer = new Uint8ClampedArray(WIDTH * HEIGHT * 4);
-    if (mode === DisplayMode.Vectorscope) {
-      for (let py = 0; py < HEIGHT; py++) {
-        for (let px = 0; px < WIDTH; px++) {
-          const dx = px - 128.0;
-          const dy = 128.0 - py;
-          const min_d = Math.min(Math.abs(dx), Math.abs(dy));
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          const off = (py * WIDTH + px) * 4;
-
-          if (min_d <= 1.0) {
-            const alpha = Math.max(0, 40.0 - min_d * 30.0);
-            gridBuffer[off] = 255;
-            gridBuffer[off + 1] = 255;
-            gridBuffer[off + 2] = 255;
-            gridBuffer[off + 3] = alpha;
-          } else if (Math.abs(dist - 127.0) < 0.8 || Math.abs(dist - 64.0) < 0.8) {
-            gridBuffer[off] = 255;
-            gridBuffer[off + 1] = 255;
-            gridBuffer[off + 2] = 255;
-            gridBuffer[off + 3] = 15;
-          } else if (dx < 0.0 && dy > 0.0 && Math.abs(dy + 1.53 * dx) < 1.0) {
-            gridBuffer[off] = 255;
-            gridBuffer[off + 1] = 200;
-            gridBuffer[off + 2] = 150;
-            gridBuffer[off + 3] = 120;
-          }
-        }
-      }
-    }
-
-    let animationFrameId: number;
-
-    const render = (time: number) => {
-      if (lastTimeRef.current === 0) lastTimeRef.current = time;
-      let dt = (time - lastTimeRef.current) / 1000;
-      lastTimeRef.current = time;
-
-      if (dt > 0.05) dt = 0.05;
-
-      let frameDt = dt;
-
-      if (!isPrewarmed) {
-        frameDt = 0.5;
-        isPrewarmed = true;
-      }
-
-      data.set(gridBuffer);
-
-      const SPAWN_RATE = 1000;
-      spawnAccumulatorRef.current += SPAWN_RATE * frameDt;
-
-      const dotsToSpawn = Math.floor(spawnAccumulatorRef.current);
-      if (dotsToSpawn > 0) {
-        spawnAccumulatorRef.current -= dotsToSpawn;
-        let spawnedCount = 0;
-
-        for (let i = 0; i < MAX_PARTICLES && spawnedCount < dotsToSpawn; i++) {
-          const p = particles[i];
-          if (!p.active) {
-            p.active = true;
-
-            if (mode !== DisplayMode.Vectorscope) {
-              p.x = Math.random() * WIDTH;
-              p.targetX = p.x;
-
-              p.y = HEIGHT - Math.random() * 2;
-
-              const isPot = Math.random() < 0.4;
-
-              if (isPot) {
-                p.targetY = HEIGHT - Math.random() * 6;
-              } else {
-                const randomCurve = Math.pow(Math.random(), 1.2);
-                p.targetY = HEIGHT - randomCurve * HEIGHT;
-              }
-
-              if (mode === DisplayMode.Parade) {
-                const section = Math.floor((p.x / WIDTH) * 3);
-                if (section === 0) {
-                  p.r = 255;
-                  p.g = 70;
-                  p.b = 70;
-                } else if (section === 1) {
-                  p.r = 70;
-                  p.g = 255;
-                  p.b = 70;
-                } else {
-                  p.r = 70;
-                  p.g = 150;
-                  p.b = 255;
-                }
-              } else if (mode === DisplayMode.Rgb) {
-                const rand = Math.random();
-                if (rand > 0.85) {
-                  p.r = 255;
-                  p.g = 80;
-                  p.b = 80;
-                } else if (rand > 0.7) {
-                  p.r = 80;
-                  p.g = 255;
-                  p.b = 80;
-                } else if (rand > 0.55) {
-                  p.r = 80;
-                  p.g = 150;
-                  p.b = 255;
-                } else {
-                  p.r = 255;
-                  p.g = 255;
-                  p.b = 255;
-                }
-              } else {
-                p.r = 255;
-                p.g = 255;
-                p.b = 255;
-              }
-            }
-
-            const life = Math.random() * 5.0 + 8.0;
-            p.life = life;
-            p.maxLife = life;
-
-            spawnedCount++;
-          }
-        }
-      }
-
-      const speedMultiplier = 1;
-      const interpolation = 1 - Math.exp(-speedMultiplier * frameDt);
-
-      for (let i = 0; i < MAX_PARTICLES; i++) {
-        const p = particles[i];
-        if (p.active) {
-          p.life -= frameDt;
-
-          if (p.life <= 0) {
-            p.active = false;
-            continue;
-          }
-
-          p.x += (p.targetX - p.x) * interpolation;
-          p.y += (p.targetY - p.y) * interpolation;
-
-          const lifeRatio = p.life / p.maxLife;
-
-          let opacity = 1.0;
-          if (lifeRatio > 0.8) {
-            opacity = (1 - lifeRatio) / 0.12;
-          } else if (lifeRatio < 0.2) {
-            opacity = lifeRatio / 0.2;
-          }
-
-          const alpha = opacity * 0.18;
-
-          const px = Math.floor(p.x);
-          const py = Math.floor(p.y);
-
-          for (let dy = 0; dy < 3; dy++) {
-            for (let dx = 0; dx < 1.5; dx++) {
-              const cx = px + dx;
-              const cy = py + dy;
-
-              if (cx >= 0 && cx < WIDTH && cy >= 0 && cy < HEIGHT) {
-                const idx = (cy * WIDTH + cx) * 4;
-                data[idx] = Math.min(255, data[idx] + p.r * alpha);
-                data[idx + 1] = Math.min(255, data[idx + 1] + p.g * alpha);
-                data[idx + 2] = Math.min(255, data[idx + 2] + p.b * alpha);
-                data[idx + 3] = Math.min(255, data[idx + 3] + alpha * 255);
-              }
-            }
-          }
-        }
-      }
-
-      ctx.putImageData(imgData, 0, 0);
-      animationFrameId = requestAnimationFrame(render);
-    };
-
-    animationFrameId = requestAnimationFrame(render);
-
-    return () => cancelAnimationFrame(animationFrameId);
-  }, [mode, particles]);
-
+/** Static graticule drawn over the scope (DaVinci Resolve style): no motion, just reference lines. */
+const Graticule = ({ mode }: { mode: string }) => {
+  if (mode === DisplayMode.Vectorscope) {
+    return (
+      <svg viewBox="0 0 256 256" className="absolute inset-0 w-full h-full pointer-events-none" preserveAspectRatio="xMidYMid meet">
+        <circle cx="128" cy="128" r="127" fill="none" stroke="rgba(255,255,255,0.18)" strokeWidth="1" />
+        <circle cx="128" cy="128" r="64" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="1" />
+        <line x1="128" y1="0" x2="128" y2="256" stroke="rgba(255,255,255,0.1)" />
+        <line x1="0" y1="128" x2="256" y2="128" stroke="rgba(255,255,255,0.1)" />
+        {/* skin-tone line */}
+        <line x1="128" y1="128" x2="46" y2="3" stroke="rgba(255,200,150,0.35)" />
+      </svg>
+    );
+  }
+  const levels = mode === DisplayMode.Histogram ? [25, 50, 75] : [0, 25, 50, 75, 100];
+  const vertical = mode === DisplayMode.Histogram;
   return (
-    <canvas ref={canvasRef} className={`w-full h-full ${mode === DisplayMode.Vectorscope ? 'object-contain' : ''}`} />
+    <div className="absolute inset-0 pointer-events-none">
+      {levels.map((l) => (
+        <div
+          key={l}
+          className={vertical ? 'absolute top-0 bottom-0 border-l border-white/10' : 'absolute left-0 right-0 border-t border-white/10'}
+          style={vertical ? { left: `${l}%` } : { bottom: `${l}%` }}
+        >
+          {!vertical && (
+            <span className="absolute left-0.5 -top-3 text-[8px] leading-none text-white/35 tabular-nums">{l}</span>
+          )}
+        </div>
+      ))}
+      {mode === DisplayMode.Parade && (
+        <>
+          <div className="absolute top-0 bottom-0 border-l border-white/15" style={{ left: '33.333%' }} />
+          <div className="absolute top-0 bottom-0 border-l border-white/15" style={{ left: '66.666%' }} />
+        </>
+      )}
+    </div>
   );
 };
 
@@ -458,14 +200,9 @@ export default function Waveform({
   theme,
 }: WaveformProps) {
   const { t } = useTranslation();
-  const [isHovered, setIsHovered] = useState(false);
-  const hoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   const isLightTheme = theme ? ['light', 'snow', 'arctic'].includes(theme) : false;
   const isHistogram = displayMode === DisplayMode.Histogram;
   const isVectorscope = displayMode === DisplayMode.Vectorscope;
-  const isReady = isHistogram ? !!(histogram && histogram.red) : !!waveformData;
-  const hadDataOnMount = useRef(isReady);
   const width = waveformData?.width || 256;
   const height = waveformData?.height || 256;
 
@@ -479,170 +216,56 @@ export default function Waveform({
       }[displayMode as DisplayMode]
     : '';
 
-  const handleMouseEnter = () => {
-    hoverTimeoutRef.current = setTimeout(() => {
-      setIsHovered(true);
-    }, 250);
-  };
-
-  const handleMouseLeave = () => {
-    if (hoverTimeoutRef.current) {
-      clearTimeout(hoverTimeoutRef.current);
-      hoverTimeoutRef.current = null;
-    }
-    setIsHovered(false);
-  };
-
-  useEffect(() => {
-    return () => {
-      if (hoverTimeoutRef.current) {
-        clearTimeout(hoverTimeoutRef.current);
-      }
-    };
-  }, []);
-
-  const baseButtonClass =
-    'relative grow text-center px-1.5 py-1 text-xs rounded-lg font-medium transition-colors duration-150';
-  const inactiveButtonClass = 'text-text-primary hover:bg-bg-tertiary';
-
-  const isLoaderMode = [
-    DisplayMode.Luma,
-    DisplayMode.Rgb,
-    DisplayMode.Parade,
-    DisplayMode.Vectorscope,
-    DisplayMode.Histogram,
-  ].includes(displayMode as DisplayMode);
-
   return (
-    <div
-      className="relative w-full h-full bg-surface rounded-lg overflow-hidden border-border-color shadow-inner"
-      onMouseEnter={handleMouseEnter}
-      onMouseLeave={handleMouseLeave}
-    >
-      <div
-        className="absolute inset-0 z-0 pointer-events-none"
-        style={{
-          isolation: 'isolate',
-          filter: isLightTheme ? 'invert(1) hue-rotate(180deg)' : 'none',
-          transition: 'filter 0.3s ease',
-        }}
-      >
-        <AnimatePresence initial={!hadDataOnMount.current} mode="sync">
-          {isReady ? (
-            isHistogram ? (
-              <motion.div
-                key="waveform-histogram"
-                initial={{ opacity: 0, scaleY: 0 }}
-                animate={{ opacity: 1, scaleY: 1 }}
-                exit={{ opacity: 0, scaleY: 0 }}
-                transition={{
-                  duration: 0.5,
-                  ease: [0.22, 1, 0.36, 1],
-                  opacity: { duration: 0.4 },
-                }}
-                style={{ transformOrigin: 'bottom' }}
-                className="absolute inset-0 z-10"
-              >
-                <HistogramView histogram={histogram} />
-              </motion.div>
-            ) : (
-              <motion.div
-                key={`waveform-canvas-${displayMode}`}
-                initial={{ opacity: 0, ...(isVectorscope ? {} : { scaleY: 0 }) }}
-                animate={{ opacity: 1, ...(isVectorscope ? {} : { scaleY: 1 }) }}
-                exit={{ opacity: 0, ...(isVectorscope ? {} : { scaleY: 0 }) }}
-                transition={{
-                  duration: 0.5,
-                  ease: [0.22, 1, 0.36, 1],
-                  opacity: { duration: 0.4 },
-                }}
-                style={{ transformOrigin: 'bottom' }}
-                className="absolute inset-0 z-10"
-              >
-                <WaveformCanvas
-                  base64Data={activeData || ''}
-                  width={width}
-                  height={height}
-                  isVectorscope={isVectorscope}
-                />
-              </motion.div>
-            )
-          ) : isLoaderMode ? (
-            <motion.div
-              key={`waveform-loader-${displayMode}`}
-              initial={{ opacity: 0 }}
-              animate={{
-                opacity: 1,
-                transition: { duration: 0.6, ease: 'easeOut' },
-              }}
-              exit={{
-                opacity: 0,
-                transition: { duration: 0.2, ease: 'easeIn' },
-              }}
-              className="absolute inset-0 pointer-events-none z-0"
-            >
-              {isHistogram ? <FakeHistogramLoader /> : <FakeWaveformLoader mode={displayMode} />}
-            </motion.div>
-          ) : null}
-        </AnimatePresence>
-      </div>
-
-      <AnimatePresence>
-        {isHovered && (
-          <motion.div
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 8 }}
-            transition={{ duration: 0.15, ease: 'easeOut' }}
-            className="absolute inset-x-0 bottom-0 p-2 pt-6 bg-linear-to-t from-black/80 to-transparent flex justify-center z-20"
+    <div className="w-full h-full flex flex-col gap-1">
+      {/* Scope selector — always visible, no animation */}
+      <div className="shrink-0 flex items-center gap-0.5">
+        {modeButtons.map(({ mode, label, tooltip }) => (
+          <button
+            key={mode}
+            type="button"
+            onClick={() => setDisplayMode(mode)}
+            data-tooltip={t(tooltip as any)}
+            className={`flex-1 h-5 rounded text-[10px] font-semibold ${
+              displayMode === mode ? 'bg-card-active text-text-primary' : 'text-text-secondary hover:text-text-primary'
+            }`}
           >
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{ duration: 0.1, ease: 'easeOut', delay: 0.05 }}
-              className="flex items-center justify-center gap-1 p-1 bg-surface/90 backdrop-blur-md rounded-lg w-full shadow-lg border border-white/5"
-            >
-              {onToggleClipping && (
-                <>
-                  <button
-                    onClick={onToggleClipping}
-                    data-tooltip={
-                      showClipping ? t('ui.waveform.tooltips.hideClipping') : t('ui.waveform.tooltips.showClipping')
-                    }
-                    className={`relative flex items-center justify-center w-7 h-7 shrink-0 rounded-lg transition-colors duration-150 ${
-                      showClipping ? 'bg-accent text-button-text' : 'text-text-primary hover:bg-bg-tertiary'
-                    }`}
-                  >
-                    <AlertOctagon size={14} />
-                  </button>
-                  <div className="w-px h-5 bg-white/20 mx-1 shrink-0"></div>
-                </>
-              )}
-
-              <LayoutGroup>
-                {modeButtons.map(({ mode, label, tooltip, bgClass, textActiveClass }) => (
-                  <button
-                    key={mode}
-                    onClick={() => setDisplayMode(mode)}
-                    data-tooltip={t(tooltip)}
-                    className={`${baseButtonClass} ${displayMode === mode ? textActiveClass : inactiveButtonClass}`}
-                  >
-                    {displayMode === mode && (
-                      <motion.div
-                        layoutId="waveform-mode-indicator"
-                        className={`absolute inset-0 ${bgClass} rounded-lg`}
-                        transition={{ type: 'spring', bounce: 0.2, duration: 0.4 }}
-                      />
-                    )}
-                    <span className="relative z-10">{label}</span>
-                  </button>
-                ))}
-              </LayoutGroup>
-            </motion.div>
-          </motion.div>
+            {label}
+          </button>
+        ))}
+        {onToggleClipping && (
+          <button
+            type="button"
+            onClick={onToggleClipping}
+            data-tooltip={
+              showClipping ? t('ui.waveform.tooltips.hideClipping') : t('ui.waveform.tooltips.showClipping')
+            }
+            className={`w-6 h-5 flex items-center justify-center rounded ${
+              showClipping ? 'bg-accent text-button-text' : 'text-text-secondary hover:text-text-primary'
+            }`}
+          >
+            <AlertOctagon size={12} />
+          </button>
         )}
-      </AnimatePresence>
+      </div>
+      <div
+        className="relative flex-1 min-h-0 bg-black rounded overflow-hidden border border-border-color/40"
+        style={{ filter: isLightTheme ? 'invert(1) hue-rotate(180deg)' : undefined }}
+      >
+        {/* Plot area inset so the top (100 %) line and peaks are never clipped. */}
+        <div className="absolute inset-x-1.5 top-3 bottom-1.5">
+          {isHistogram ? (
+            <div className="absolute inset-0">
+              <HistogramView histogram={histogram} />
+            </div>
+          ) : activeData ? (
+            <div className="absolute inset-0">
+              <WaveformCanvas base64Data={activeData} width={width} height={height} isVectorscope={isVectorscope} />
+            </div>
+          ) : null}
+          <Graticule mode={displayMode} />
+        </div>
+      </div>
     </div>
   );
 }

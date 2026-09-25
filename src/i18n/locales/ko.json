@@ -15,7 +15,10 @@
       "reset": "초기화",
       "shadows": "섀도우",
       "toneMapper": "톤 매퍼",
-      "whites": "화이트"
+      "whites": "화이트",
+      "presence": "Presence",
+      "blackAndWhite": "Black & White",
+      "tone": "톤"
     },
     "color": {
       "ariaSelectColor": "{{name}} 색상 선택",
@@ -63,7 +66,16 @@
       "vibrance": "생동감",
       "wbPickerTooltip": "화이트 밸런스 피커",
       "wbPickerWgpuDisabled": "WB 피커: 설정에서 WGPU를 비활성화하세요.",
-      "whiteBalance": "화이트 밸런스"
+      "whiteBalance": "화이트 밸런스",
+      "bwMix": "B&W Mix",
+      "reds": "Reds",
+      "oranges": "Oranges",
+      "yellows": "Yellows",
+      "greens": "Greens",
+      "aquas": "Aquas",
+      "blues": "Blues",
+      "purples": "Purples",
+      "magentas": "Magentas"
     },
     "curves": {
       "channelTitle": "{{channel}} 채널",
@@ -92,7 +104,9 @@
       "resetAllParametric": "모든 파라메트릭 커브 초기화",
       "resetAllPoint": "모든 포인트 커브 초기화",
       "resetParametric": "{{channel}} 파라메트릭 커브 초기화",
-      "resetPoint": "{{channel}} 포인트 커브 초기화"
+      "resetPoint": "{{channel}} 포인트 커브 초기화",
+      "pointShort": "포인트",
+      "paramShort": "파라"
     },
     "details": {
       "blueYellow": "파랑/노랑",
@@ -108,7 +122,14 @@
       "sharpening": "선명도 향상",
       "sharpness": "선명도",
       "structure": "구조",
-      "threshold": "임계값"
+      "threshold": "임계값",
+      "luminanceDetail": "디테일",
+      "luminanceContrast": "대비",
+      "radius": "반경",
+      "sharpenDetail": "디테일",
+      "masking": "마스킹",
+      "colorDetail": "디테일",
+      "colorSmoothness": "부드러움"
     },
     "effects": {
       "amount": "양",
@@ -130,7 +151,52 @@
       "roughness": "거칠기",
       "roundness": "둥글기",
       "size": "크기",
-      "vignette": "비네트"
+      "vignette": "비네트",
+      "vignetteStyleHighlight": "하이라이트",
+      "vignetteStyleColor": "색상 우선",
+      "vignetteStylePaint": "페인트",
+      "highlights": "하이라이트",
+      "grainSeed": "시드",
+      "randomize": "랜덤"
+    },
+    "lens": {
+      "profile": "Profile Corrections",
+      "enableDistortion": "Remove chromatic aberration / distortion",
+      "enableVignette": "Enable profile vignette",
+      "enableTca": "Enable TCA",
+      "distortion": "Distortion amount",
+      "vignette": "Vignetting amount",
+      "tca": "TCA amount",
+      "defringe": "Defringe",
+      "defringePurple": "Purple Amount",
+      "defringePurpleHueLo": "Purple Hue Lo",
+      "defringePurpleHueHi": "Purple Hue Hi",
+      "defringeGreen": "Green Amount",
+      "defringeGreenHueLo": "Green Hue Lo",
+      "defringeGreenHueHi": "Green Hue Hi",
+      "manualCa": "수동 색수차",
+      "profileScale": "Profile Amount",
+      "profileDistortionScale": "Distortion Scale",
+      "profileVignetteScale": "Vignetting Scale"
+    },
+    "transform": {
+      "distortion": "Distortion",
+      "vertical": "Vertical",
+      "horizontal": "Horizontal",
+      "rotate": "Rotate",
+      "aspect": "Aspect",
+      "scale": "Scale",
+      "xOffset": "X Offset",
+      "yOffset": "Y Offset",
+      "geometry": "지오메트리",
+      "aspectScale": "종횡비 및 배율",
+      "upright": "Upright",
+      "uprightOff": "끄기",
+      "uprightAuto": "자동",
+      "uprightLevel": "수평",
+      "uprightVertical": "수직",
+      "uprightFull": "전체",
+      "constrainToWarp": "Constrain Crop to Warp"
     }
   },
   "contextMenus": {
@@ -200,7 +266,10 @@
       "resetAdjustments": "조정값 초기화",
       "stitchPanorama": "파노라마 스티칭",
       "tagging": "태그 지정",
-      "undo": "실행 취소"
+      "undo": "실행 취소",
+      "reimportXmp": "Reload Develop from XMP",
+      "showXmp": "Show XMP sidecar",
+      "exportDevelopXmp": "Develop을 XMP에 쓰기"
     },
     "folders": {
       "changeIcon": "아이콘 변경",
@@ -282,7 +351,12 @@
       "failedMove": "파일을 이동하지 못했습니다: {{err}}",
       "failedMoveError": "이동하지 못했습니다: {{err}}",
       "failedMoveInvalid": "이동하지 못했습니다: 대상 그룹을 찾을 수 없거나 유효하지 않습니다.",
-      "failedRemoveImages": "이미지를 제거하지 못했습니다: {{err}}"
+      "failedRemoveImages": "이미지를 제거하지 못했습니다: {{err}}",
+      "reimportedXmp": "Develop settings reloaded from XMP",
+      "reimportedXmpCount": "Develop reloaded from XMP ({{count}})",
+      "reimportXmpFailed": "XMP reimport failed ({{count}})",
+      "xmpNotFound": "No XMP sidecar found next to the image",
+      "exportedDevelopXmp": "Develop이 XMP 사이드카에 기록됨"
     }
   },
   "editor": {
@@ -298,7 +372,9 @@
         "color": "색상",
         "curves": "커브",
         "details": "디테일",
-        "effects": "효과"
+        "effects": "효과",
+        "optics": "Optics",
+        "geometry": "Transform"
       },
       "title": "조정",
       "tooltips": {
@@ -664,7 +740,10 @@
         "importPresetsTitle": "프리셋 가져오기",
         "legacyPreset": "레거시 프리셋",
         "presetFile": "프리셋 파일",
-        "rapidRawPreset": "RapidRAW 프리셋"
+        "rapidRawPreset": "RapidRAW 프리셋",
+        "importFolderTitle": "Import Lightroom Preset Folder",
+        "exportXmpTitle": "Export preset as XMP",
+        "exportXmpFolderTitle": "Choose folder for Lightroom XMP export"
       },
       "menu": {
         "configurePreset": "프리셋 구성",
@@ -677,12 +756,16 @@
         "newPreset": "새 프리셋",
         "overwrite": "덮어쓰기",
         "renameFolder": "폴더 이름 변경",
-        "sortAll": "모두 알파벳순 정렬"
+        "sortAll": "모두 알파벳순 정렬",
+        "exportXmp": "Export as Lightroom XMP"
       },
       "status": {
         "empty": "아직 저장된 프리셋이 없습니다. 직접 만들거나, 파일에서 가져오거나, 커뮤니티 프리셋을 둘러보세요.",
         "getCommunity": "커뮤니티 프리셋 받기",
-        "loading": "프리셋 로딩 중..."
+        "loading": "프리셋 로딩 중...",
+        "exportedXmp": "Exported {{count}} XMP presets",
+        "importedFolder": "Imported Lightroom presets from folder",
+        "importedFiles": "Imported {{count}} preset files"
       },
       "supports": {
         "cropTransform": "자르기 및 변형",
@@ -694,7 +777,9 @@
         "explore": "커뮤니티 프리셋 둘러보기",
         "export": "모든 프리셋을 .rrpreset 파일로 내보내기",
         "import": ".rrpreset 파일에서 프리셋 가져오기",
-        "saveNew": "새 프리셋으로 저장"
+        "saveNew": "새 프리셋으로 저장",
+        "importFolder": "Import all .xmp / .lrtemplate presets from a folder",
+        "exportAllXmp": "Export all presets as Lightroom XMP files"
       },
       "types": {
         "folder": "폴더",
@@ -889,7 +974,8 @@
         "all": "모든 유형",
         "nonRawOnly": "RAW가 아닌 항목만",
         "rawOnly": "RAW만"
-      }
+      },
+      "reset": "재설정"
     },
     "folders": {
       "addFolder": "폴더 추가",
@@ -916,7 +1002,8 @@
         "collapse": "접기",
         "expand": "펼치기",
         "sortFolders": "폴더 정렬"
-      }
+      },
+      "catalog": "카탈로그"
     },
     "grid": {
       "columns": {
@@ -1254,7 +1341,17 @@
       "organizeByDate": "날짜별 하위 폴더로 정리",
       "sourceFiles": "원본 파일",
       "startImport": "가져오기 시작",
-      "title": "가져오기 설정"
+      "title": "가져오기 설정",
+      "buildPreviews": "Build previews during import",
+      "applyPreset": "Apply develop preset on import",
+      "applyPresetNone": "None",
+      "copyAsDng": "Copy as DNG (not yet applied)",
+      "dontImportDuplicates": "Don't import suspected duplicates",
+      "addToCollection": "Add to collection (not yet applied)",
+      "renderPreviews": "Preview quality",
+      "previewMinimal": "Minimal",
+      "previewStandard": "Standard",
+      "preview1to1": "1:1"
     },
     "lensCorrection": {
       "amount": "양",
@@ -1480,7 +1577,7 @@
       "themeDesc": "애플리케이션의 모양과 느낌을 변경합니다.",
       "title": "일반 설정",
       "xmpSync": "XMP 메타데이터 동기화",
-      "xmpSyncDesc": "다른 사진 편집기와의 호환성을 위해 평점, 색상 레이블, 태그를 표준 XMP 사이드카 파일에 동기화합니다."
+      "xmpSyncDesc": "Sync ratings, labels, tags, and Develop settings (crs) to standard .xmp sidecars for Lightroom and other editors."
     },
     "keybinds": {
       "actions": {
@@ -1531,7 +1628,15 @@
         "zoom_in": "확대",
         "zoom_in_step": "확대 (단계별)",
         "zoom_out": "축소",
-        "zoom_out_step": "축소 (단계별)"
+        "zoom_out_step": "축소 (단계별)",
+        "go_to_library": "Go to Library",
+        "go_to_develop": "Go to Develop",
+        "reimport_xmp": "Reload Develop from XMP",
+        "export_develop_xmp": "Develop을 XMP에 쓰기",
+        "create_snapshot": "스냅샷 만들기",
+        "flag_pick": "픽 플래그",
+        "flag_reject": "리젝트 플래그",
+        "flag_unflag": "플래그 제거"
       },
       "sections": {
         "editing": "편집",
@@ -1828,6 +1933,51 @@
         "showClipping": "클리핑 경고 표시",
         "vectorscope": "벡터스코프"
       }
+    },
+    "moduleBar": {
+      "library": "Library",
+      "develop": "Develop",
+      "map": "Map",
+      "book": "Book",
+      "slideshow": "Slideshow",
+      "print": "Print",
+      "web": "Web",
+      "tooltips": {
+        "library": "Library",
+        "develop": "Develop",
+        "comingSoon": "Coming soon"
+      },
+      "community": "커뮤니티"
+    },
+    "developLeft": {
+      "title": "Develop",
+      "navigator": "Navigator",
+      "presets": "Presets",
+      "history": "History",
+      "historyImport": "Import / Original",
+      "historyStep": "Step {{n}}",
+      "noPresets": "No presets yet. Import Lightroom XMP files.",
+      "openPresetsPanel": "Open Presets panel",
+      "hide": "Hide left panel",
+      "show": "Show Navigator / Presets / History",
+      "snapshots": "Snapshots",
+      "snapshotsSoon": "Snapshots coming soon.",
+      "createSnapshot": "Create snapshot",
+      "deleteSnapshot": "Delete snapshot",
+      "noSnapshots": "No snapshots for this image yet.",
+      "snapshotName": "Snapshot {{n}}",
+      "snapshotCreated": "Snapshot “{{name}}” created",
+      "snapshotNeedImage": "Open an image to create a snapshot",
+      "exportXmp": "Export current settings as XMP",
+      "exportXmpDone": "XMP exported",
+      "xmpIn": "XMP in",
+      "xmpOut": "XMP out",
+      "renameSnapshot": "스냅샷 이름 변경",
+      "renameSnapshotHint": "Double-click to rename",
+      "fit": "맞춤",
+      "zoomFit": "Fit to window",
+      "zoom100": "Zoom 100%",
+      "presetApplied": "{{name}} 적용됨"
     }
   }
 }

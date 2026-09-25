@@ -19,7 +19,9 @@ import {
   FilterCriteria,
   RawStatus,
   EditedStatus,
+  FlagStatus,
   LibraryViewMode,
+  LibraryDisplayMode,
   SortCriteria,
   SortDirection,
   ExifOverlay,
@@ -37,7 +39,7 @@ import { useSettingsStore } from '../../../store/useSettingsStore';
 import { useUIStore } from '../../../store/useUIStore';
 import { ADVANCED_QUERY_REGEX } from '../../../hooks/useSortedLibrary';
 
-function DropdownMenu({ buttonContent, buttonTitle, children, contentClassName = 'w-56' }: any) {
+function DropdownMenu({ buttonContent, buttonTitle, children, contentClassName = 'w-56', buttonClassName }: any) {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<any>(null);
 
@@ -56,7 +58,7 @@ function DropdownMenu({ buttonContent, buttonTitle, children, contentClassName =
       <Button
         aria-expanded={isOpen}
         aria-haspopup="true"
-        className="h-12 w-12 bg-surface text-text-primary shadow-none p-0 flex items-center justify-center"
+        className={buttonClassName || 'h-9 w-9 bg-surface text-text-primary shadow-none p-0 flex items-center justify-center'}
         onClick={() => setIsOpen(!isOpen)}
         data-tooltip={buttonTitle}
       >
@@ -354,13 +356,13 @@ export function SearchInput({ indexingProgress, isIndexing }: any) {
   return (
     <motion.div
       animate={{ width: isActive ? calculatedWidth : INACTIVE_WIDTH }}
-      className="relative flex items-center bg-surface rounded-md h-12 overflow-hidden"
+      className="relative flex items-center bg-surface rounded-md h-10 overflow-hidden"
       initial={false}
       transition={{ type: 'spring', stiffness: 400, damping: 35 }}
       onClick={() => inputRef.current?.focus()}
     >
       <button
-        className="h-12 w-12 flex items-center justify-center text-text-primary z-10 shrink-0 bg-surface outline-hidden"
+        className="h-9 w-9 flex items-center justify-center text-text-primary z-10 shrink-0 bg-surface outline-hidden"
         onClick={(e) => {
           e.stopPropagation();
           if (!isActive) setIsSearchActive(true);
@@ -487,6 +489,12 @@ interface ViewOptionsDropdownProps {
   rawStatusOptions: Array<{ key: RawStatus; label: string }>;
   editedStatusOptions: Array<{ key: EditedStatus; label: string }>;
   sortOptions: Array<{ key: string; label: string; disabled?: boolean }>;
+  advancedFilters?: React.ReactNode;
+  resetFilters?: React.ReactNode;
+}
+
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return <div className="px-3 text-sm font-semibold text-text-primary">{children}</div>;
 }
 
 export function ViewOptionsDropdown({
@@ -503,14 +511,18 @@ export function ViewOptionsDropdown({
   rawStatusOptions,
   editedStatusOptions,
   sortOptions,
+  advancedFilters,
+  resetFilters,
 }: ViewOptionsDropdownProps) {
   const { t } = useTranslation();
-  const { filterCriteria, setFilterCriteria, sortCriteria, setSortCriteria } = useLibraryStore(
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const { filterCriteria, setFilterCriteria, sortCriteria, setSortCriteria, setLibrary } = useLibraryStore(
     useShallow((state) => ({
       filterCriteria: state.filterCriteria,
       setFilterCriteria: state.setFilterCriteria,
       sortCriteria: state.sortCriteria,
       setSortCriteria: state.setSortCriteria,
+      setLibrary: state.setLibrary,
     })),
   );
 
@@ -528,7 +540,30 @@ export function ViewOptionsDropdown({
     filterCriteria.rating !== 0 ||
     (filterCriteria.rawStatus && filterCriteria.rawStatus !== RawStatus.All) ||
     (filterCriteria.editedStatus && filterCriteria.editedStatus !== EditedStatus.All) ||
-    (filterCriteria.colors && filterCriteria.colors.length > 0);
+    (filterCriteria.colors && filterCriteria.colors.length > 0) ||
+    (filterCriteria.flagStatus && filterCriteria.flagStatus !== FlagStatus.All) ||
+    !!(filterCriteria.camera && String(filterCriteria.camera).trim()) ||
+    !!(filterCriteria.city && String(filterCriteria.city).trim()) ||
+    !!(filterCriteria.keyword && String(filterCriteria.keyword).trim()) ||
+    !!(filterCriteria.dateFrom || filterCriteria.dateTo) ||
+    !!(filterCriteria.lens && String(filterCriteria.lens).trim()) ||
+    filterCriteria.isoMin != null ||
+    filterCriteria.isoMax != null ||
+    !!(filterCriteria.hasGps && filterCriteria.hasGps !== 'all') ||
+    filterCriteria.apertureMin != null ||
+    filterCriteria.apertureMax != null ||
+    filterCriteria.focalMin != null ||
+    filterCriteria.focalMax != null ||
+    filterCriteria.shutterMin != null ||
+    filterCriteria.shutterMax != null ||
+    !!(filterCriteria.fileExt && String(filterCriteria.fileExt).trim()) ||
+    !!(filterCriteria.caption && String(filterCriteria.caption).trim()) ||
+    !!(filterCriteria.hasKeywords && filterCriteria.hasKeywords !== 'all') ||
+    !!(filterCriteria.hasCaption && filterCriteria.hasCaption !== 'all') ||
+    !!(filterCriteria.hasLocation && filterCriteria.hasLocation !== 'all') ||
+    !!(filterCriteria.hasStack && filterCriteria.hasStack !== 'all') ||
+    !!appSettings?.hideRejectedPhotos ||
+    !!(filterCriteria.virtualCopies && filterCriteria.virtualCopies !== 'all');
 
   const [lastClickedColor, setLastClickedColor] = useState<string | null>(null);
   const allColors = useMemo(() => [...COLOR_LABELS, { name: 'none', color: '#9ca3af' }], []);
@@ -574,16 +609,19 @@ export function ViewOptionsDropdown({
     <DropdownMenu
       buttonContent={
         <>
-          <SlidersHorizontal className="w-8 h-8" />
-          {isFilterActive && <div className="absolute -top-1 -right-1 bg-accent rounded-full w-3 h-3" />}
+          <SlidersHorizontal size={14} />
+          <span className="text-xs font-medium">{t('library.header.viewOptions.advanced' as any, { defaultValue: 'Advanced' })}</span>
+          {isFilterActive && <div className="absolute -top-1 -right-1 bg-accent rounded-full w-2.5 h-2.5" />}
         </>
       }
+      buttonClassName="h-9 px-3 gap-1.5 bg-surface text-text-primary shadow-none flex items-center justify-center"
       buttonTitle={t('library.header.viewOptions.title')}
-      contentClassName="library-view-options-menu w-[760px]"
+      contentClassName="library-view-options-menu w-[760px] max-h-[80vh] overflow-y-auto custom-scrollbar"
     >
       <div className="library-view-options-content flex">
-        {/* Left Column (50%) - View Settings */}
+        {/* Left column — Display */}
         <div className="library-view-options-section w-1/2 py-4 px-2 border-r border-border-color space-y-5">
+          <SectionTitle>{t('library.header.viewOptions.display' as any, { defaultValue: 'Affichage' })}</SectionTitle>
           <div>
             <div className="px-3 py-1 relative flex items-center">
               <Text as="div" variant={TextVariants.small} weight={TextWeights.semibold} className="uppercase">
@@ -640,16 +678,46 @@ export function ViewOptionsDropdown({
 
           <div>
             <Text as="div" variant={TextVariants.small} weight={TextWeights.semibold} className="px-3 py-1 uppercase">
-              {t('library.header.viewOptions.displayMode')}
+              {t('library.header.viewOptions.libraryLayout' as any, {
+                defaultValue: 'Library layout',
+              })}
             </Text>
             <div className="px-3 mt-1">
               <SegmentedSwitch
                 options={[
-                  { id: LibraryViewMode.Flat, label: t('library.header.viewOptions.currentFolder') },
-                  { id: LibraryViewMode.Recursive, label: t('library.header.viewOptions.recursive') },
+                  {
+                    id: LibraryDisplayMode.Grid,
+                    label: t('library.header.viewOptions.grid' as any, { defaultValue: 'Grid' }),
+                  },
+                  {
+                    id: LibraryDisplayMode.List,
+                    label: t('library.header.viewOptions.list' as any, { defaultValue: 'List' }),
+                  },
+                  {
+                    id: LibraryDisplayMode.Loupe,
+                    label: t('library.header.viewOptions.loupe' as any, { defaultValue: 'Loupe' }),
+                  },
+                  {
+                    id: LibraryDisplayMode.Compare,
+                    label: t('library.header.viewOptions.compare' as any, { defaultValue: 'Compare' }),
+                  },
+                  {
+                    id: LibraryDisplayMode.Survey,
+                    label: t('library.header.viewOptions.survey' as any, { defaultValue: 'Survey' }),
+                  },
+                  {
+                    id: LibraryDisplayMode.Cull,
+                    label: t('library.header.viewOptions.cull' as any, { defaultValue: 'Cull' }),
+                  },
                 ]}
-                value={libraryViewMode}
-                onChange={setLibraryViewMode}
+                value={appSettings?.libraryDisplayMode || LibraryDisplayMode.Grid}
+                onChange={async (val) => {
+                  if (!appSettings) return;
+                  await handleSettingsChange({
+                    ...appSettings,
+                    libraryDisplayMode: val as LibraryDisplayMode,
+                  });
+                }}
               />
             </div>
           </div>
@@ -665,11 +733,26 @@ export function ViewOptionsDropdown({
                 onChange={(val) => handleSettingsChange({ ...appSettings!, exifOverlay: val as ExifOverlay })}
               />
             </div>
+            <div className="px-3 mt-2">
+              <Switch
+                checked={appSettings?.showGridFilenames !== false}
+                id="show-grid-filenames-toggle"
+                label={t('library.header.viewOptions.showGridFilenames' as any, {
+                  defaultValue: 'Show file names in grid',
+                })}
+                onChange={async (checked) => {
+                  if (appSettings) {
+                    await handleSettingsChange({ ...appSettings, showGridFilenames: checked });
+                  }
+                }}
+              />
+            </div>
           </div>
         </div>
 
-        {/* Right Column (50%) - Filters & Grouping */}
+        {/* Right column — Filters */}
         <div className="library-view-options-section w-1/2 py-4 px-2 space-y-5">
+          <SectionTitle>{t('library.header.viewOptions.filters' as any, { defaultValue: 'Filtres' })}</SectionTitle>
           <div>
             <Text as="div" variant={TextVariants.small} weight={TextWeights.semibold} className="px-3 py-1 uppercase">
               {t('library.header.viewOptions.filterByRating')}
@@ -680,6 +763,74 @@ export function ViewOptionsDropdown({
                 onChange={(val: number) => setFilterCriteria((prev: FilterCriteria) => ({ ...prev, rating: val }))}
                 ratingFilterOptions={ratingFilterOptions}
               />
+            </div>
+          </div>
+
+          <div>
+            <Text as="div" variant={TextVariants.small} weight={TextWeights.semibold} className="px-3 py-1 uppercase">
+              {t('library.header.viewOptions.filterByColorLabel')}
+            </Text>
+            <div className="flex flex-wrap gap-2.5 px-3 py-1.5">
+              {allColors.map((color: Color) => {
+                const isSelected = (filterCriteria.colors || []).includes(color.name);
+                const title =
+                  color.name === 'none'
+                    ? t('library.header.viewOptions.noLabel')
+                    : t(`contextMenus.colors.${color.name}`, {
+                        defaultValue: color.name.charAt(0).toUpperCase() + color.name.slice(1),
+                      });
+                return (
+                  <button
+                    key={color.name}
+                    data-tooltip={title}
+                    onClick={(e: any) => handleColorClick(color.name, e)}
+                    className="w-5 h-5 rounded-full focus:outline-hidden focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-surface transition-transform hover:scale-110"
+                    role="menuitem"
+                  >
+                    <div className="relative w-full h-full">
+                      <div className="w-full h-full rounded-full" style={{ backgroundColor: color.color }}></div>
+                      {isSelected && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-black/30 rounded-full">
+                          <Check size={12} className={TEXT_COLOR_KEYS[TextColors.white]} />
+                        </div>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div>
+            <Text as="div" variant={TextVariants.small} weight={TextWeights.semibold} className="px-3 py-1 uppercase">
+              {t('library.header.viewOptions.filterByFlag', 'Filter by Flag')}
+            </Text>
+            <div className="px-3 mt-1">
+              <SegmentedSwitch
+                options={[
+                  { id: FlagStatus.All, label: t('library.filters.flag.all', 'All') },
+                  { id: FlagStatus.Pick, label: t('library.filters.flag.pick', 'Pick') },
+                  { id: FlagStatus.Reject, label: t('library.filters.flag.reject', 'Reject') },
+                  { id: FlagStatus.Unflagged, label: t('library.filters.flag.unflagged', 'None') },
+                ]}
+                value={filterCriteria.flagStatus || FlagStatus.All}
+                onChange={(val) => setFilterCriteria((prev: FilterCriteria) => ({ ...prev, flagStatus: val as FlagStatus }))}
+              />
+              <div className="pt-2 px-1">
+                <Switch
+                  checked={!!appSettings?.hideRejectedPhotos}
+                  id="hide-rejected-photos-toggle"
+                  label={t('library.header.viewOptions.hideRejected' as any, {
+                    defaultValue: 'Hide rejected photos',
+                  })}
+                  onChange={async (checked) => {
+                    if (appSettings) {
+                      await handleSettingsChange({ ...appSettings, hideRejectedPhotos: checked });
+                    }
+                  }}
+                />
+              </div>
+
             </div>
           </div>
 
@@ -705,6 +856,42 @@ export function ViewOptionsDropdown({
                 options={editedStatusOptions.map((o) => ({ id: o.key, label: o.label }))}
                 value={filterCriteria.editedStatus || EditedStatus.All}
                 onChange={(val) => setFilterCriteria((prev: FilterCriteria) => ({ ...prev, editedStatus: val }))}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="border-t border-border-color">
+        <button
+          type="button"
+          onClick={() => setShowAdvanced((v) => !v)}
+          className="w-full flex items-center justify-between px-5 py-2.5 text-xs font-semibold uppercase tracking-wide text-text-secondary hover:text-text-primary hover:bg-card-active/50"
+          aria-expanded={showAdvanced}
+        >
+          {showAdvanced
+            ? t('library.header.viewOptions.hideAdvanced' as any, { defaultValue: 'Masquer les paramètres avancés' })
+            : t('library.header.viewOptions.showAdvanced' as any, { defaultValue: 'Afficher les paramètres avancés' })}
+          {showAdvanced ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        </button>
+        {showAdvanced && (
+          <div className="pb-4">
+            <div className="flex">
+              <div className="w-1/2 px-2 space-y-5 border-r border-border-color">
+          <div>
+            <Text as="div" variant={TextVariants.small} weight={TextWeights.semibold} className="px-3 py-1 uppercase">
+              {t('library.header.viewOptions.folderScope' as any, {
+                defaultValue: 'Folder scope',
+              })}
+            </Text>
+            <div className="px-3 mt-1">
+              <SegmentedSwitch
+                options={[
+                  { id: LibraryViewMode.Flat, label: t('library.header.viewOptions.currentFolder') },
+                  { id: LibraryViewMode.Recursive, label: t('library.header.viewOptions.recursive') },
+                ]}
+                value={libraryViewMode}
+                onChange={setLibraryViewMode}
               />
             </div>
           </div>
@@ -761,42 +948,122 @@ export function ViewOptionsDropdown({
               </AnimatePresence>
             </div>
           </div>
-
+              </div>
+              <div className="w-1/2 px-2 space-y-5">
           <div>
             <Text as="div" variant={TextVariants.small} weight={TextWeights.semibold} className="px-3 py-1 uppercase">
-              {t('library.header.viewOptions.filterByColorLabel')}
-            </Text>
-            <div className="flex flex-wrap gap-2.5 px-3 py-1.5">
-              {allColors.map((color: Color) => {
-                const isSelected = (filterCriteria.colors || []).includes(color.name);
-                const title =
-                  color.name === 'none'
-                    ? t('library.header.viewOptions.noLabel')
-                    : t(`contextMenus.colors.${color.name}`, {
-                        defaultValue: color.name.charAt(0).toUpperCase() + color.name.slice(1),
-                      });
-                return (
-                  <button
-                    key={color.name}
-                    data-tooltip={title}
-                    onClick={(e: any) => handleColorClick(color.name, e)}
-                    className="w-5 h-5 rounded-full focus:outline-hidden focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-surface transition-transform hover:scale-110"
-                    role="menuitem"
-                  >
-                    <div className="relative w-full h-full">
-                      <div className="w-full h-full rounded-full" style={{ backgroundColor: color.color }}></div>
-                      {isSelected && (
-                        <div className="absolute inset-0 flex items-center justify-center bg-black/30 rounded-full">
-                          <Check size={12} className={TEXT_COLOR_KEYS[TextColors.white]} />
-                        </div>
-                      )}
-                    </div>
-                  </button>
-                );
+              {t('library.header.viewOptions.filterPresets' as any, {
+                defaultValue: 'Filter presets',
               })}
+            </Text>
+            <div className="px-3 mt-1 space-y-1.5">
+              <div className="flex gap-1">
+                <button
+                  type="button"
+                  className="flex-1 h-7 px-2 rounded text-[10px] font-semibold uppercase bg-surface border border-border-color/40 text-text-secondary hover:text-text-primary disabled:opacity-40"
+                  disabled={!isFilterActive}
+                  onClick={async () => {
+                    if (!appSettings || !isFilterActive) return;
+                    const name = window.prompt(
+                      t('library.header.viewOptions.saveFilterPrompt' as any, {
+                        defaultValue: 'Name this filter preset',
+                      }) || '',
+                      t('library.header.viewOptions.saveFilterDefault' as any, {
+                        defaultValue: 'My filter',
+                      }),
+                    );
+                    if (!name || !name.trim()) return;
+                    const preset = {
+                      id: `fp_${Date.now().toString(36)}`,
+                      name: name.trim(),
+                      criteria: { ...filterCriteria },
+                    };
+                    const prev = Array.isArray(appSettings.libraryFilterPresets)
+                      ? appSettings.libraryFilterPresets
+                      : [];
+                    await handleSettingsChange({
+                      ...appSettings,
+                      libraryFilterPresets: [...prev, preset].slice(-20),
+                    });
+                  }}
+                >
+                  {t('library.header.viewOptions.saveFilter' as any, { defaultValue: 'Save' })}
+                </button>
+                <button
+                  type="button"
+                  className="flex-1 h-7 px-2 rounded text-[10px] font-semibold uppercase bg-surface border border-border-color/40 text-text-secondary hover:text-text-primary disabled:opacity-40"
+                  disabled={!isFilterActive}
+                  onClick={() => {
+                    setLibrary({
+                      filterCriteria: {
+                        colors: [],
+                        rating: 0,
+                        rawStatus: RawStatus.All,
+                        editedStatus: EditedStatus.All,
+                        flagStatus: FlagStatus.All,
+                        hasGps: 'all',
+                        hasCaption: 'all',
+                        hasLocation: 'all',
+                        orientation: 'all',
+                        hasStack: 'all',
+                        hasKeywords: 'all',
+                        virtualCopies: 'all',
+                      },
+                      showPreviousImportOnly: false,
+                      showQuickCollectionOnly: false,
+                      showSelectedOnly: false,
+                    });
+                  }}
+                >
+                  {t('library.header.viewOptions.clearFilter' as any, { defaultValue: 'Clear' })}
+                </button>
+              </div>
+              {(appSettings?.libraryFilterPresets || []).length > 0 && (
+                <ul className="max-h-28 overflow-y-auto space-y-0.5">
+                  {(appSettings?.libraryFilterPresets || []).map((fp: any) => (
+                    <li key={fp.id} className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        className="flex-1 text-left px-1.5 py-1 rounded text-[11px] text-text-primary hover:bg-card-active truncate"
+                        onClick={() => {
+                          if (fp?.criteria) setLibrary({ filterCriteria: { ...fp.criteria } as any });
+                        }}
+                      >
+                        {fp.name}
+                      </button>
+                      <button
+                        type="button"
+                        className="px-1.5 py-1 text-[10px] text-text-secondary hover:text-red-400"
+                        aria-label={`Delete ${fp.name}`}
+                        onClick={async () => {
+                          if (!appSettings) return;
+                          const next = (appSettings.libraryFilterPresets || []).filter(
+                            (p: any) => p.id !== fp.id,
+                          );
+                          await handleSettingsChange({ ...appSettings, libraryFilterPresets: next });
+                        }}
+                      >
+                        ×
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           </div>
-        </div>
+                {resetFilters && <div className="px-3">{resetFilters}</div>}
+              </div>
+            </div>
+            {advancedFilters && (
+              <div className="mt-5 px-5">
+                <Text as="div" variant={TextVariants.small} weight={TextWeights.semibold} className="py-1 uppercase">
+                  {t('library.header.viewOptions.metadataFilters' as any, { defaultValue: 'Filtres de métadonnées' })}
+                </Text>
+                <div className="mt-1 grid grid-cols-2 gap-1.5 [&>div]:flex [&>div]:min-w-0">{advancedFilters}</div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </DropdownMenu>
   );

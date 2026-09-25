@@ -601,11 +601,98 @@ export function usePresets(currentAdjustments: Adjustments) {
     [setPresets],
   );
 
+  const importLegacyPresetsFromPaths = useCallback(
+    async (filePaths: string[]) => {
+      setIsLoading(true);
+      try {
+        const updatedPresetList: Array<UserPreset> = await invoke(Invokes.HandleImportLegacyPresetsFromPaths, {
+          filePaths,
+        });
+        setPresets(updatedPresetList);
+      } catch (error) {
+        console.error('Failed to import legacy presets from paths:', error);
+        throw error;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [setPresets],
+  );
+
+  const importLegacyPresetsFromDirectory = useCallback(
+    async (directory: string) => {
+      setIsLoading(true);
+      try {
+        const updatedPresetList: Array<UserPreset> = await invoke(
+          Invokes.HandleImportLegacyPresetsFromDirectory,
+          { directory },
+        );
+        setPresets(updatedPresetList);
+      } catch (error) {
+        console.error('Failed to import legacy presets from directory:', error);
+        throw error;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [setPresets],
+  );
+
   const exportPresetsToFile = useCallback(async (presetsToExport: Array<any>, filePath: string) => {
     try {
       await invoke(Invokes.HandleExportPresetsToFile, { presetsToExport, filePath });
     } catch (error) {
       console.error('Failed to export presets to file:', error);
+      throw error;
+    }
+  }, []);
+
+  const exportPresetToXmp = useCallback(
+    async (name: string, adjustments: any, filePath: string, group?: string | null) => {
+      try {
+        await invoke(Invokes.ExportPresetToXmp, {
+          name,
+          adjustments,
+          filePath,
+          group: group ?? null,
+        });
+      } catch (error) {
+        console.error('Failed to export preset to XMP:', error);
+        throw error;
+      }
+    },
+    [],
+  );
+
+  const exportPresetsToXmpDirectory = useCallback(async (presetsToExport: Array<any>, directory: string) => {
+    try {
+      const flat: Array<{ id: string; name: string; adjustments: any; group?: string | null }> = [];
+      for (const item of presetsToExport) {
+        if (item.preset) {
+          flat.push({
+            id: item.preset.id,
+            name: item.preset.name,
+            adjustments: item.preset.adjustments,
+            group: null,
+          });
+        } else if (item.folder?.children) {
+          const folderName = item.folder.name as string;
+          for (const child of item.folder.children) {
+            flat.push({
+              id: child.id,
+              name: child.name,
+              adjustments: child.adjustments,
+              group: folderName,
+            });
+          }
+        }
+      }
+      return await invoke<number>(Invokes.ExportPresetsToXmpDirectory, {
+        presets: flat,
+        directory,
+      });
+    } catch (error) {
+      console.error('Failed to export presets to XMP directory:', error);
       throw error;
     }
   }, []);
@@ -617,8 +704,12 @@ export function usePresets(currentAdjustments: Adjustments) {
     deleteItem,
     duplicatePreset,
     exportPresetsToFile,
+    exportPresetToXmp,
+    exportPresetsToXmpDirectory,
     importPresetsFromFile,
     importLegacyPresetsFromFile,
+    importLegacyPresetsFromPaths,
+    importLegacyPresetsFromDirectory,
     isLoading,
     movePreset,
     overwritePreset,

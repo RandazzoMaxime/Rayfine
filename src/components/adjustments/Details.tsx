@@ -30,10 +30,10 @@ export default function DetailsPanel({
   const adjustmentVisibility = appSettings?.adjustmentVisibility || {};
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-2">
       {adjustmentVisibility.sharpening !== false && (
         <div className="p-2 bg-bg-tertiary rounded-md">
-          <Text variant={TextVariants.heading} className="mb-2">
+          <Text variant={TextVariants.heading} className="mb-1">
             {t('adjustments.details.sharpening')}
           </Text>
           <Slider
@@ -45,6 +45,43 @@ export default function DetailsPanel({
             value={adjustments.sharpness}
             onDragStateChange={onDragStateChange}
           />
+          {!isForMask && (
+            <>
+              <Slider
+                label={t('adjustments.details.radius' as any)}
+                max={3}
+                min={0.5}
+                onChange={(e: any) => handleAdjustmentChange('sharpenRadius', e.target.value)}
+                step={0.1}
+                value={(adjustments as any).sharpenRadius ?? 1.0}
+                onDragStateChange={onDragStateChange}
+                defaultValue={1}
+                fillOrigin="min"
+              />
+              <Slider
+                label={t('adjustments.details.sharpenDetail' as any)}
+                max={100}
+                min={0}
+                onChange={(e: any) => handleAdjustmentChange('sharpenDetail', e.target.value)}
+                step={1}
+                value={(adjustments as any).sharpenDetail ?? 25}
+                onDragStateChange={onDragStateChange}
+                defaultValue={25}
+                fillOrigin="min"
+              />
+              <Slider
+                label={t('adjustments.details.masking' as any)}
+                max={100}
+                min={0}
+                onChange={(e: any) => handleAdjustmentChange('sharpenMasking', e.target.value)}
+                step={1}
+                value={(adjustments as any).sharpenMasking ?? 0}
+                onDragStateChange={onDragStateChange}
+                defaultValue={0}
+                fillOrigin="min"
+              />
+            </>
+          )}
           <Slider
             label={t('adjustments.details.threshold')}
             max={80}
@@ -61,9 +98,18 @@ export default function DetailsPanel({
 
       {adjustmentVisibility.presence !== false && (
         <div className="p-2 bg-bg-tertiary rounded-md">
-          <Text variant={TextVariants.heading} className="mb-2">
+          <Text variant={TextVariants.heading} className="mb-1">
             {t('adjustments.details.presence')}
           </Text>
+          <Slider
+            label={t('adjustments.details.texture' as any, { defaultValue: 'Texture' })}
+            max={100}
+            min={-100}
+            onChange={(e: any) => handleAdjustmentChange(DetailsAdjustment.Structure, e.target.value)}
+            step={1}
+            value={adjustments.structure}
+            onDragStateChange={onDragStateChange}
+          />
           <Slider
             label={t('adjustments.details.clarity')}
             max={100}
@@ -82,15 +128,6 @@ export default function DetailsPanel({
             value={adjustments.dehaze}
             onDragStateChange={onDragStateChange}
           />
-          <Slider
-            label={t('adjustments.details.structure')}
-            max={100}
-            min={-100}
-            onChange={(e: any) => handleAdjustmentChange(DetailsAdjustment.Structure, e.target.value)}
-            step={1}
-            value={adjustments.structure}
-            onDragStateChange={onDragStateChange}
-          />
           {!isForMask && (
             <Slider
               label={t('adjustments.details.centre')}
@@ -107,7 +144,7 @@ export default function DetailsPanel({
 
       {adjustmentVisibility.noiseReduction !== false && (
         <div className="p-2 bg-bg-tertiary rounded-md">
-          <Text variant={TextVariants.heading} className="mb-2">
+          <Text variant={TextVariants.heading} className="mb-1">
             {t('adjustments.details.noiseReduction')}
           </Text>
           <Slider
@@ -119,6 +156,32 @@ export default function DetailsPanel({
             value={adjustments.lumaNoiseReduction}
             onDragStateChange={onDragStateChange}
           />
+          {!isForMask && (
+            <>
+              <Slider
+                label={t('adjustments.details.luminanceDetail' as any)}
+                max={100}
+                min={0}
+                onChange={(e: any) => handleAdjustmentChange('lumaNoiseDetail', e.target.value)}
+                step={1}
+                value={(adjustments as any).lumaNoiseDetail ?? 50}
+                onDragStateChange={onDragStateChange}
+                defaultValue={50}
+                fillOrigin="min"
+              />
+              <Slider
+                label={t('adjustments.details.luminanceContrast' as any)}
+                max={100}
+                min={0}
+                onChange={(e: any) => handleAdjustmentChange('lumaNoiseContrast', e.target.value)}
+                step={1}
+                value={(adjustments as any).lumaNoiseContrast ?? 0}
+                onDragStateChange={onDragStateChange}
+                defaultValue={0}
+                fillOrigin="min"
+              />
+            </>
+          )}
           <Slider
             label={t('adjustments.details.color')}
             max={100}
@@ -128,12 +191,38 @@ export default function DetailsPanel({
             value={adjustments.colorNoiseReduction}
             onDragStateChange={onDragStateChange}
           />
+          {!isForMask && (
+            <>
+              <Slider
+                label={t('adjustments.details.colorDetail' as any)}
+                max={100}
+                min={0}
+                onChange={(e: any) => handleAdjustmentChange('colorNoiseDetail', e.target.value)}
+                step={1}
+                value={(adjustments as any).colorNoiseDetail ?? 50}
+                onDragStateChange={onDragStateChange}
+                defaultValue={50}
+                fillOrigin="min"
+              />
+              <Slider
+                label={t('adjustments.details.colorSmoothness' as any)}
+                max={100}
+                min={0}
+                onChange={(e: any) => handleAdjustmentChange('colorNoiseSmoothness', e.target.value)}
+                step={1}
+                value={(adjustments as any).colorNoiseSmoothness ?? 50}
+                onDragStateChange={onDragStateChange}
+                defaultValue={50}
+                fillOrigin="min"
+              />
+            </>
+          )}
         </div>
       )}
 
       {!isForMask && adjustmentVisibility.chromaticAberration !== false && (
         <div className="p-2 bg-bg-tertiary rounded-md">
-          <Text variant={TextVariants.heading} className="mb-2">
+          <Text variant={TextVariants.heading} className="mb-1">
             {t('adjustments.details.chromaticAberration')}
           </Text>
           <Slider

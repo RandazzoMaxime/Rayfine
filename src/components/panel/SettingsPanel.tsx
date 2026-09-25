@@ -1156,6 +1156,44 @@ export default function SettingsPanel({
                     </SettingItem>
 
                     <SettingItem
+                      label={t('settings.general.showGridFilenames' as any, {
+                        defaultValue: 'Show file names in grid',
+                      })}
+                      description={t('settings.general.showGridFilenamesDesc' as any, {
+                        defaultValue:
+                          'Always show the file name under each Library grid thumbnail (Lightroom View Options).',
+                      })}
+                    >
+                      <Switch
+                        checked={appSettings?.showGridFilenames !== false}
+                        id="show-grid-filenames-toggle"
+                        label={t('settings.general.showGridFilenames' as any, {
+                          defaultValue: 'Show file names in grid',
+                        })}
+                        onChange={(checked) => onSettingsChange({ ...appSettings, showGridFilenames: checked })}
+                      />
+                    </SettingItem>
+
+                    <SettingItem
+                      label={t('settings.general.autoAdvanceOnCull' as any, {
+                        defaultValue: 'Auto-advance while culling',
+                      })}
+                      description={t('settings.general.autoAdvanceOnCullDesc' as any, {
+                        defaultValue:
+                          'After setting a star rating, color label, or pick/reject in Library, select the next photo (Lightroom-style).',
+                      })}
+                    >
+                      <Switch
+                        checked={appSettings?.autoAdvanceOnCull !== false}
+                        id="auto-advance-cull-toggle"
+                        label={t('settings.general.autoAdvanceOnCull' as any, {
+                          defaultValue: 'Auto-advance while culling',
+                        })}
+                        onChange={(checked) => onSettingsChange({ ...appSettings, autoAdvanceOnCull: checked })}
+                      />
+                    </SettingItem>
+
+                    <SettingItem
                       label={t('settings.general.focusMode')}
                       description={t('settings.general.focusModeDesc')}
                     >

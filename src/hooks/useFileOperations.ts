@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { toast } from 'react-toastify';
@@ -9,6 +9,7 @@ import { useProcessStore } from '../store/useProcessStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { Invokes } from '../components/ui/AppProperties';
 import { Status } from '../components/ui/ExportImportProperties';
+import { findVirtualCopyStack } from '../utils/imageGrouping';
 
 export function useFileOperations(
   refreshImageList: () => Promise<void>,
@@ -36,25 +37,39 @@ export function useFileOperations(
 
       if (activePath) {
         const physicalPath = activePath.split('?vc=')[0];
-        const isActiveImageDeleted = pathsToDelete.some((p) => p === activePath || p === physicalPath);
+        const isActiveImageDeleted = pathsToDelete.some(
+          (p) => p === activePath || (p === physicalPath && !activePath.includes('?vc=')),
+        );
+        // Deleting only the active VC should not treat master physical path as deleted
+        const isActiveVcDeleted =
+          activePath.includes('?vc=') && pathsToDelete.some((p) => p === activePath);
 
-        if (isActiveImageDeleted) {
-          const currentIndex = sortedImageList.findIndex((img) => img.path === activePath);
-          if (currentIndex !== -1) {
-            const nextCandidate = sortedImageList
-              .slice(currentIndex + 1)
-              .find((img) => !pathsToDelete.includes(img.path));
-
-            if (nextCandidate) {
-              nextImagePath = nextCandidate.path;
-            } else {
-              const prevCandidate = sortedImageList
-                .slice(0, currentIndex)
-                .reverse()
+        if (isActiveImageDeleted || isActiveVcDeleted) {
+          // Prefer another version in the virtual-copy stack
+          const { imageList } = useLibraryStore.getState();
+          const stack = findVirtualCopyStack(imageList || [], activePath).filter(
+            (img) => !pathsToDelete.includes(img.path),
+          );
+          if (stack.length > 0) {
+            nextImagePath = stack[0].path;
+          } else {
+            const currentIndex = sortedImageList.findIndex((img) => img.path === activePath);
+            if (currentIndex !== -1) {
+              const nextCandidate = sortedImageList
+                .slice(currentIndex + 1)
                 .find((img) => !pathsToDelete.includes(img.path));
 
-              if (prevCandidate) {
-                nextImagePath = prevCandidate.path;
+              if (nextCandidate) {
+                nextImagePath = nextCandidate.path;
+              } else {
+                const prevCandidate = sortedImageList
+                  .slice(0, currentIndex)
+                  .reverse()
+                  .find((img) => !pathsToDelete.includes(img.path));
+
+                if (prevCandidate) {
+                  nextImagePath = prevCandidate.path;
+                }
               }
             }
           }
@@ -70,7 +85,12 @@ export function useFileOperations(
 
         if (selectedImage) {
           const physicalPath = selectedImage.path.split('?vc=')[0];
-          const isFileBeingEditedDeleted = pathsToDelete.some((p) => p === selectedImage.path || p === physicalPath);
+          const isFileBeingEditedDeleted = pathsToDelete.some(
+            (p) =>
+              p === selectedImage.path ||
+              // Deleting master physical path kills the open file; deleting other VCs does not
+              (p === physicalPath && !selectedImage.path.includes('?vc=')),
+          );
 
           if (isFileBeingEditedDeleted) {
             if (nextImagePath) {
@@ -94,6 +114,41 @@ export function useFileOperations(
     [refreshImageList, handleBackToLibrary, sortedImageList, handleImageSelect],
   );
 
+  const handleDeleteRejected = useCallback(() => {
+    const { imageList } = useLibraryStore.getState();
+    const { setUI } = useUIStore.getState();
+    const rejected = (imageList || [])
+      .filter((img) =>
+        (img.tags || []).some((tg: string) => tg === 'flag:reject' || tg.endsWith(':reject')),
+      )
+      .map((img) => img.path);
+    if (!rejected.length) {
+      toast.info('No rejected photos to delete');
+      return;
+    }
+    setUI({
+      confirmModalState: {
+        confirmText: `Delete ${rejected.length} Rejected`,
+        confirmVariant: 'destructive',
+        isOpen: true,
+        message: `Permanently delete ${rejected.length} rejected photo(s)? This cannot be undone.`,
+        title: 'Delete Rejected Photos',
+        onConfirm: () => executeDelete(rejected, { includeAssociated: false }),
+      },
+    });
+  }, [executeDelete]);
+
+  // Global event from keyboard shortcuts
+  useEffect(() => {
+    const onDeletePaths = (e: Event) => {
+      const paths = (e as CustomEvent).detail?.paths as string[] | undefined;
+      if (!paths?.length) return;
+      void executeDelete(paths, { includeAssociated: false });
+    };
+    window.addEventListener('rustroom:delete-paths', onDeletePaths as EventListener);
+    return () => window.removeEventListener('rustroom:delete-paths', onDeletePaths as EventListener);
+  }, [executeDelete]);
+
   const handleDeleteSelected = useCallback(() => {
     const { multiSelectedPaths, imageList } = useLibraryStore.getState();
     const { setUI } = useUIStore.getState();
@@ -104,7 +159,8 @@ export function useFileOperations(
     }
 
     const isSingle = pathsToDelete.length === 1;
-
+    const allVirtualCopies =
+      pathsToDelete.length > 0 && pathsToDelete.every((p) => p.includes('?vc='));
     const selectionHasVirtualCopies =
       isSingle &&
       !pathsToDelete[0].includes('?vc=') &&
@@ -114,7 +170,15 @@ export function useFileOperations(
     let modalMessage = '';
     let confirmText = 'Delete';
 
-    if (selectionHasVirtualCopies) {
+    if (allVirtualCopies) {
+      modalTitle =
+        pathsToDelete.length === 1 ? 'Delete Virtual Copy?' : 'Delete Virtual Copies?';
+      modalMessage =
+        pathsToDelete.length === 1
+          ? 'Delete this virtual copy only? The master file and other copies are kept. This cannot be undone.'
+          : `Delete ${pathsToDelete.length} virtual copies only? Master files are kept. This cannot be undone.`;
+      confirmText = pathsToDelete.length === 1 ? 'Delete Copy' : 'Delete Copies';
+    } else if (selectionHasVirtualCopies) {
       modalTitle = 'Delete Image and All Virtual Copies?';
       modalMessage = `Are you sure you want to permanently delete this image and all of its virtual copies? This action cannot be undone.`;
       confirmText = 'Delete All';
@@ -273,6 +337,32 @@ export function useFileOperations(
     async (settings: any) => {
       const { importTargetFolder, importSourcePaths } = useUIStore.getState();
       if (!importTargetFolder) return;
+      // Remember last import dialog settings (LR-style)
+      try {
+        const { appSettings, handleSettingsChange } = useSettingsStore.getState();
+        if (appSettings && handleSettingsChange) {
+          void handleSettingsChange({
+            ...appSettings,
+            lastImportSettings: {
+              filenameTemplate: settings?.filenameTemplate,
+              organizeByDate: settings?.organizeByDate,
+              dateFolderFormat: settings?.dateFolderFormat,
+              deleteAfterImport: settings?.deleteAfterImport,
+              skipDuplicates: settings?.skipDuplicates,
+              buildPreviews: settings?.buildPreviews,
+              previewQuality: settings?.previewQuality,
+              copyAsDng: settings?.copyAsDng,
+              developPresetId: settings?.developPresetId ?? null,
+              keywords: Array.isArray(settings?.keywords) ? settings.keywords : [],
+              creator: settings?.creator ?? null,
+              copyright: settings?.copyright ?? null,
+              caption: settings?.caption ?? null,
+            },
+          });
+        }
+      } catch (e) {
+        console.warn('persist lastImportSettings failed', e);
+      }
       await startImportFiles(importSourcePaths, importTargetFolder, settings);
     },
     [startImportFiles],
@@ -352,6 +442,10 @@ export function useFileOperations(
               organizeByDate: false,
               dateFolderFormat: 'YYYY/MM-DD',
               deleteAfterImport: false,
+              skipDuplicates: true,
+              buildPreviews: true,
+              previewQuality: 'standard',
+              developPresetId: null,
             };
             await startImportFiles(validFiles, targetPath, DEFAULT_IMPORT_SETTINGS);
             return;
@@ -393,6 +487,7 @@ export function useFileOperations(
   return {
     executeDelete,
     handleDeleteSelected,
+    handleDeleteRejected,
     handleCreateFolder,
     handleRenameFolder,
     handleSaveRename,

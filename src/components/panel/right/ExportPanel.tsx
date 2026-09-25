@@ -218,10 +218,22 @@ export default function ExportPanel({
     setExportMasks,
     filenameTemplate,
     setFilenameTemplate,
+    colorSpace,
+    setColorSpace,
+    outputSharpening,
+    setOutputSharpening,
+    resolutionDpi,
+    setResolutionDpi,
+    limitFileSizeKb,
+    setLimitFileSizeKb,
     enableWatermark,
     setEnableWatermark,
     watermarkPath,
     setWatermarkPath,
+    watermarkText,
+    setWatermarkText,
+    watermarkTextColor,
+    setWatermarkTextColor,
     watermarkAnchor,
     setWatermarkAnchor,
     watermarkScale,
@@ -269,6 +281,14 @@ export default function ExportPanel({
   );
 
   const [estimatedSize, setEstimatedSize] = useState<number | null>(null);
+  const [lastExportOutput, setLastExportOutput] = useState<string | null>(null);
+  const [revealAfterExport, setRevealAfterExport] = useState(() => {
+    try {
+      return localStorage.getItem('rustroom.export.revealAfter') !== '0';
+    } catch {
+      return true;
+    }
+  });
   const [isEstimating, setIsEstimating] = useState<boolean>(false);
   const [watermarkImageAspectRatio, setWatermarkImageAspectRatio] = useState(1);
   const [imageAspectRatio, setImageAspectRatio] = useState(16 / 9);
@@ -277,6 +297,11 @@ export default function ExportPanel({
   const isAndroid = osPlatform === 'android';
 
   const { status, progress, errorMessage } = exportState;
+
+  useEffect(() => {
+    if (status !== Status.Success || !revealAfterExport || !lastExportOutput || isAndroid) return;
+    invoke(Invokes.ShowInFinder, { path: lastExportOutput }).catch(() => {});
+  }, [status, revealAfterExport, lastExportOutput, isAndroid]);
   const isExporting = [Status.Exporting, Status.Cancelling].includes(status);
   const isCancelling = status === Status.Cancelling;
   const isLibraryContext = !!onClose;
@@ -375,16 +400,22 @@ export default function ExportPanel({
       preserveFolders,
       resize: enableResize ? { mode: resizeMode, value: resizeValue, dontEnlarge } : null,
       stripGps,
+      colorSpace,
+      outputSharpening,
+      resolutionDpi,
+      limitFileSizeKb: limitFileSizeKb || undefined,
       exportMasks: !isLibraryContext ? exportMasks : undefined,
       watermark:
-        enableWatermark && watermarkPath
+        enableWatermark && (watermarkPath || (watermarkText && watermarkText.trim()))
           ? {
-              path: watermarkPath,
-              anchor: watermarkAnchor,
-              scale: watermarkScale,
-              spacing: watermarkSpacing,
-              opacity: watermarkOpacity,
-            }
+            path: watermarkPath || null,
+            text: watermarkText?.trim() || null,
+            textColor: watermarkTextColor || '#FFFFFF',
+            anchor: watermarkAnchor,
+            scale: watermarkScale,
+            spacing: watermarkSpacing,
+            opacity: watermarkOpacity,
+          }
           : null,
     };
     const format = FILE_FORMATS.find((f: FileFormat) => f.id === fileFormat)?.extensions[0] || 'jpeg';
@@ -424,6 +455,10 @@ export default function ExportPanel({
     exportMasks,
     preserveFolders,
     isLibraryContext,
+    colorSpace,
+    outputSharpening,
+    resolutionDpi,
+    limitFileSizeKb,
   ]);
 
   const handleVariableClick = (variable: string) => {
@@ -461,16 +496,22 @@ export default function ExportPanel({
       preserveFolders,
       resize: enableResize ? { mode: resizeMode, value: resizeValue, dontEnlarge } : null,
       stripGps,
+      colorSpace,
+      outputSharpening,
+      resolutionDpi,
+      limitFileSizeKb: limitFileSizeKb || undefined,
       exportMasks: !isLibraryContext ? exportMasks : undefined,
       watermark:
-        enableWatermark && watermarkPath
+        enableWatermark && (watermarkPath || (watermarkText && watermarkText.trim()))
           ? {
-              path: watermarkPath,
-              anchor: watermarkAnchor,
-              scale: watermarkScale,
-              spacing: watermarkSpacing,
-              opacity: watermarkOpacity,
-            }
+            path: watermarkPath || null,
+            text: watermarkText?.trim() || null,
+            textColor: watermarkTextColor || '#FFFFFF',
+            anchor: watermarkAnchor,
+            scale: watermarkScale,
+            spacing: watermarkSpacing,
+            opacity: watermarkOpacity,
+          }
           : null,
     };
 
@@ -521,6 +562,7 @@ export default function ExportPanel({
           if (dir) saveLastUsedPreset(dir);
         }
 
+        setLastExportOutput(outputFolderOrFile || null);
         setExportState({ status: Status.Exporting, progress: { current: 0, total: numImages }, errorMessage: '' });
         await invoke(Invokes.ExportImages, {
           paths: pathsToExport,
@@ -541,6 +583,121 @@ export default function ExportPanel({
       });
     }
   };
+
+
+  // Export with Previous (Ctrl+Alt+Shift+W): last settings + last folder, skip dialog when possible
+  const runExportPrevious = useCallback(() => {
+    if (isExporting) return;
+    try {
+      sessionStorage.removeItem('rustroom.export.previous');
+    } catch {
+      /* ignore */
+    }
+    const lastUsed = appSettings?.exportPresets?.find((p) => p.id === '__last_used__');
+    if (lastUsed) {
+      handleApplyPreset(lastUsed);
+    }
+    window.setTimeout(() => {
+      try {
+        window.dispatchEvent(new CustomEvent('rustroom:export-previous-go'));
+      } catch {
+        /* ignore */
+      }
+    }, 50);
+  }, [appSettings, handleApplyPreset, isExporting]);
+
+  useEffect(() => {
+    const onPrev = () => runExportPrevious();
+    window.addEventListener('rustroom:export-previous', onPrev as EventListener);
+    return () => window.removeEventListener('rustroom:export-previous', onPrev as EventListener);
+  }, [runExportPrevious]);
+
+  // If panel just opened after export_previous keybind, consume pending flag
+  useEffect(() => {
+    if (!isVisible || isExporting) return;
+    try {
+      if (sessionStorage.getItem('rustroom.export.previous') === '1') {
+        runExportPrevious();
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [isVisible, isExporting, runExportPrevious]);
+
+  useEffect(() => {
+    const onGo = async () => {
+      if (isExporting || numImages === 0) return;
+      const lastExportPath = appSettings?.exportPresets?.find((p) => p.id === '__last_used__')?.lastExportPath;
+      if (!lastExportPath) {
+        // Fall back to normal export (will prompt)
+        handleExport();
+        return;
+      }
+      // Build settings from current (just applied last-used)
+      let finalFilenameTemplate = filenameTemplate;
+      if (
+        numImages > 1 &&
+        !filenameTemplate.includes('{sequence}') &&
+        !filenameTemplate.includes('{original_filename}')
+      ) {
+        finalFilenameTemplate = `${filenameTemplate}_{sequence}`;
+      }
+      const exportSettings: ExportSettings = {
+        filenameTemplate: finalFilenameTemplate,
+        jpegQuality,
+        keepMetadata,
+        preserveTimestamps,
+        preserveFolders,
+        resize: enableResize ? { mode: resizeMode, value: resizeValue, dontEnlarge } : null,
+        stripGps,
+        colorSpace,
+        outputSharpening,
+        resolutionDpi,
+        limitFileSizeKb: limitFileSizeKb || undefined,
+        exportMasks: !isLibraryContext ? exportMasks : undefined,
+        watermark:
+          enableWatermark && (watermarkPath || (watermarkText && watermarkText.trim()))
+            ? {
+              path: watermarkPath || null,
+              text: watermarkText?.trim() || null,
+              textColor: watermarkTextColor || '#FFFFFF',
+              anchor: watermarkAnchor,
+              scale: watermarkScale,
+              spacing: watermarkSpacing,
+              opacity: watermarkOpacity,
+            }
+            : null,
+      };
+      const selectedFormat: any = FILE_FORMATS.find((f) => f.id === fileFormat);
+      try {
+        setLastExportOutput(lastExportPath);
+        setExportState({
+          status: Status.Exporting,
+          progress: { current: 0, total: numImages },
+          errorMessage: '',
+        });
+        await invoke(Invokes.ExportImages, {
+          paths: pathsToExport,
+          outputFolderOrFile: lastExportPath,
+          isExplicitFilePath: false,
+          baseOriginFolders: rootPaths,
+          exportSettings,
+          outputFormat: selectedFormat?.extensions?.[0] || 'jpg',
+          currentEditPath: selectedImage?.path || null,
+          currentEditAdjustments: adjustmentsRef.current || null,
+        });
+        saveLastUsedPreset(lastExportPath);
+      } catch (error) {
+        setExportState({
+          errorMessage: typeof error === 'string' ? error : t('export.status.failed'),
+          progress,
+          status: Status.Error,
+        });
+      }
+    };
+    window.addEventListener('rustroom:export-previous-go', onGo as EventListener);
+    return () => window.removeEventListener('rustroom:export-previous-go', onGo as EventListener);
+  });
 
   const handleCancel = async () => {
     setExportState((current: ExportState) =>
@@ -563,7 +720,7 @@ export default function ExportPanel({
 
   return (
     <div className={onClose ? 'h-full bg-bg-secondary rounded-lg flex flex-col' : 'flex flex-col h-full'}>
-      <div className="p-4 flex justify-between items-center shrink-0 border-b border-surface">
+      <div className="px-3 py-2 flex justify-between items-center shrink-0 border-b border-border-color/40">
         <Text variant={TextVariants.title}>{t('export.title')}</Text>
         {onClose && (
           <button
@@ -586,6 +743,105 @@ export default function ExportPanel({
               />
             </div>
 
+            <Section title={t('export.sections.destinationPresets' as any, { defaultValue: 'Quick destinations' })}>
+              <div className="flex flex-wrap gap-1.5">
+                {(
+                  [
+                    [
+                      'email',
+                      t('export.dest.email' as any, { defaultValue: 'Email' }),
+                      {
+                        fileFormat: FileFormats.Jpeg,
+                        jpegQuality: 75,
+                        enableResize: true,
+                        resizeMode: 'longEdge',
+                        resizeValue: 2048,
+                        colorSpace: 'srgb',
+                        outputSharpening: 'screen',
+                        resolutionDpi: 72,
+                        limitFileSizeKb: 500,
+                      },
+                    ],
+                    [
+                      'web',
+                      t('export.dest.web' as any, { defaultValue: 'Web' }),
+                      {
+                        fileFormat: FileFormats.Jpeg,
+                        jpegQuality: 85,
+                        enableResize: true,
+                        resizeMode: 'longEdge',
+                        resizeValue: 2560,
+                        colorSpace: 'srgb',
+                        outputSharpening: 'screen',
+                        resolutionDpi: 72,
+                      },
+                    ],
+                    [
+                      'print',
+                      t('export.dest.print' as any, { defaultValue: 'Print' }),
+                      {
+                        fileFormat: FileFormats.Jpeg,
+                        jpegQuality: 95,
+                        enableResize: false,
+                        resizeValue: 3840,
+                        colorSpace: 'adobe-rgb',
+                        outputSharpening: 'matte',
+                        resolutionDpi: 300,
+                      },
+                    ],
+                    [
+                      'full',
+                      t('export.dest.full' as any, { defaultValue: 'Full Size' }),
+                      {
+                        fileFormat: FileFormats.Jpeg,
+                        jpegQuality: 100,
+                        enableResize: false,
+                        colorSpace: 'srgb',
+                        outputSharpening: 'none',
+                        resolutionDpi: 240,
+                      },
+                    ],
+                  ] as const
+                ).map(([id, label, preset]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    disabled={isExporting}
+                    onClick={() => {
+                      setFileFormat(preset.fileFormat);
+                      setJpegQuality(preset.jpegQuality);
+                      setEnableResize(preset.enableResize);
+                      if ('resizeMode' in preset && (preset as any).resizeMode) {
+                        setResizeMode((preset as any).resizeMode);
+                      }
+                      if ('resizeValue' in preset && (preset as any).resizeValue) {
+                        setResizeValue((preset as any).resizeValue);
+                      }
+                      setColorSpace(preset.colorSpace);
+                      setOutputSharpening(preset.outputSharpening);
+                      setResolutionDpi(preset.resolutionDpi);
+                      setLimitFileSizeKb(
+                        'limitFileSizeKb' in preset && (preset as any).limitFileSizeKb
+                          ? (preset as any).limitFileSizeKb
+                          : null,
+                      );
+                    }}
+                    className="px-2.5 py-1.5 rounded-md text-[11px] uppercase tracking-wide bg-surface text-text-secondary hover:bg-card-active hover:text-text-primary transition-colors disabled:opacity-50 border border-border-color/30"
+                    data-tooltip={t('export.dest.tip' as any, {
+                      defaultValue: 'Apply format, quality, resize, color, sharpen & DPI',
+                    })}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-1.5 text-[10px] text-text-secondary/50">
+                {t('export.dest.hint' as any, {
+                  defaultValue: 'LR-style quick destinations — adjust details below after applying.',
+                })}
+              </p>
+            </Section>
+
             <Section title={t('export.sections.fileSettings')}>
               <div className="grid grid-cols-3 gap-2">
                 {FILE_FORMATS.map((format: FileFormat) => (
@@ -603,6 +859,30 @@ export default function ExportPanel({
               </div>
               {[FileFormats.Jpeg, FileFormats.Webp, FileFormats.Jxl].includes(fileFormat as FileFormats) && (
                 <div className={isExporting ? 'opacity-50 pointer-events-none' : ''}>
+                  <div className="flex flex-wrap gap-1 mb-1.5">
+                    {(
+                      [
+                        [100, t('export.file.qualityMax' as any, { defaultValue: 'Max' })],
+                        [90, t('export.file.qualityHigh' as any, { defaultValue: 'High' })],
+                        [75, t('export.file.qualityMed' as any, { defaultValue: 'Med' })],
+                        [60, t('export.file.qualityLow' as any, { defaultValue: 'Low' })],
+                      ] as const
+                    ).map(([q, label]) => (
+                      <button
+                        key={q}
+                        type="button"
+                        disabled={isExporting}
+                        onClick={() => setJpegQuality(q)}
+                        className={`px-2 py-0.5 rounded text-[10px] uppercase tracking-wide transition-colors disabled:opacity-50 ${
+                          jpegQuality === q
+                            ? 'bg-accent text-button-text'
+                            : 'bg-surface text-text-secondary hover:bg-card-active'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
                   <Slider
                     defaultValue={90}
                     label={
@@ -619,32 +899,167 @@ export default function ExportPanel({
                   />
                 </div>
               )}
+              {fileFormat !== FileFormats.Cube && (
+                <div className={isExporting ? 'opacity-50 pointer-events-none mt-2' : 'mt-2'}>
+                  <Text variant={TextVariants.label} className="mb-1 block">
+                    {t('export.file.colorSpace' as any, { defaultValue: 'Color space' })}
+                  </Text>
+                  <div className="flex flex-wrap gap-1">
+                    {(
+                      [
+                        ['srgb', 'sRGB'],
+                        ['adobe-rgb', 'Adobe RGB'],
+                        ['display-p3', 'Display P3'],
+                        ['prophoto', 'ProPhoto'],
+                      ] as const
+                    ).map(([id, label]) => (
+                      <button
+                        key={id}
+                        type="button"
+                        disabled={isExporting}
+                        onClick={() => setColorSpace(id)}
+                        className={`px-2 py-1 rounded-md text-[10px] uppercase tracking-wide transition-colors disabled:opacity-50 ${
+                          colorSpace === id
+                            ? 'bg-accent text-button-text'
+                            : 'bg-surface text-text-secondary hover:bg-card-active'
+                        }`}
+                        data-tooltip={t('export.file.colorSpaceTip' as any, {
+                          defaultValue:
+                            'Tags EXIF ColorSpace; pixel conversion is best-effort (sRGB path today).',
+                        })}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <Text variant={TextVariants.label} className="mb-1 mt-2 block">
+                    {t('export.file.outputSharpening' as any, { defaultValue: 'Output sharpening' })}
+                  </Text>
+                  <div className="flex flex-wrap gap-1">
+                    {(
+                      [
+                        ['none', 'None'],
+                        ['screen', 'Screen'],
+                        ['matte', 'Matte'],
+                        ['glossy', 'Glossy'],
+                      ] as const
+                    ).map(([id, label]) => (
+                      <button
+                        key={id}
+                        type="button"
+                        disabled={isExporting}
+                        onClick={() => setOutputSharpening(id)}
+                        className={`px-2 py-1 rounded-md text-[10px] uppercase tracking-wide transition-colors disabled:opacity-50 ${
+                          outputSharpening === id
+                            ? 'bg-accent text-button-text'
+                            : 'bg-surface text-text-secondary hover:bg-card-active'
+                        }`}
+                        data-tooltip={t('export.file.outputSharpeningTip' as any, {
+                          defaultValue: 'Applied after resize (LR-style output sharpening)',
+                        })}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <Text variant={TextVariants.label} className="mb-1 mt-2 block">
+                    {t('export.file.resolution' as any, { defaultValue: 'Resolution (DPI)' })}
+                  </Text>
+                  <div className="flex flex-wrap gap-1">
+                    {([72, 150, 240, 300] as const).map((dpi) => (
+                      <button
+                        key={dpi}
+                        type="button"
+                        disabled={isExporting}
+                        onClick={() => setResolutionDpi(dpi)}
+                        className={`px-2 py-1 rounded-md text-[10px] tabular-nums transition-colors disabled:opacity-50 ${
+                          resolutionDpi === dpi
+                            ? 'bg-accent text-button-text'
+                            : 'bg-surface text-text-secondary hover:bg-card-active'
+                        }`}
+                        data-tooltip={t('export.file.resolutionTip' as any, {
+                          defaultValue: 'Writes EXIF X/YResolution (print/screen metadata)',
+                        })}
+                      >
+                        {dpi}
+                      </button>
+                    ))}
+                  </div>
+                  {[FileFormats.Jpeg, FileFormats.Webp, FileFormats.Jxl].includes(fileFormat as FileFormats) && (
+                    <>
+                      <Text variant={TextVariants.label} className="mb-1 mt-2 block">
+                        {t('export.file.limitSize' as any, {
+                          defaultValue: 'Limit file size',
+                        })}
+                      </Text>
+                      <div className="flex flex-wrap gap-1">
+                        {(
+                          [
+                            [null, t('export.file.limitOff' as any, { defaultValue: 'Off' })],
+                            [200, '200 KB'],
+                            [500, '500 KB'],
+                            [1024, '1 MB'],
+                            [2048, '2 MB'],
+                          ] as const
+                        ).map(([kb, label]) => (
+                          <button
+                            key={String(kb)}
+                            type="button"
+                            disabled={isExporting}
+                            onClick={() => setLimitFileSizeKb(kb)}
+                            className={`px-2 py-1 rounded-md text-[10px] tabular-nums transition-colors disabled:opacity-50 ${
+                              limitFileSizeKb === kb
+                                ? 'bg-accent text-button-text'
+                                : 'bg-surface text-text-secondary hover:bg-card-active'
+                            }`}
+                            data-tooltip={t('export.file.limitSizeTip' as any, {
+                              defaultValue:
+                                'LR-style: lower JPEG/WebP/JXL quality until under the limit (metadata size included).',
+                            })}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
             </Section>
 
-            {numImages > 1 && (
-              <Section title={t('export.sections.fileNaming')}>
-                <input
-                  className="w-full bg-surface border border-surface rounded-md p-2 text-sm text-text-primary focus:ring-accent focus:border-accent"
-                  disabled={isExporting}
-                  onChange={(e) => setFilenameTemplate(e.target.value)}
-                  ref={filenameInputRef}
-                  type="text"
-                  value={filenameTemplate}
-                />
-                <div className="flex flex-wrap gap-2 mt-2">
-                  {FILENAME_VARIABLES.map((variable: string) => (
-                    <button
-                      className="px-2 py-1 bg-surface text-text-secondary text-xs rounded-md hover:bg-card-active transition-colors disabled:opacity-50"
-                      disabled={isExporting}
-                      key={variable}
-                      onClick={() => handleVariableClick(variable)}
-                    >
-                      {variable}
-                    </button>
-                  ))}
-                </div>
-              </Section>
-            )}
+            <Section title={t('export.sections.fileNaming')}>
+              <input
+                className="w-full bg-surface border border-surface rounded-md p-2 text-sm text-text-primary focus:ring-accent focus:border-accent"
+                disabled={isExporting}
+                onChange={(e) => setFilenameTemplate(e.target.value)}
+                ref={filenameInputRef}
+                type="text"
+                value={filenameTemplate}
+              />
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                {FILENAME_VARIABLES.map((variable: string) => (
+                  <button
+                    type="button"
+                    className="px-2 py-1 bg-surface text-text-secondary text-[10px] rounded-md hover:bg-card-active transition-colors disabled:opacity-50 font-mono"
+                    disabled={isExporting}
+                    key={variable}
+                    onClick={() => handleVariableClick(variable)}
+                    data-tooltip={t('export.fileNaming.insertToken' as any, {
+                      defaultValue: 'Insert token',
+                    })}
+                  >
+                    {variable}
+                  </button>
+                ))}
+              </div>
+              {numImages <= 1 && (
+                <p className="mt-1 text-[10px] text-text-secondary/50">
+                  {t('export.fileNaming.singleHint' as any, {
+                    defaultValue: 'Tokens apply on export; {sequence} is useful for batch jobs.',
+                  })}
+                </p>
+              )}
+            </Section>
 
             {fileFormat !== FileFormats.Cube && (
               <>
@@ -675,6 +1090,26 @@ export default function ExportPanel({
                           value={resizeValue}
                         />
                         <Text variant={TextVariants.label}>{t('export.resize.pixels')}</Text>
+                      </div>
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        {([2048, 2560, 3840, 5120] as const).map((px) => (
+                          <button
+                            key={px}
+                            type="button"
+                            disabled={isExporting}
+                            onClick={() => {
+                              setEnableResize(true);
+                              setResizeValue(px);
+                            }}
+                            className={`px-2 py-0.5 rounded text-[10px] tabular-nums transition-colors disabled:opacity-50 ${
+                              enableResize && resizeValue === px
+                                ? 'bg-accent text-button-text'
+                                : 'bg-surface text-text-secondary hover:bg-card-active'
+                            }`}
+                          >
+                            {px}px
+                          </button>
+                        ))}
                       </div>
                       <Switch
                         checked={dontEnlarge}
@@ -707,6 +1142,23 @@ export default function ExportPanel({
                         />
                       </div>
                     )}
+
+                <div className="mt-2">
+                  <Switch
+                    label={t('export.revealAfter' as any, { defaultValue: 'Show in folder after export' })}
+                    checked={revealAfterExport}
+                    onChange={(v: boolean) => {
+                      setRevealAfterExport(v);
+                      try {
+                        localStorage.setItem('rustroom.export.revealAfter', v ? '1' : '0');
+                      } catch {
+                        /* ignore */
+                      }
+                    }}
+                    disabled={isExporting}
+                    trackClassName="bg-surface"
+                  />
+                </div>
                   </Section>
                 )}
 
@@ -721,6 +1173,36 @@ export default function ExportPanel({
                   {enableWatermark && (
                     <div className="space-y-4 pl-2 border-l-2 border-surface">
                       <div className={isExporting ? 'opacity-50 pointer-events-none' : ''}>
+                        <Text variant={TextVariants.label} className="mb-1 block">
+                          {t('export.watermark.text' as any, { defaultValue: 'Text watermark' })}
+                        </Text>
+                        <input
+                          type="text"
+                          value={watermarkText}
+                          onChange={(e) => setWatermarkText(e.target.value)}
+                          disabled={isExporting}
+                          placeholder={t('export.watermark.textPlaceholder' as any, {
+                            defaultValue: '© Your Name',
+                          })}
+                          className="w-full h-8 px-2 rounded-md bg-bg-primary border border-border-color/40 text-[12px] text-text-primary outline-none focus:border-white/30"
+                        />
+                        <div className="mt-1.5 flex items-center gap-2">
+                          <Text variant={TextVariants.label} className="shrink-0">
+                            {t('export.watermark.textColor' as any, { defaultValue: 'Color' })}
+                          </Text>
+                          <input
+                            type="color"
+                            value={watermarkTextColor || '#FFFFFF'}
+                            onChange={(e) => setWatermarkTextColor(e.target.value)}
+                            disabled={isExporting}
+                            className="h-7 w-10 rounded border border-border-color/40 bg-transparent cursor-pointer"
+                          />
+                          <span className="text-[10px] text-text-secondary/60 font-mono">
+                            {watermarkTextColor || '#FFFFFF'}
+                          </span>
+                        </div>
+                      </div>
+                      <div className={isExporting ? 'opacity-50 pointer-events-none' : ''}>
                         <ImagePicker
                           label={t('export.watermark.watermarkImage')}
                           imageName={watermarkPath ? watermarkPath.split(/[\\/]/).pop() || null : null}
@@ -728,7 +1210,7 @@ export default function ExportPanel({
                           onClear={() => setWatermarkPath(null)}
                         />
                       </div>
-                      {watermarkPath && (
+                      {(watermarkPath || (watermarkText && watermarkText.trim())) && (
                         <>
                           <Dropdown
                             options={anchorOptions}
@@ -769,15 +1251,25 @@ export default function ExportPanel({
                               defaultValue={75}
                             />
                           </div>
-                          <WatermarkPreview
-                            imageAspectRatio={imageAspectRatio}
-                            watermarkImageAspectRatio={watermarkImageAspectRatio}
-                            watermarkPath={watermarkPath}
-                            anchor={watermarkAnchor as WatermarkAnchor}
-                            scale={watermarkScale}
-                            spacing={watermarkSpacing}
-                            opacity={watermarkOpacity}
-                          />
+                          {watermarkPath && (
+                            <WatermarkPreview
+                              imageAspectRatio={imageAspectRatio}
+                              watermarkImageAspectRatio={watermarkImageAspectRatio}
+                              watermarkPath={watermarkPath}
+                              anchor={watermarkAnchor as WatermarkAnchor}
+                              scale={watermarkScale}
+                              spacing={watermarkSpacing}
+                              opacity={watermarkOpacity}
+                            />
+                          )}
+                          {!!watermarkText?.trim() && !watermarkPath && (
+                            <p className="text-[10px] text-text-secondary/50">
+                              {t('export.watermark.textHint' as any, {
+                                defaultValue:
+                                  'Text is rendered at export with a system font (outline for contrast).',
+                              })}
+                            </p>
+                          )}
                         </>
                       )}
                     </div>
@@ -916,6 +1408,18 @@ export default function ExportPanel({
           ) : status === Status.Success ? (
             <>
               <CheckCircle size={18} className="mr-2" /> {t('export.status.success')}
+              {lastExportOutput && !isAndroid && (
+                <button
+                  type="button"
+                  className="ml-3 text-[11px] underline text-text-secondary hover:text-text-primary"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    invoke(Invokes.ShowInFinder, { path: lastExportOutput }).catch(() => {});
+                  }}
+                >
+                  {t('export.status.showInFolder' as any, { defaultValue: 'Show in folder' })}
+                </button>
+              )}
             </>
           ) : status === Status.Error ? (
             <>

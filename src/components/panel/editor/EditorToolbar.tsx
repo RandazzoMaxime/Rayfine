@@ -1,5 +1,5 @@
 import { memo, useState, useEffect, useRef, useMemo } from 'react';
-import { Eye, EyeOff, ArrowLeft, Maximize, Loader2, Undo, Redo } from 'lucide-react';
+import { Eye, EyeOff, ArrowLeft, Maximize, Loader2, Undo, Redo, Columns2, Printer } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import clsx from 'clsx';
 import { useTranslation } from 'react-i18next';
@@ -9,7 +9,7 @@ import Text from '../../ui/Text';
 import { TextColors, TextVariants, TextWeights } from '../../../types/typography';
 import { useLibraryStore } from '../../../store/useLibraryStore';
 import { useSettingsStore } from '../../../store/useSettingsStore';
-import { findGroupVariants, getVariantLabel } from '../../../utils/imageGrouping';
+import { findGroupVariants, findVirtualCopyStack, getVariantLabel, virtualCopyLabel } from '../../../utils/imageGrouping';
 
 interface EditorToolbarProps {
   canRedo: boolean;
@@ -21,6 +21,10 @@ interface EditorToolbarProps {
   onRedo(): void;
   onToggleFullScreen(): void;
   onToggleShowOriginal(): void;
+  onToggleBeforeAfterSplit?(opts?: { cycleOrientation?: boolean }): void;
+  beforeAfterSplit?: boolean;
+  softProofing?: boolean;
+  onToggleSoftProofing?(): void;
   onUndo(): void;
   selectedImage: SelectedImage;
   showOriginal: boolean;
@@ -42,6 +46,10 @@ const EditorToolbar = memo(
     onRedo,
     onToggleFullScreen,
     onToggleShowOriginal,
+    onToggleBeforeAfterSplit,
+    beforeAfterSplit = false,
+    softProofing = false,
+    onToggleSoftProofing,
     onUndo,
     selectedImage,
     showOriginal,
@@ -71,9 +79,17 @@ const EditorToolbar = memo(
     const groupingMode: GroupingMode = useSettingsStore((s) => s.appSettings?.grouping) ?? 'off';
 
     const variantOptions = useMemo(() => {
-      if (groupingMode === 'off' || !onImageSelect) return [];
-      const isVC = selectedImage.path.includes('?vc=');
-      if (isVC) return [];
+      if (!onImageSelect) return [];
+      // Virtual copy stack (master + copies) — always when 2+
+      const stack = findVirtualCopyStack(imageList, selectedImage.path);
+      if (stack.length >= 2) {
+        return stack.map((v) => ({
+          path: v.path,
+          label: virtualCopyLabel(v.path),
+        }));
+      }
+      // RAW+JPEG grouping variants
+      if (groupingMode === 'off') return [];
       const variants = findGroupVariants(imageList, selectedImage.group_id);
       if (variants.length < 2) return [];
       return variants.map((v) => ({ path: v.path, label: getVariantLabel(v.path) }));
@@ -357,16 +373,16 @@ const EditorToolbar = memo(
     const isExpanded = isInfoHovered && (hasExif || isLoading);
 
     return (
-      <div className="relative shrink-0 flex items-center justify-between px-4 h-14 gap-4 z-40">
+      <div className="relative shrink-0 flex items-center justify-between px-3 h-11 gap-3 z-40">
         <div className="flex items-center gap-2 shrink-0 z-40">
           <button
-            className="bg-surface text-text-primary p-2 rounded-full hover:bg-card-active transition-colors shrink-0"
+            className="bg-surface text-text-primary p-1.5 rounded-full hover:bg-card-active transition-colors shrink-0"
             onClick={onBackToLibrary}
             onKeyDown={handleButtonKeyDown}
             data-tooltip={t('editor.toolbar.tooltips.backToLibrary')}
             data-bench-id="back-to-library"
           >
-            <ArrowLeft size={20} />
+            <ArrowLeft size={18} />
           </button>
 
           <div className="hidden 2xl:flex items-center gap-2" aria-hidden="true">
@@ -396,7 +412,7 @@ const EditorToolbar = memo(
             onMouseEnter={() => setIsInfoHovered(true)}
             onMouseLeave={() => setIsInfoHovered(false)}
             style={{
-              top: '10px',
+              top: '6px',
               transform: 'translateX(-50%)',
               left: '50%',
               zIndex: isExpanded ? 50 : 0,
@@ -682,7 +698,39 @@ const EditorToolbar = memo(
               showOriginal ? t('editor.toolbar.tooltips.showEdited') : t('editor.toolbar.tooltips.showOriginal')
             }
           >
-            {showOriginal ? <EyeOff size={20} /> : <Eye size={20} />}
+            {showOriginal ? <EyeOff size={18} /> : <Eye size={18} />}
+          </button>
+          <button
+            className={clsx(
+              'p-2 rounded-full transition-colors',
+              beforeAfterSplit
+                ? 'bg-accent text-button-text hover:bg-accent/90 hover:text-button-text'
+                : 'bg-surface hover:bg-card-active text-text-primary',
+            )}
+            onClick={(e) =>
+              onToggleBeforeAfterSplit?.(e.shiftKey ? { cycleOrientation: true } : undefined)
+            }
+            onKeyDown={handleButtonKeyDown}
+            data-tooltip={t('editor.toolbar.tooltips.beforeAfterSplit' as any, {
+              defaultValue: 'Before / After (Shift+click: vertical → horizontal → two-up)',
+            })}
+          >
+            <Columns2 size={18} />
+          </button>
+          <button
+            className={clsx(
+              'p-2 rounded-full transition-colors',
+              softProofing
+                ? 'bg-amber-600/90 text-white hover:bg-amber-500'
+                : 'bg-surface hover:bg-card-active text-text-primary',
+            )}
+            onClick={() => onToggleSoftProofing?.()}
+            onKeyDown={handleButtonKeyDown}
+            data-tooltip={t('editor.toolbar.tooltips.softProof' as any, {
+              defaultValue: 'Soft Proofing',
+            })}
+          >
+            <Printer size={18} />
           </button>
           <button
             className="bg-surface text-text-primary p-2 rounded-full hover:bg-card-active transition-colors disabled:opacity-50 disabled:cursor-not-allowed relative"

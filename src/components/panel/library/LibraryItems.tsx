@@ -1,20 +1,187 @@
+import { useLibraryStore } from '../../../store/useLibraryStore';
+import { useUIStore } from '../../../store/useUIStore';
+import { invoke } from '@tauri-apps/api/core';
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Image as ImageIcon, Folder, FolderOpen, Star as StarIcon, SlidersHorizontal, CloudOff, Layers } from 'lucide-react';
+import { Image as ImageIcon, Folder, FolderOpen, Star as StarIcon, SlidersHorizontal, CloudOff, Layers, Tag, MapPin } from 'lucide-react';
 import clsx from 'clsx';
 import { useTranslation } from 'react-i18next';
 import { COLOR_LABELS, Color } from '../../../utils/adjustments';
-import { ThumbnailAspectRatio, ImageFile, ExifOverlay } from '../../ui/AppProperties';
+import { findVirtualCopyStack, findGroupVariants, effectiveGroupId, stackIdFromTags, findManualStack } from '../../../utils/imageGrouping';
+import { ThumbnailAspectRatio, ImageFile, ExifOverlay, Invokes } from '../../ui/AppProperties';
 import Text from '../../ui/Text';
 import { TextColors, TextVariants, TextWeights, TEXT_COLOR_KEYS } from '../../../types/typography';
 import { ColumnWidths } from '../MainLibrary';
 import { useProcessStore } from '../../../store/useProcessStore';
 import { useSettingsStore } from '../../../store/useSettingsStore';
 import { IconAperture, IconFocalLength, IconIso, IconShutter } from '../editor/ExifIcons';
+import CheckBox from '../../ui/CheckBox';
+
+function toggleChecked(path: string, checked: boolean) {
+  const { multiSelectedPaths, setLibrary } = useLibraryStore.getState();
+  const next = checked
+    ? Array.from(new Set([...multiSelectedPaths, path]))
+    : multiSelectedPaths.filter((p) => p !== path);
+  setLibrary({ multiSelectedPaths: next });
+}
 
 interface ImageLayer {
   id: string;
   url: string;
   opacity: number;
+}
+
+
+/** Cycle master ↔ virtual copies for a library thumbnail badge click. */
+
+/** LR Library Painter: spray keyword / rating / color / flag onto a photo. Alt = remove/clear. */
+async function tryLibraryPaint(path: string, event: any): Promise<boolean> {
+  const st = useLibraryStore.getState();
+  const painter = st.libraryPainter
+    || (st.keywordPaintTag
+      ? { kind: 'keyword' as const, value: st.keywordPaintTag }
+      : null);
+  if (!painter) return false;
+  event?.stopPropagation?.();
+  event?.preventDefault?.();
+  const remove = !!event?.altKey;
+  try {
+    if (painter.kind === 'keyword') {
+      const bare = String(painter.value || '')
+        .trim()
+        .toLowerCase()
+        .replace(/^user:/, '');
+      if (!bare) return true;
+      const parts = bare.split('/').filter(Boolean);
+      const segments: string[] = [];
+      let acc = '';
+      for (const part of parts) {
+        acc = acc ? `${acc}/${part}` : part;
+        segments.push(acc);
+      }
+      const tags = segments.map((s) => `user:${s}`);
+      if (remove) {
+        for (const tag of tags) {
+          await invoke(Invokes.RemoveTagForPaths, { paths: [path], tag });
+        }
+        useLibraryStore.getState().setLibrary((state) => ({
+          imageList: state.imageList.map((img) => {
+            if (img.path !== path) return img;
+            const next = (img.tags || []).filter(
+              (tg) => !tags.includes(tg) && !tags.includes(`user:${tg}`),
+            );
+            return { ...img, tags: next };
+          }),
+        }));
+      } else {
+        for (const tag of tags) {
+          await invoke(Invokes.AddTagForPaths, { paths: [path], tag });
+        }
+        useLibraryStore.getState().setLibrary((state) => ({
+          imageList: state.imageList.map((img) => {
+            if (img.path !== path) return img;
+            const next = [...(img.tags || [])];
+            for (const tag of tags) {
+              const leaf = tag.replace(/^user:/, '');
+              if (!next.includes(tag) && !next.includes(leaf)) next.push(tag);
+            }
+            return { ...img, tags: next };
+          }),
+        }));
+      }
+      return true;
+    }
+
+    if (painter.kind === 'rating') {
+      const rating = remove ? 0 : Math.max(0, Math.min(5, Number(painter.value) || 0));
+      await invoke(Invokes.SetRatingForPaths, { paths: [path], rating });
+      useLibraryStore.getState().setLibrary((state) => ({
+        imageRatings: { ...state.imageRatings, [path]: rating },
+        imageList: state.imageList.map((img) =>
+          img.path === path ? { ...img, rating } : img,
+        ),
+      }));
+      return true;
+    }
+
+    if (painter.kind === 'color') {
+      const color = remove ? null : (painter.value as string | null);
+      await invoke(Invokes.SetColorLabelForPaths, { paths: [path], color });
+      useLibraryStore.getState().setLibrary((state) => ({
+        imageList: state.imageList.map((i) => {
+          if (i.path !== path) return i;
+          const other = (i.tags || []).filter((tg) => !tg.startsWith('color:'));
+          const tags = color ? [...other, `color:${String(color).toLowerCase()}`] : other;
+          return { ...i, tags: tags.length ? tags : null };
+        }),
+      }));
+      return true;
+    }
+
+    if (painter.kind === 'flag') {
+      const flag = remove ? null : (painter.value as 'pick' | 'reject' | null);
+      await invoke(Invokes.SetFlagForPaths, { paths: [path], flag });
+      useLibraryStore.getState().setLibrary((state) => ({
+        imageList: state.imageList.map((i) => {
+          if (i.path !== path) return i;
+          const other = (i.tags || []).filter((tg) => !tg.startsWith('flag:'));
+          const tags = flag ? [...other, `flag:${flag}`] : other;
+          return { ...i, tags: tags.length ? tags : null };
+        }),
+      }));
+      return true;
+    }
+  } catch (err) {
+    console.error('library paint failed', err);
+  }
+  return true;
+}
+
+/** @deprecated alias */
+async function tryKeywordPaint(path: string, event: any): Promise<boolean> {
+  return tryLibraryPaint(path, event);
+}
+
+function cycleVirtualCopyStack(path: string, onImageClick?: (path: string, event: any) => void, e?: any) {
+  try {
+    const list = useLibraryStore.getState().imageList || [];
+    const stack = findVirtualCopyStack(list, path);
+    if (stack.length < 2) return;
+    const idx = stack.findIndex((img) => img.path === path);
+    const next = stack[(idx < 0 ? 0 : idx + 1) % stack.length];
+    onImageClick?.(next.path, e || { shiftKey: false, metaKey: false, ctrlKey: false });
+  } catch {
+    /* ignore */
+  }
+}
+
+function virtualCopyStackCount(path: string): number {
+  try {
+    const list = useLibraryStore.getState().imageList || [];
+    return findVirtualCopyStack(list, path).length;
+  } catch {
+    return 0;
+  }
+}
+
+
+/** Cycle RAW+JPEG (or other) group variants for a library group badge click. */
+function cycleGroupStack(
+  groupId: string | null | undefined,
+  currentPath: string,
+  onImageClick?: (path: string, event: any) => void,
+  e?: any,
+) {
+  if (!groupId) return;
+  try {
+    const list = useLibraryStore.getState().imageList || [];
+    const stack = findGroupVariants(list, groupId);
+    if (stack.length < 2) return;
+    const idx = stack.findIndex((img) => img.path === currentPath);
+    const next = stack[(idx < 0 ? 0 : idx + 1) % stack.length];
+    onImageClick?.(next.path, e || { shiftKey: false, metaKey: false, ctrlKey: false });
+  } catch {
+    /* ignore */
+  }
 }
 
 const ThumbnailComponent = ({
@@ -25,19 +192,23 @@ const ThumbnailComponent = ({
   onImageClick,
   onImageDoubleClick,
   onLoad,
+  onRate,
   path,
   rating,
   tags,
   aspectRatio: thumbnailAspectRatio,
   isEdited,
+  isRaw,
   exif,
   isCloudPlaceholder,
   groupBadgeLabel,
+  groupId,
 }: any) => {
   const { t } = useTranslation();
   const data = useProcessStore((s) => s.thumbnails[path]);
   const exifOverlay = useSettingsStore((s) => s.appSettings?.exifOverlay || ExifOverlay.Off);
   const displayEditIcon = useSettingsStore((s) => s.appSettings?.displayEditIcon ?? true);
+  const showGridFilenames = useSettingsStore((s) => s.appSettings?.showGridFilenames !== false);
   const showEditIcon = isEdited && displayEditIcon;
 
   const [showPlaceholder, setShowPlaceholder] = useState(false);
@@ -66,15 +237,25 @@ const ThumbnailComponent = ({
     };
   }, [path]);
 
-  const { shutter, fNumber, iso, focal } = useMemo(() => {
+  const { shutter, fNumber, iso, focal, camera, lens } = useMemo(() => {
     const e = exif || {};
     let fNum = e.FNumber ? String(e.FNumber) : '';
     if (fNum && !fNum.toLowerCase().startsWith('f')) fNum = `f/${fNum}`;
+    const make = String(e.Make || '').trim();
+    const model = String(e.Model || '').trim();
+    let cam = `${make} ${model}`.trim();
+    // avoid "Canon Canon EOS..."
+    if (make && model.toLowerCase().startsWith(make.toLowerCase())) {
+      cam = model;
+    }
+    const lensStr = String(e.LensModel || e.Lens || '').trim();
     return {
       shutter: e.ExposureTime || '',
       fNumber: fNum,
       iso: e.PhotographicSensitivity || e.ISOSpeedRatings || '',
       focal: e.FocalLengthIn35mmFilm || e.FocalLength || '',
+      camera: cam,
+      lens: lensStr,
     };
   }, [exif]);
 
@@ -128,13 +309,15 @@ const ThumbnailComponent = ({
     });
   }, []);
 
-  const ringClass = isActive
+  // Selection chrome aligned with filmstrip (light edge + bottom bar when active)
+  // Two highlight levels: checked (selected) = strong accent ring; active = thin white ring + bottom edge.
+  const ringClass = isSelected
     ? 'ring-2 ring-inset ring-accent'
-    : isSelected
-      ? 'ring-2 ring-inset ring-gray-400'
+    : isActive
+      ? 'ring-1 ring-inset ring-white/70'
       : isForcedHover
-        ? 'ring-2 ring-inset ring-hover-color'
-        : 'group-hover:ring-2 group-hover:ring-inset group-hover:ring-hover-color';
+        ? 'ring-1 ring-inset ring-white/30'
+        : 'group-hover:ring-1 group-hover:ring-inset group-hover:ring-white/25';
 
   const colorTag = tags?.find((t: string) => t.startsWith('color:'))?.substring(6);
   const colorLabel = COLOR_LABELS.find((c: Color) => c.name === colorTag);
@@ -146,19 +329,52 @@ const ThumbnailComponent = ({
   const hasColorLabel = !!colorLabel;
   const hasRating = rating > 0;
   const hasGroupBadge = !!groupBadgeLabel;
-  const hasAnyOverlay = hasEditIcon || hasColorLabel || hasRating || hasGroupBadge;
+  const flagTag = tags?.find((t: string) => t.startsWith('flag:'))?.substring(5);
+  const isPick = flagTag === 'pick';
+  const isReject = flagTag === 'reject';
+  const hasFlag = isPick || isReject;
+  const hasGps = (() => {
+    const lat = exif?.GPSLatitude ?? exif?.gpsLatitude;
+    const lon = exif?.GPSLongitude ?? exif?.gpsLongitude;
+    if (lat == null || lon == null || lat === '' || lon === '') return false;
+    const la = parseFloat(String(lat));
+    const lo = parseFloat(String(lon));
+    return Number.isFinite(la) && Number.isFinite(lo);
+  })();
+  const keywordCount = (tags || []).filter(
+    (tg: string) => tg.startsWith('user:') || (!tg.startsWith('color:') && !tg.startsWith('flag:') && !tg.startsWith('stack:') && !!tg),
+  ).length;
+  const hasKeywords = keywordCount > 0;
+  const inQuickCollection = useLibraryStore((s) => (s.quickCollectionPaths || []).includes(path));
+  const libraryPainter = useLibraryStore((s) => s.libraryPainter || (s.keywordPaintTag ? { kind: 'keyword' as const, value: s.keywordPaintTag } : null));
+  const hasAnyOverlay =
+    hasEditIcon || hasColorLabel || hasRating || hasGroupBadge || hasFlag || inQuickCollection || hasKeywords || hasGps || !!isRaw;
 
   return (
     <div
-      className="aspect-square bg-surface rounded-md overflow-hidden cursor-pointer group relative flex flex-col transition-all duration-150 transform-gpu [-webkit-mask-image:-webkit-radial-gradient(white,black)]"
+      className={clsx(
+        'aspect-square bg-surface rounded-sm overflow-hidden cursor-pointer group relative flex flex-col transition-all duration-100 transform-gpu [-webkit-mask-image:-webkit-radial-gradient(white,black)]',
+        // LR dims rejected photos in the grid
+        isReject && 'opacity-45',
+      )}
       data-bench-id="thumbnail"
       onClick={(e: any) => {
         e.stopPropagation();
-        onImageClick(path, e);
+        void (async () => {
+          if (await tryKeywordPaint(path, e)) return;
+          onImageClick(path, e);
+        })();
       }}
       onContextMenu={(e: any) => onContextMenu(e, path)}
       onDoubleClick={() => onImageDoubleClick(path)}
+      style={libraryPainter ? { cursor: 'cell' } : undefined}
     >
+      {isActive && (
+        <div
+          className="library-active-edge absolute left-0 right-0 bottom-0 h-[3px] bg-white/90 z-20 pointer-events-none"
+          aria-hidden
+        />
+      )}
       <div className="relative w-full flex-1 min-h-0 z-0 bg-surface">
         {layers.length > 0 && (
           <div className="absolute inset-0 w-full h-full">
@@ -168,7 +384,7 @@ const ThumbnailComponent = ({
                 className="absolute inset-0 w-full h-full"
                 style={{
                   opacity: layer.opacity,
-                  transition: 'opacity 300ms ease-in-out',
+                  transition: 'opacity 60ms linear',
                 }}
                 onTransitionEnd={() => handleTransitionEnd(layer.id)}
               >
@@ -178,6 +394,7 @@ const ThumbnailComponent = ({
                     'w-full h-full transition-transform duration-300 will-change-transform relative',
                     thumbnailAspectRatio === ThumbnailAspectRatio.Contain ? 'object-contain' : 'object-cover',
                     isForcedHover ? 'scale-[1.02]' : 'group-hover:scale-[1.02]',
+                    isReject && 'grayscale',
                   )}
                   decoding="async"
                   loading="lazy"
@@ -221,10 +438,59 @@ const ThumbnailComponent = ({
         )}
       />
 
-      <div className="absolute top-1.5 right-1.5 flex items-center justify-end z-10 pointer-events-none">
+      <div className="absolute top-1 left-1 z-40 flex items-center gap-1">
+        <CheckBox
+          checked={!!isSelected}
+          onChange={(checked) => toggleChecked(path, checked)}
+          label="Select"
+          className={isSelected || isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}
+        />
+      {hasFlag && (
         <div
           className={clsx(
-            'rounded-full h-5 px-1.5 flex items-center justify-center gap-0 shadow-md bg-black/30 pointer-events-auto transition-all duration-200 ease-out origin-top-right',
+            'px-1 py-0.5 rounded text-[8px] font-bold uppercase tracking-wide pointer-events-none shadow-md',
+            isPick ? 'bg-emerald-500/90 text-white' : 'bg-red-500/90 text-white',
+          )}
+        >
+          {isPick ? 'P' : 'X'}
+        </div>
+      )}
+      {hasGps && (
+        <button
+          type="button"
+          className={clsx(
+            'w-4 h-4 rounded-full bg-sky-500/90 text-white flex items-center justify-center shadow ring-1 ring-black/30 pointer-events-auto hover:scale-110 transition-transform',
+          )}
+          data-tooltip={t('library.items.gpsTip' as any, {
+            defaultValue: 'Has GPS — click to open Map',
+          })}
+          title="GPS"
+          onClick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            useLibraryStore.getState().setLibrary({
+              multiSelectedPaths: [path],
+              libraryActivePath: path,
+            });
+            useUIStore.getState().setUI({ activeView: 'map' });
+          }}
+        >
+          <MapPin size={9} className="fill-white" />
+        </button>
+      )}
+      {inQuickCollection && (
+        <div
+          className={clsx(
+            'w-2.5 h-2.5 rounded-full bg-amber-400 ring-1 ring-black/40 pointer-events-none shadow',
+          )}
+          title="Quick Collection"
+        />
+      )}
+      </div>
+      <div className="absolute top-1 right-1 flex items-center justify-end z-10 pointer-events-none">
+        <div
+          className={clsx(
+            'rounded-full h-4 px-1 flex items-center justify-center gap-0 shadow-md bg-black/35 pointer-events-auto transition-all duration-150 ease-out origin-top-right',
             hasAnyOverlay ? 'opacity-100 scale-100' : 'opacity-0 scale-90 pointer-events-none',
           )}
         >
@@ -234,7 +500,7 @@ const ThumbnailComponent = ({
               hasEditIcon ? 'max-w-3 opacity-100 scale-100' : 'max-w-0 opacity-0 scale-75 pointer-events-none',
             )}
           >
-            <SlidersHorizontal size={12} />
+            <SlidersHorizontal size={10} />
           </div>
 
           <div
@@ -245,7 +511,7 @@ const ThumbnailComponent = ({
             )}
           >
             <div
-              className="w-3 h-3 rounded-full transition-colors duration-200"
+              className="w-2.5 h-2.5 rounded-full transition-colors duration-200"
               style={{ backgroundColor: colorLabel ? colorLabel.color : 'transparent' }}
             />
           </div>
@@ -257,24 +523,108 @@ const ThumbnailComponent = ({
               hasRating && (hasEditIcon || hasColorLabel) ? 'ml-1.5' : 'ml-0',
             )}
           >
-            <Text variant={TextVariants.small} color={TextColors.white}>
+            <Text variant={TextVariants.small} color={TextColors.white} className="text-[10px]">
               {rating}
             </Text>
-            <StarIcon size={12} className="text-white fill-white" />
+            <StarIcon size={10} className="text-white fill-white" />
           </div>
+
+          <button
+            type="button"
+            className={clsx(
+              'flex items-center shrink-0 transition-all duration-200 ease-out overflow-hidden pointer-events-auto',
+              hasGroupBadge ? 'max-w-8 opacity-100 scale-100' : 'max-w-0 opacity-0 scale-75 pointer-events-none',
+              hasGroupBadge && (hasEditIcon || hasColorLabel || hasRating) ? 'ml-1.5' : 'ml-0',
+            )}
+            data-tooltip={
+              groupBadgeLabel
+                ? `${groupBadgeLabel} — click cycle · Shift-click expand`
+                : t('library.items.groupStackTip' as any, {
+                    defaultValue: 'Click cycle · Shift-click expand stack',
+                  })
+            }
+            onClick={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              // Shift/Alt+click: expand/collapse stack in grid (LR-style)
+              if ((e.shiftKey || e.altKey) && groupId) {
+                const lib = useLibraryStore.getState();
+                const cur = new Set(lib.expandedStackIds || []);
+                if (cur.has(groupId)) cur.delete(groupId);
+                else cur.add(groupId);
+                lib.setLibrary({ expandedStackIds: Array.from(cur) });
+                return;
+              }
+              cycleGroupStack(groupId, path, onImageClick, e);
+            }}
+          >
+            <Layers size={12} className="text-white" />
+          </button>
 
           <div
             className={clsx(
               'flex items-center shrink-0 transition-all duration-200 ease-out overflow-hidden',
-              hasGroupBadge ? 'max-w-4 opacity-100 scale-100' : 'max-w-0 opacity-0 scale-75 pointer-events-none',
-              hasGroupBadge && (hasEditIcon || hasColorLabel || hasRating) ? 'ml-1.5' : 'ml-0',
+              hasKeywords ? 'max-w-4 opacity-100 scale-100' : 'max-w-0 opacity-0 scale-75 pointer-events-none',
+              hasKeywords && (hasEditIcon || hasColorLabel || hasRating || hasGroupBadge) ? 'ml-1.5' : 'ml-0',
             )}
-            data-tooltip={groupBadgeLabel}
+            data-tooltip={t('library.items.keywordsTip' as any, {
+              defaultValue: '{{count}} keyword(s)',
+              count: keywordCount,
+            })}
           >
-            <Layers size={12} className="text-white" />
+            <Tag size={11} className="text-white" />
           </div>
         </div>
       </div>
+
+      {/* Bottom rating + color — clickable stars (classic Library chrome) */}
+      {(hasRating || hasColorLabel || isActive || isSelected || !!onRate) && (
+        <div
+          className={clsx(
+            // Inset from the edges so stars never overlap the selection ring; sits above the filename row.
+            'absolute inset-x-1.5 z-[25] flex items-center justify-center gap-0.5 py-0.5 rounded',
+            showGridFilenames || isAlways ? 'bottom-8' : 'bottom-1.5',
+            isActive || isSelected || hasRating
+              ? 'opacity-100'
+              : 'opacity-0 group-hover:opacity-100',
+            onRate ? 'pointer-events-auto' : 'pointer-events-none',
+          )}
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          {hasColorLabel && (
+            <span
+              className="w-1.5 h-1.5 rounded-full shrink-0 ring-1 ring-black/30 mr-0.5"
+              style={{ backgroundColor: colorLabel ? colorLabel.color : 'transparent' }}
+            />
+          )}
+          {[1, 2, 3, 4, 5].map((n) => (
+            <button
+              key={n}
+              type="button"
+              className={clsx(
+                'p-0 leading-none',
+                onRate ? 'cursor-pointer hover:scale-110 transition-transform' : 'cursor-default',
+              )}
+              disabled={!onRate}
+              onClick={(e) => {
+                e.stopPropagation();
+                onRate?.(n, [path]);
+              }}
+              aria-label={`Rate ${n}`}
+            >
+              <StarIcon
+                size={9}
+                className={
+                  n <= rating
+                    ? 'text-amber-300 fill-amber-300 drop-shadow-sm'
+                    : 'text-white/30 hover:text-amber-200/80'
+                }
+              />
+            </button>
+          ))}
+        </div>
+      )}
 
       <div
         className={clsx(
@@ -340,36 +690,62 @@ const ThumbnailComponent = ({
             ? 'bg-surface border-t border-border-color/50 pointer-events-auto'
             : isHover
               ? 'bg-transparent group-hover:bg-surface/60 backdrop-blur-none group-hover:backdrop-blur-md border-t border-transparent group-hover:border-border-color/50 pointer-events-none group-hover:pointer-events-auto'
-              : 'bg-transparent border-t border-transparent pointer-events-none',
+              : showGridFilenames
+                ? 'bg-gradient-to-t from-black/70 via-black/30 to-transparent pointer-events-none'
+                : 'bg-transparent border-t border-transparent pointer-events-none opacity-0',
         )}
       >
-        <div className="flex items-end justify-between shrink-0">
+        <div
+          className={clsx(
+            'flex items-end justify-between shrink-0',
+            // Hide filename row when option off (unless EXIF Always/Hover modes manage visibility)
+            !showGridFilenames && !isAlways && !isHover && 'invisible',
+            !showGridFilenames && isHover && 'opacity-0 group-hover:opacity-100',
+          )}
+        >
           <Text
             variant={TextVariants.small}
             className={clsx(
               'truncate pr-2 transition-colors duration-300',
-              isAlways ? 'text-white' : isHover ? 'text-white group-hover:text-white' : 'text-white',
+              isAlways ? 'text-white' : 'text-white drop-shadow-sm',
             )}
           >
             {baseName}
           </Text>
-          {isVirtualCopy && (
-            <Text
-              as="div"
-              variant={TextVariants.small}
-              weight={TextWeights.bold}
+          {!!isRaw && (
+            <span
+              className="shrink-0 mr-auto px-1 py-0.5 rounded text-[7px] font-bold uppercase tracking-wide shadow-md bg-orange-500/90 text-white"
+              title="RAW"
+            >
+              RAW
+            </span>
+          )}
+          {(isVirtualCopy || virtualCopyStackCount(path) >= 2) && (
+            <button
+              type="button"
               className={clsx(
-                'shrink-0 px-1.5 py-0.5 rounded-full transition-colors duration-300 font-bold pointer-events-auto',
+                'shrink-0 px-1.5 py-0.5 rounded-full transition-colors duration-300 font-bold pointer-events-auto text-[10px]',
                 isAlways
                   ? 'bg-border-color/30 text-text-primary shadow-none'
                   : isHover
                     ? 'bg-black/30 text-white backdrop-blur-xs shadow-md group-hover:bg-border-color/30 group-hover:text-text-primary group-hover:shadow-none group-hover:backdrop-blur-none'
                     : 'bg-black/30 text-white backdrop-blur-xs shadow-md',
               )}
-              data-tooltip={t('library.items.tooltipVirtualCopy')}
+              data-tooltip={t('library.items.tooltipVirtualCopyCycle' as any, {
+                defaultValue: isVirtualCopy
+                  ? 'Virtual copy — click to cycle stack'
+                  : 'Virtual copy stack — click to cycle',
+              })}
+              onClick={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                cycleVirtualCopyStack(path, onImageClick, e);
+              }}
             >
-              VC
-            </Text>
+              {isVirtualCopy
+                ? 'VC'
+                : `×${virtualCopyStackCount(path)}`}
+            </button>
           )}
         </div>
 
@@ -442,6 +818,7 @@ const ListItemComponent = ({
   onImageClick,
   onImageDoubleClick,
   onLoad,
+  onRate,
   path,
   rating,
   tags,
@@ -449,6 +826,8 @@ const ListItemComponent = ({
   aspectRatio: thumbnailAspectRatio,
   columnWidths,
   exif,
+  isRaw,
+  isEdited,
   isCloudPlaceholder,
   isPrevSelected,
   isNextSelected,
@@ -483,15 +862,24 @@ const ListItemComponent = ({
     };
   }, [path]);
 
-  const { shutter, fNumber, iso, focal } = useMemo(() => {
+  const { shutter, fNumber, iso, focal, camera, lens } = useMemo(() => {
     const e = exif || {};
     let fNum = e.FNumber ? String(e.FNumber) : '';
     if (fNum && !fNum.toLowerCase().startsWith('f')) fNum = `f/${fNum}`;
+    const make = String(e.Make || '').trim();
+    const model = String(e.Model || '').trim();
+    let cam = `${make} ${model}`.trim();
+    if (make && model.toLowerCase().startsWith(make.toLowerCase())) {
+      cam = model;
+    }
+    const lensStr = String(e.LensModel || e.Lens || '').trim();
     return {
       shutter: e.ExposureTime || '',
       fNumber: fNum,
       iso: e.PhotographicSensitivity || e.ISOSpeedRatings || '',
       focal: e.FocalLengthIn35mmFilm || e.FocalLength || '',
+      camera: cam,
+      lens: lensStr,
     };
   }, [exif]);
 
@@ -501,8 +889,26 @@ const ListItemComponent = ({
     columnWidths.name +
     columnWidths.date +
     columnWidths.rating +
+    (columnWidths.flag || 0) +
+    (columnWidths.edited || 0) +
+    (columnWidths.fileType || 0) +
+    (columnWidths.gps || 0) +
+    (columnWidths.urgency || 0) +
+    (columnWidths.creator || 0) +
+    (columnWidths.credit || 0) +
+    (columnWidths.city || 0) +
+    (columnWidths.country || 0) +
+    (columnWidths.state || 0) +
+    (columnWidths.headline || 0) +
     columnWidths.color +
-    (showExifCols ? columnWidths.shutter + columnWidths.aperture + columnWidths.iso + columnWidths.focal : 0);
+    (showExifCols
+      ? columnWidths.shutter +
+        columnWidths.aperture +
+        columnWidths.iso +
+        columnWidths.focal +
+        (columnWidths.camera || 0) +
+        (columnWidths.lens || 0)
+      : 0);
   const getW = (key: keyof ColumnWidths) => `${(columnWidths[key] / totalBase) * 100}%`;
 
   useEffect(() => {
@@ -557,12 +963,40 @@ const ListItemComponent = ({
 
   const colorTag = tags?.find((t: string) => t.startsWith('color:'))?.substring(6);
   const colorLabel = COLOR_LABELS.find((c: Color) => c.name === colorTag);
+  const flagTag = tags?.find((t: string) => t.startsWith('flag:'))?.substring(5);
+  const isPick = flagTag === 'pick';
+  const isReject = flagTag === 'reject';
+  const hasGpsList = (() => {
+    const lat = exif?.GPSLatitude ?? exif?.gpsLatitude;
+    const lon = exif?.GPSLongitude ?? exif?.gpsLongitude;
+    if (lat == null || lon == null || lat === '' || lon === '') return false;
+    const la = parseFloat(String(lat));
+    const lo = parseFloat(String(lon));
+    return Number.isFinite(la) && Number.isFinite(lo);
+  })();
 
-  const dateObj = new Date(modified > 1e11 ? modified : modified * 1000);
-  const dateStr =
-    dateObj.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) +
-    ' ' +
-    dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const dateStr = (() => {
+    const raw = String(exif?.DateTimeOriginal || exif?.CreateDate || '').trim();
+    // EXIF often "YYYY:MM:DD HH:MM:SS"
+    if (raw.length >= 10) {
+      const norm = raw.slice(0, 19).replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3');
+      const parsed = new Date(norm.replace(' ', 'T'));
+      if (!Number.isNaN(parsed.getTime())) {
+        return (
+          parsed.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) +
+          ' ' +
+          parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        );
+      }
+      return raw.replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3');
+    }
+    const dateObj = new Date(modified > 1e11 ? modified : modified * 1000);
+    return (
+      dateObj.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) +
+      ' ' +
+      dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    );
+  })();
 
   let roundingClass = 'rounded-md';
   if (isSelected || isActive) {
@@ -578,34 +1012,52 @@ const ListItemComponent = ({
   const borderClass =
     (isSelected || isActive) && isNextSelected ? 'border-b border-transparent' : 'border-b border-border-color/30';
 
-  const stateClass = isActive
-    ? `ring-1 ring-inset ring-accent bg-accent/10 ${roundingClass}`
-    : isSelected
-      ? `ring-1 ring-inset ring-accent/50 bg-accent/5 ${roundingClass}`
-      : 'hover:bg-surface/80 hover:rounded-md';
+  const stateClass = clsx(
+    isSelected
+      ? `ring-2 ring-inset ring-accent bg-accent/10 ${roundingClass}`
+      : isActive
+        ? `ring-1 ring-inset ring-white/60 bg-white/5 ${roundingClass}`
+        : 'hover:bg-surface/80 hover:rounded-md',
+    isReject && 'opacity-50',
+  );
 
   return (
     <div
-      className={`flex items-center w-full h-full cursor-pointer transition-all duration-150 ${borderClass} ${roundingClass} ${stateClass}`}
+      className={`relative flex items-center w-full h-full cursor-pointer transition-all duration-150 ${borderClass} ${roundingClass} ${stateClass}`}
       onClick={(e: any) => {
         e.stopPropagation();
-        onImageClick(path, e);
+        void (async () => {
+          if (await tryKeywordPaint(path, e)) return;
+          onImageClick(path, e);
+        })();
       }}
       onContextMenu={(e: any) => onContextMenu(e, path)}
       onDoubleClick={() => onImageDoubleClick(path)}
     >
+      {isActive && (
+        <div
+          className="list-active-edge absolute left-0 right-0 bottom-0 h-[2px] bg-white/90 z-20 pointer-events-none"
+          aria-hidden
+        />
+      )}
       <div
         style={{ width: getW('thumbnail') }}
         className="flex items-center justify-center p-1.5 h-full overflow-hidden"
       >
         <div className="w-full h-full relative overflow-hidden rounded-sm bg-surface flex items-center justify-center">
+          <CheckBox
+            checked={!!isSelected}
+            onChange={(checked) => toggleChecked(path, checked)}
+            label="Select"
+            className="absolute top-0.5 left-0.5 z-20"
+          />
           {layers.length > 0 && (
             <div className="absolute inset-0 w-full h-full flex items-center justify-center">
               {layers.map((layer) => (
                 <div
                   key={layer.id}
                   className="absolute inset-0 w-full h-full"
-                  style={{ opacity: layer.opacity, transition: 'opacity 300ms ease-in-out' }}
+                  style={{ opacity: layer.opacity, transition: 'opacity 60ms linear' }}
                   onTransitionEnd={() => handleTransitionEnd(layer.id)}
                 >
                   <img
@@ -653,18 +1105,66 @@ const ListItemComponent = ({
         <Text variant={TextVariants.small} className="truncate" weight={TextWeights.medium} color={TextColors.primary}>
           {baseName}
         </Text>
-        {isVirtualCopy && (
-          <Text
-            as="div"
-            variant={TextVariants.small}
-            color={TextColors.secondary}
-            weight={TextWeights.bold}
-            className="shrink-0 bg-bg-primary px-1.5 py-0.5 rounded-full leading-none border border-border-color"
-            data-tooltip={t('library.items.tooltipVirtualCopy')}
+        {(isVirtualCopy || virtualCopyStackCount(path) >= 2) && (
+          <button
+            type="button"
+            className="shrink-0 bg-bg-primary px-1.5 py-0.5 rounded-full leading-none border border-border-color text-[10px] font-bold text-text-secondary hover:text-text-primary hover:border-white/30"
+            data-tooltip={t('library.items.tooltipVirtualCopyCycle' as any, {
+              defaultValue: isVirtualCopy
+                ? 'Virtual copy — click to cycle stack'
+                : 'Virtual copy stack — click to cycle',
+            })}
+            onClick={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              cycleVirtualCopyStack(path, onImageClick, e);
+            }}
           >
-            VC
-          </Text>
+            {isVirtualCopy ? 'VC' : `×${virtualCopyStackCount(path)}`}
+          </button>
         )}
+        {(isPick || isReject) && (
+          <span
+            className={clsx(
+              'shrink-0 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase leading-none',
+              isPick ? 'bg-emerald-500/90 text-white' : 'bg-red-500/90 text-white',
+            )}
+          >
+            {isPick ? 'P' : 'X'}
+          </span>
+        )}
+        {hasGpsList && (
+          <span
+            className="shrink-0 inline-flex items-center gap-0.5 px-1 py-0.5 rounded text-[9px] font-semibold bg-sky-500/20 text-sky-300 border border-sky-500/30"
+            title="GPS"
+          >
+            <MapPin size={9} />
+          </span>
+        )}
+        {!!isRaw && (
+          <span
+            className="shrink-0 px-1 py-0.5 rounded text-[8px] font-bold uppercase bg-orange-500/25 text-orange-300 border border-orange-500/30"
+            title="RAW"
+          >
+            RAW
+          </span>
+        )}
+        {(() => {
+          const kws = (tags || []).filter(
+            (tg: string) =>
+              tg.startsWith('user:') || (!tg.startsWith('color:') && !tg.startsWith('flag:') && !tg.startsWith('stack:') && !!tg),
+          );
+          if (!kws.length) return null;
+          return (
+            <span
+              className="shrink-0 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] text-text-secondary bg-bg-primary border border-border-color/50"
+              title={kws.map((k: string) => k.replace(/^user:/, '')).join(', ')}
+            >
+              <Tag size={10} />
+              {kws.length}
+            </span>
+          );
+        })()}
       </div>
 
       <div style={{ width: getW('date') }} className="flex items-center px-3 h-full overflow-hidden">
@@ -673,15 +1173,196 @@ const ListItemComponent = ({
         </Text>
       </div>
 
-      <div style={{ width: getW('rating') }} className="flex items-center px-3 h-full overflow-hidden">
-        {rating > 0 && (
-          <div className="flex items-center gap-1">
-            <StarIcon size={12} className="text-accent fill-accent" />
-            <Text variant={TextVariants.small} color={TextColors.primary} weight={TextWeights.medium}>
-              {rating}
-            </Text>
-          </div>
+      <div style={{ width: getW('rating') }} className="flex items-center px-2 h-full overflow-hidden">
+        <div
+          className="flex items-center gap-px"
+          title={String(rating)}
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          {[1, 2, 3, 4, 5].map((n) => (
+            <button
+              key={n}
+              type="button"
+              className={clsx(
+                'p-0 leading-none',
+                onRate ? 'cursor-pointer hover:scale-110 transition-transform' : 'cursor-default',
+              )}
+              disabled={!onRate}
+              onClick={(e) => {
+                e.stopPropagation();
+                onRate?.(n, [path]);
+              }}
+              aria-label={`Rate ${n}`}
+            >
+              <StarIcon
+                size={11}
+                className={
+                  n <= rating
+                    ? 'text-amber-300 fill-amber-300'
+                    : 'text-text-secondary/30 hover:text-amber-200/70'
+                }
+              />
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ width: getW('flag') }} className="flex items-center justify-center px-1 h-full overflow-hidden">
+        {isPick || isReject ? (
+          <span
+            className={clsx(
+              'px-1.5 py-0.5 rounded text-[9px] font-bold uppercase leading-none',
+              isPick ? 'bg-emerald-500/90 text-white' : 'bg-red-500/90 text-white',
+            )}
+          >
+            {isPick ? 'P' : 'X'}
+          </span>
+        ) : (
+          <span className="text-[9px] text-text-secondary/40">·</span>
         )}
+      </div>
+
+      <div style={{ width: getW('edited') }} className="flex items-center justify-center px-1 h-full overflow-hidden">
+        {isEdited ? (
+          <span
+            className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase leading-none bg-sky-500/25 text-sky-200 border border-sky-400/30"
+            title={t('library.grid.columns.edited' as any, { defaultValue: 'Edited' })}
+          >
+            E
+          </span>
+        ) : (
+          <span className="text-[9px] text-text-secondary/40">·</span>
+        )}
+      </div>
+
+      <div style={{ width: getW('fileType') }} className="flex items-center justify-center px-1 h-full overflow-hidden">
+        {(() => {
+          const physical = String(path || '').split('?')[0];
+          const name = physical.split(/[/\\]/).pop() || '';
+          const dot = name.lastIndexOf('.');
+          const ext = (dot > 0 ? name.slice(dot + 1) : '').toUpperCase();
+          const label = isRaw ? 'RAW' : ext || '—';
+          return (
+            <span
+              className={clsx(
+                'px-1.5 py-0.5 rounded text-[8px] font-bold uppercase leading-none border',
+                isRaw
+                  ? 'bg-orange-500/25 text-orange-300 border-orange-500/30'
+                  : 'bg-bg-primary text-text-secondary border-border-color/40',
+              )}
+              title={label}
+            >
+              {label.length > 5 ? label.slice(0, 5) : label}
+            </span>
+          );
+        })()}
+      </div>
+
+      <div style={{ width: getW('gps') }} className="flex items-center justify-center px-1 h-full overflow-hidden">
+        {hasGpsList ? (
+          <span title="GPS" className="inline-flex text-sky-300">
+            <MapPin size={12} />
+          </span>
+        ) : (
+          <span className="text-[9px] text-text-secondary/40">·</span>
+        )}
+      </div>
+
+      <div style={{ width: getW('urgency') }} className="flex items-center justify-center px-1 h-full overflow-hidden">
+        {(() => {
+          const n = parseInt(String(exif?.Urgency || ''), 10);
+          if (!(Number.isFinite(n) && n >= 1 && n <= 8)) {
+            return <span className="text-[9px] text-text-secondary/40">·</span>;
+          }
+          return (
+            <span
+              className={clsx(
+                'px-1.5 py-0.5 rounded text-[9px] font-bold tabular-nums leading-none border',
+                n <= 2
+                  ? 'bg-red-500/30 text-red-100 border-red-400/40'
+                  : n <= 5
+                    ? 'bg-amber-500/20 text-amber-100 border-amber-400/30'
+                    : 'bg-surface text-text-secondary border-border-color/40',
+              )}
+              title={`Urgency ${n}`}
+            >
+              {n}
+            </span>
+          );
+        })()}
+      </div>
+
+      <div
+        style={{ width: getW('creator') }}
+        className="flex items-center px-1.5 h-full overflow-hidden"
+        title={String(exif?.Artist || exif?.Creator || '').trim() || undefined}
+      >
+        <span className="text-[10px] text-text-secondary truncate">
+          {String(exif?.Artist || exif?.Creator || '').trim() || (
+            <span className="text-text-secondary/40">·</span>
+          )}
+        </span>
+      </div>
+
+      <div
+        style={{ width: getW('credit') }}
+        className="flex items-center px-1.5 h-full overflow-hidden"
+        title={String(exif?.Credit || '').trim() || undefined}
+      >
+        <span className="text-[10px] text-text-secondary truncate">
+          {String(exif?.Credit || '').trim() || (
+            <span className="text-text-secondary/40">·</span>
+          )}
+        </span>
+      </div>
+
+      <div
+        style={{ width: getW('city') }}
+        className="flex items-center px-1.5 h-full overflow-hidden"
+        title={String(exif?.City || '').trim() || undefined}
+      >
+        <span className="text-[10px] text-text-secondary truncate">
+          {String(exif?.City || '').trim() || (
+            <span className="text-text-secondary/40">·</span>
+          )}
+        </span>
+      </div>
+
+      <div
+        style={{ width: getW('country') }}
+        className="flex items-center px-1.5 h-full overflow-hidden"
+        title={String(exif?.Country || '').trim() || undefined}
+      >
+        <span className="text-[10px] text-text-secondary truncate">
+          {String(exif?.Country || '').trim() || (
+            <span className="text-text-secondary/40">·</span>
+          )}
+        </span>
+      </div>
+
+      <div
+        style={{ width: getW('state') }}
+        className="flex items-center px-1.5 h-full overflow-hidden"
+        title={String(exif?.State || exif?.Province || '').trim() || undefined}
+      >
+        <span className="text-[10px] text-text-secondary truncate">
+          {String(exif?.State || exif?.Province || '').trim() || (
+            <span className="text-text-secondary/40">·</span>
+          )}
+        </span>
+      </div>
+
+      <div
+        style={{ width: getW('headline') }}
+        className="flex items-center px-1.5 h-full overflow-hidden"
+        title={String(exif?.Headline || '').trim() || undefined}
+      >
+        <span className="text-[10px] text-text-secondary truncate">
+          {String(exif?.Headline || '').trim() || (
+            <span className="text-text-secondary/40">·</span>
+          )}
+        </span>
       </div>
 
       <div style={{ width: getW('color') }} className="flex items-center px-3 h-full overflow-hidden">
@@ -722,6 +1403,16 @@ const ListItemComponent = ({
               {focal ? (String(focal).endsWith('mm') ? focal : `${focal}mm`) : ''}
             </Text>
           </div>
+          <div style={{ width: getW('camera') }} className="flex items-center px-3 h-full overflow-hidden">
+            <Text variant={TextVariants.small} color={TextColors.secondary} className="truncate" title={camera}>
+              {camera}
+            </Text>
+          </div>
+          <div style={{ width: getW('lens') }} className="flex items-center px-3 h-full overflow-hidden">
+            <Text variant={TextVariants.small} color={TextColors.secondary} className="truncate" title={lens}>
+              {lens}
+            </Text>
+          </div>
         </>
       )}
     </div>
@@ -753,6 +1444,7 @@ const RowComponent = ({
   queueThumbnailRequest,
   onToggleRecursiveFolder,
   groupBadgeInfo,
+  onRate,
 }: any) => {
   const { t } = useTranslation();
   const row = rows[index];
@@ -876,10 +1568,13 @@ const RowComponent = ({
                 onImageClick={onImageClick}
                 onImageDoubleClick={onImageDoubleClick}
                 onLoad={onImageLoad}
+                onRate={onRate}
                 path={imageFile.path}
                 rating={imageRatings?.[imageFile.path] || 0}
                 tags={imageFile.tags}
                 exif={imageFile.exif}
+                isRaw={imageFile.is_raw}
+                isEdited={imageFile.is_edited}
                 aspectRatio={thumbnailAspectRatio}
                 modified={imageFile.modified}
                 columnWidths={columnWidths}
@@ -895,14 +1590,17 @@ const RowComponent = ({
                 onImageClick={onImageClick}
                 onImageDoubleClick={onImageDoubleClick}
                 onLoad={onImageLoad}
+                onRate={onRate}
                 path={imageFile.path}
                 rating={imageRatings?.[imageFile.path] || 0}
                 tags={imageFile.tags}
                 exif={imageFile.exif}
                 isEdited={imageFile.is_edited}
+                isRaw={imageFile.is_raw}
                 aspectRatio={thumbnailAspectRatio}
                 isCloudPlaceholder={imageFile.is_cloud_placeholder}
-                groupBadgeLabel={imageFile.group_id && groupBadgeInfo?.get(imageFile.group_id)?.label}
+                groupBadgeLabel={(() => { const gid = effectiveGroupId(imageFile); return gid && groupBadgeInfo?.get(gid)?.label; })()}
+                groupId={effectiveGroupId(imageFile)}
               />
             )}
           </div>
