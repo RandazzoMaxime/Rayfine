@@ -1,4 +1,5 @@
 import clsx from 'clsx';
+import RayfineLogo from '../ui/RayfineLogo';
 import { useTranslation } from 'react-i18next';
 import {
   Globe,
@@ -121,7 +122,10 @@ export default function ModuleBar({ onBackToLibrary, onOpenDevelop, isInstantTra
       role="navigation"
       aria-label="Modules"
     >
-      <span className="text-[10px] font-semibold tracking-[0.2em] uppercase text-text-secondary">Rayfine</span>
+      <span className="flex items-center gap-1.5 min-w-0">
+        <RayfineLogo className="h-6 w-6 rounded-sm shrink-0" />
+        <span className="text-[10px] font-semibold tracking-[0.2em] uppercase text-text-secondary">Rayfine</span>
+      </span>
 
       <div className="flex items-stretch h-full ml-auto">
         <button

@@ -267,6 +267,8 @@ fn make_headless_gpu_context() -> Option<(GpuContext, String)> {
     .ok()?;
     Some((
         GpuContext {
+            instance: None,
+            adapter: None,
             device: Arc::new(device),
             queue: Arc::new(queue),
             limits,
@@ -846,10 +848,13 @@ fn intermediate_to_rgba32f(inter: &Intermediate) -> Option<DynamicImage> {
 
 /// Uncached read (F_NOCACHE) to estimate cold external-SSD throughput.
 fn read_nocache(path: &Path) -> std::io::Result<Vec<u8>> {
-    use std::os::fd::AsRawFd;
     let mut f = fs::File::open(path)?;
-    unsafe {
-        libc::fcntl(f.as_raw_fd(), libc::F_NOCACHE, 1);
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        unsafe {
+            libc::fcntl(f.as_raw_fd(), libc::F_NOCACHE, 1);
+        }
     }
     let mut buf = Vec::with_capacity(f.metadata()?.len() as usize);
     f.read_to_end(&mut buf)?;

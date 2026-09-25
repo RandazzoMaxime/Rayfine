@@ -10,6 +10,15 @@ import { Invokes, Panel } from '../components/ui/AppProperties';
 import { debouncedSave } from './useEditorActions';
 import { globalImageCache } from '../utils/ImageLRUCache';
 
+/** Flags for the live wgpu apply path. Histogram/waveform stay live during drag (analytics worker, coalesced). ROI skipped so the GPU stays on the latest slider. */
+export function livePreviewInvokeFlags(dragging: boolean, waveformVisible: boolean) {
+  return {
+    isInteractive: dragging,
+    computeWaveform: waveformVisible,
+    skipRoi: dragging,
+  };
+}
+
 export function useImageProcessing(
   transformWrapperRef: any,
   prevAdjustmentsRef: React.RefObject<any>,
@@ -223,16 +232,17 @@ export function useImageProcessing(
       }
 
       const jobId = ++previewJobIdRef.current;
-      const roi = calculateROI();
+      const flags = livePreviewInvokeFlags(dragging, !!isWaveformVisible);
+      const roi = flags.skipRoi ? null : calculateROI();
 
       try {
         const buffer: ArrayBuffer = await invoke(Invokes.ApplyAdjustments, {
           jsAdjustments: payload,
-          isInteractive: dragging,
+          isInteractive: flags.isInteractive,
           targetResolution: targetRes || null,
           roi: roi || null,
-          computeWaveform: !!isWaveformVisible,
-          activeWaveformChannel: activeWaveformChannelRef.current || null,
+          computeWaveform: flags.computeWaveform,
+          activeWaveformChannel: flags.computeWaveform ? activeWaveformChannelRef.current || null : null,
         });
 
         if (newlySentPatches.size > 0) {
@@ -325,7 +335,8 @@ export function useImageProcessing(
   );
 
   const flushPipeline = useCallback(() => {
-    if (inFlightCountRef.current >= 3) return;
+    // One in-flight GPU job + one pending latest state: lowest slider-to-pixels latency.
+    if (inFlightCountRef.current >= 1) return;
     if (!pendingApplyRef.current) return;
 
     const { adjustments, targetRes } = pendingApplyRef.current;
@@ -486,12 +497,11 @@ export function useImageProcessing(
         applyAdjustments(renderAdjustments, true, targetRes);
       }
     } else {
+      currentResRef.current = targetRes;
+      applyAdjustments(renderAdjustments, false, targetRes);
+      scheduleDetailPatch(80);
+
       dragIdleTimer.current = setTimeout(() => {
-        currentResRef.current = targetRes;
-
-        applyAdjustments(renderAdjustments, false, targetRes);
-        scheduleDetailPatch(120);
-
         if (previewOverride) return;
 
         debouncedSave(selectedImage.path, adjustments);

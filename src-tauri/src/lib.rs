@@ -42,6 +42,7 @@ mod raw_processing;
 mod tagging;
 mod tagging_utils;
 mod window_customizer;
+mod dual_display;
 #[cfg(test)]
 mod perf_bench;
 
@@ -295,9 +296,21 @@ async fn update_wgpu_transform(
         None => return Ok(()),
     };
 
+    let dual = state
+        .dual_display_enabled
+        .load(std::sync::atomic::Ordering::Relaxed);
     tokio::task::spawn_blocking(move || {
         let mut display_lock = context.display.lock().unwrap();
         if let Some(display) = display_lock.as_mut() {
+            if dual {
+                display.fit_contain(
+                    &context.device,
+                    &context.queue,
+                    display.config.width,
+                    display.config.height,
+                );
+                return;
+            }
             display.latest_transform.rect = [payload.x, payload.y, payload.width, payload.height];
             display.latest_transform.clip = [
                 payload.clip_x,
@@ -324,6 +337,16 @@ async fn update_wgpu_transform(
     Ok(())
 }
 
+/// Histogram and waveform run on the coalescing analytics worker in parallel with
+/// the wgpu display path, including while a slider is dragged (ROI or not).
+pub fn live_preview_wants_analytics(_is_interactive: bool, _has_pixel_roi: bool) -> bool {
+    true
+}
+
+pub fn format_live_preview_gpu_error(init_err: &str) -> String {
+    format!("GPU required for live preview; CPU is not a substitute ({init_err})")
+}
+
 #[allow(clippy::too_many_arguments)]
 fn process_preview_job(
     app_handle: &tauri::AppHandle,
@@ -336,7 +359,10 @@ fn process_preview_job(
     active_waveform_channel: Option<&str>,
 ) -> Result<Vec<u8>, String> {
     let fn_start = std::time::Instant::now();
-    let context = get_or_init_gpu_context(&state, app_handle)?;
+    let context = match get_or_init_gpu_context(&state, app_handle) {
+        Ok(ctx) => ctx,
+        Err(e) => return Err(format_live_preview_gpu_error(&e)),
+    };
     hydrate_adjustments(&state, &mut adjustments_json);
     let adjustments_clone = adjustments_json;
 
@@ -485,7 +511,7 @@ fn process_preview_job(
     let lut_path = adjustments_clone["lutPath"].as_str();
     let lut = lut_path.and_then(|p| lut_processing::get_or_load_lut(&state, p).ok());
 
-    let wants_analytics = !(is_interactive && pixel_roi.is_some());
+    let wants_analytics = live_preview_wants_analytics(is_interactive, pixel_roi.is_some());
     let channel_filter = if is_interactive {
         active_waveform_channel.map(|s| s.to_string())
     } else {
@@ -1801,7 +1827,8 @@ async fn generate_preview_for_path(
 ) -> Result<Response, String> {
     tokio::task::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
-        let context = get_or_init_gpu_context(&state, &app_handle)?;
+        let context = get_or_init_gpu_context(&state, &app_handle)
+            .map_err(|e| format_live_preview_gpu_error(&e))?;
         let (source_path, _) = parse_virtual_path(&path);
         let source_path_str = source_path.to_string_lossy().to_string();
         let is_raw = is_raw_file(&source_path_str);
@@ -2398,37 +2425,10 @@ pub fn run() {
 
             #[cfg(not(target_os = "android"))]
             {
-                use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
-                let export_item = MenuItemBuilder::with_id("file_export", "Exporter…")
-                    .accelerator("CmdOrCtrl+Shift+E")
-                    .build(app.handle());
-                let import_lr_item = MenuItemBuilder::with_id(
-                    "file_import_lrcat",
-                    "Importer un catalogue Lightroom…",
-                )
-                .build(app.handle());
-                if let (Ok(export_item), Ok(import_lr_item)) = (export_item, import_lr_item) {
-                    if let Ok(file_menu) = SubmenuBuilder::new(app.handle(), "Fichier")
-                        .item(&import_lr_item)
-                        .separator()
-                        .item(&export_item)
-                        .build()
-                    {
-                        if let Ok(menu) = MenuBuilder::new(app.handle()).item(&file_menu).build() {
-                            let _ = window.set_menu(menu);
-                        }
-                    }
-                }
+                let app_state = app.state::<AppState>();
+                let _ = crate::dual_display::rebuild_native_menu(app.handle(), &app_state);
                 app.on_menu_event(|app, event| {
-                    match event.id().as_ref() {
-                        "file_export" => {
-                            let _ = app.emit("menu-export", ());
-                        }
-                        "file_import_lrcat" => {
-                            let _ = app.emit("menu-import-lrcat", ());
-                        }
-                        _ => {}
-                    }
+                    crate::dual_display::handle_menu_event(app, event.id().as_ref());
                 });
             }
 
@@ -2605,6 +2605,8 @@ pub fn run() {
             metadata_manager: MetadataManager::new(),
             disks_cache: Mutex::new(None),
             disks_cache_refreshing: AtomicBool::new(false),
+            dual_display_enabled: AtomicBool::new(false),
+            dual_display_principal_id: Mutex::new(String::new()),
         })
         .invoke_handler(tauri::generate_handler![
             apply_adjustments,
@@ -2631,6 +2633,9 @@ pub fn run() {
             save_temp_file,
             get_image_dimensions,
             frontend_ready,
+            dual_display::list_monitors,
+            dual_display::get_dual_display_state,
+            dual_display::set_dual_display,
             cancel_thumbnail_generation,
             update_wgpu_transform,
             android_integration::resolve_android_content_uri_name,
@@ -2768,4 +2773,27 @@ pub fn run() {
                 _ => {}
             }
         });
+}
+
+#[cfg(test)]
+mod live_preview_gpu_tests {
+    use super::*;
+
+    #[test]
+    fn apply_adjustments_gpu_missing_is_explicit_error() {
+        let t0 = std::time::Instant::now();
+        let err = format_live_preview_gpu_error("adapter missing");
+        assert!(
+            err.contains("GPU required"),
+            "live preview must fail explicitly without GPU, got {err}"
+        );
+        assert!(err.contains("adapter missing"));
+        assert!(live_preview_wants_analytics(true, true));
+        assert!(live_preview_wants_analytics(true, false));
+        assert!(live_preview_wants_analytics(false, false));
+        println!(
+            "LIVE_PREVIEW_GPU_GATE elapsed_us={}",
+            t0.elapsed().as_micros()
+        );
+    }
 }

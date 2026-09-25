@@ -3,6 +3,7 @@ import { platform } from '@tauri-apps/plugin-os';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Minus, Square, X } from 'lucide-react';
 import { useUIStore } from '../store/useUIStore';
+import RayfineLogo from '../components/ui/RayfineLogo';
 
 const RestoreDownIcon = ({ size = 14, className = '' }) => (
   <svg
@@ -127,7 +128,8 @@ export default function TitleBar() {
               />
             </div>
           )}
-          <div data-tauri-drag-region className={`flex items-center h-full ${isMac ? '' : 'px-4'}`}>
+          <div data-tauri-drag-region className={`flex items-center gap-1.5 h-full ${isMac ? '' : 'px-4'}`}>
+            <RayfineLogo className="h-5 w-5 rounded-sm pointer-events-none" />
             <p className="text-sm font-semibold text-text-secondary pointer-events-none">Rayfine</p>
           </div>
           <div className="relative h-full flex items-center z-20" ref={fileRef}>

@@ -193,6 +193,7 @@ export default function MainLibrary(props: MainLibraryProps) {
   const [isBusyLoaderMounted, setIsBusyLoaderMounted] = useState(false);
   const [isProgressHovered, setIsProgressHovered] = useState(false);
   const isSettingsOpen = useUIStore((state) => state.isSettingsOpen);
+  const dualDisplayActive = useUIStore((state) => state.dualDisplayActive);
 
   const rawDisplayMode = props.appSettings?.libraryDisplayMode || LibraryDisplayMode.Grid;
   const libraryDisplayMode =
@@ -1132,8 +1133,8 @@ export default function MainLibrary(props: MainLibraryProps) {
             onRequestThumbnails={props.onRequestThumbnails}
             onRate={props.onRate}
           />
-        ) : libraryDisplayMode === LibraryDisplayMode.Loupe ? (
-          <LoupeView
+        ) : libraryDisplayMode === LibraryDisplayMode.Loupe && !dualDisplayActive ? (
+          <LoupeView>
             imageList={props.imageList}
             multiSelectedPaths={props.multiSelectedPaths}
             activePath={props.activePath}

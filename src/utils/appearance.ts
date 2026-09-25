@@ -110,6 +110,7 @@ export function applyCssVariables(vars: Record<string, string>, appearance?: App
   if (appearance) {
     root.style.colorScheme = appearance;
     root.dataset.appearance = appearance;
+    window.dispatchEvent(new CustomEvent('rayfine:appearance', { detail: appearance }));
   }
 }
 

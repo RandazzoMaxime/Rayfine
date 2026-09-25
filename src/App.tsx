@@ -1,6 +1,6 @@
 import { type PointerEvent as ReactPointerEvent, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+import { listen, emit } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { ClerkProvider } from '@clerk/react';
 import { ToastContainer, toast, Slide } from 'react-toastify';
@@ -123,6 +123,7 @@ function App() {
     activeRightPanel,
     isSettingsOpen,
     activeView,
+    dualDisplayActive,
     setUI,
     setRightPanel,
   } = useUIStore(
@@ -140,6 +141,7 @@ function App() {
       activeRightPanel: state.activeRightPanel,
       isSettingsOpen: state.isSettingsOpen,
       activeView: state.activeView,
+      dualDisplayActive: state.dualDisplayActive,
       setUI: state.setUI,
       setRightPanel: state.setRightPanel,
     })),
@@ -314,6 +316,7 @@ function App() {
   } = useLibraryActions(handleImageSelect);
 
   const { displayList: sortedImageList, badges: groupBadgeInfo } = useSortedLibrary();
+  const libraryActivePath = useLibraryStore((s) => s.libraryActivePath);
 
   const handleLibraryRefresh = useCallback(async () => {
     if (currentFolderPath) {
@@ -585,6 +588,19 @@ function App() {
     const unlistenMenu = listen('menu-export', () => {
       setUI({ isExportModalOpen: true });
     });
+    const unlistenDual = listen('dual-display-changed', (event: any) => {
+      const enabled = !!event.payload?.enabled;
+      setUI({
+        dualDisplayActive: enabled,
+        dualDisplayPrincipalId: event.payload?.principalId || null,
+      });
+      if (event.payload?.error) {
+        toast.error(event.payload.error);
+      }
+    });
+    const unlistenDualErr = listen('dual-display-error', (event: any) => {
+      toast.error(typeof event.payload === 'string' ? event.payload : 'Double écran indisponible');
+    });
     const unlistenImportLr = listen('menu-import-lrcat', async () => {
       try {
         const { open } = await import('@tauri-apps/plugin-dialog');
@@ -611,9 +627,49 @@ function App() {
     return () => {
       unlistenPromise.then((unlisten: any) => unlisten());
       unlistenMenu.then((unlisten: any) => unlisten());
+      unlistenDual.then((unlisten: any) => unlisten());
+      unlistenDualErr.then((unlisten: any) => unlisten());
       unlistenImportLr.then((unlisten: any) => unlisten());
     };
   }, [setUI]);
+
+  useEffect(() => {
+    if (!dualDisplayActive) return;
+    const path =
+      activeView === 'develop'
+        ? selectedImage?.path || null
+        : libraryActivePath || useLibraryStore.getState().multiSelectedPaths[0] || null;
+    const name = path ? path.split(/[/\\]/).pop() || '' : '';
+    emit('dual-display-show', {
+      mode: activeView === 'develop' ? 'develop' : path ? 'library' : 'empty',
+      path,
+      name,
+    }).catch(() => {});
+  }, [dualDisplayActive, activeView, selectedImage?.path, libraryActivePath]);
+
+  useEffect(() => {
+    const unlisten = listen('dual-display-nav', (event: any) => {
+      const dir = Number(event.payload?.dir) || 0;
+      if (!dir) return;
+      const list = sortedImageList;
+      if (!list.length) return;
+      const current =
+        useEditorStore.getState().selectedImage?.path ||
+        useLibraryStore.getState().libraryActivePath ||
+        useLibraryStore.getState().multiSelectedPaths[0];
+      const idx = Math.max(0, list.findIndex((img) => img.path === current));
+      const next = list[(idx + dir + list.length) % list.length];
+      if (!next) return;
+      if (useUIStore.getState().activeView === 'develop') {
+        handleImageSelect(next.path);
+      } else {
+        handleLibraryImageSingleClick(next.path, { shiftKey: false, metaKey: false, ctrlKey: false });
+      }
+    });
+    return () => {
+      unlisten.then((u) => u());
+    };
+  }, [sortedImageList, handleImageSelect, handleLibraryImageSingleClick]);
 
   const handleRightPanelSelect = useCallback(
     (panelId: Panel) => {
@@ -702,7 +758,11 @@ function App() {
 
   const shouldHideFolderTree =
     isAndroid || !!selectedImage || activeView === 'develop' || STUB_MODULES.includes(activeView as any);
-  const isWgpuActive = appSettings?.useWgpuRenderer !== false && selectedImage?.isReady && hasRenderedFirstFrame;
+  const isWgpuActive =
+    !dualDisplayActive &&
+    appSettings?.useWgpuRenderer !== false &&
+    selectedImage?.isReady &&
+    hasRenderedFirstFrame;
   const useMacWindowShell = osPlatform === 'macos' && !appSettings?.decorations && !isWindowFullScreen && !isFullScreen;
 
   return (

@@ -82,6 +82,9 @@ export interface CullingModalState {
 interface UIState {
   // View & Layout
   activeView: string;
+  /** Secondary-monitor loupe: image is on the principal screen, chrome stays here. */
+  dualDisplayActive: boolean;
+  dualDisplayPrincipalId: string | null;
   isFullScreen: boolean;
   /** LR Lights Out: 0=normal, 1=dim chrome, 2=black (immersive) */
   lightsOut: 0 | 1 | 2;
@@ -153,6 +156,8 @@ interface UIState {
 
 export const useUIStore = create<UIState>((set, get) => ({
   activeView: 'library',
+  dualDisplayActive: false,
+  dualDisplayPrincipalId: null,
   isFullScreen: false,
   lightsOut: 0,
   isWindowFullScreen: false,

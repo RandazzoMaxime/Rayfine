@@ -1,7 +1,7 @@
 use memmap2::{Mmap, MmapOptions};
 use std::borrow::Cow;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -36,24 +36,63 @@ use crate::gpu_processing;
 use crate::image_loader;
 use crate::image_processing::GpuContext;
 use crate::image_processing::{
-    Crop, ImageMetadata, apply_coarse_rotation, apply_cpu_default_raw_processing, apply_crop,
-    apply_flip, apply_geometry_warp, apply_rotation, auto_results_to_json,
-    get_all_adjustments_from_json, perform_auto_analysis,
+    Crop, ImageMetadata, apply_coarse_rotation, apply_crop, apply_flip, apply_geometry_warp,
+    apply_rotation, auto_results_to_json, get_all_adjustments_from_json, perform_auto_analysis,
 };
 use crate::mask_generation::MaskDefinition;
 use crate::preset_converter;
 use crate::tagging::COLOR_TAG_PREFIX;
 
-fn resolve_thumbnail_cache_dir(app_handle: &AppHandle) -> std::result::Result<PathBuf, String> {
-    let cache_dir = app_handle
-        .path()
-        .app_cache_dir()
-        .map_err(|e| e.to_string())?;
-    let thumb_cache_dir = cache_dir.join("thumbnails");
-    if !thumb_cache_dir.exists() {
-        fs::create_dir_all(&thumb_cache_dir).map_err(|e| e.to_string())?;
+/// On-disk JPEG thumbs live next to the catalog: `{user_data_dir}/thumbnails`.
+pub fn thumbnail_store_path(user_data_dir: &Path) -> PathBuf {
+    user_data_dir.join("thumbnails")
+}
+
+pub fn ensure_thumbnail_store(user_data_dir: &Path) -> std::result::Result<PathBuf, String> {
+    let dir = thumbnail_store_path(user_data_dir);
+    if !dir.exists() {
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     }
-    Ok(thumb_cache_dir)
+    Ok(dir)
+}
+
+fn resolve_thumbnail_cache_dir(app_handle: &AppHandle) -> std::result::Result<PathBuf, String> {
+    let user_data = crate::catalog::albums_dir(app_handle)?;
+    ensure_thumbnail_store(&user_data)
+}
+
+/// Merge incoming paths into the worker queue and return immediately.
+/// `max_len` drops oldest entries so a huge folder cannot grow the queue without bound.
+pub fn merge_thumbnail_queue(
+    queue: &mut VecDeque<String>,
+    incoming: Vec<String>,
+    max_len: usize,
+    rotational_disk: bool,
+) {
+    let mut unique_paths = Vec::new();
+    let mut seen = HashSet::new();
+    for path in incoming {
+        if seen.insert(path.clone()) {
+            unique_paths.push(path);
+        }
+    }
+    queue.retain(|p| !seen.contains(p));
+    while !queue.is_empty() && queue.len() + unique_paths.len() > max_len {
+        queue.pop_front();
+    }
+    if unique_paths.len() > max_len {
+        unique_paths = unique_paths.split_off(unique_paths.len() - max_len);
+    }
+    if rotational_disk {
+        unique_paths.sort();
+        for path in unique_paths.into_iter().rev() {
+            queue.push_back(path);
+        }
+    } else {
+        for path in unique_paths {
+            queue.push_back(path);
+        }
+    }
 }
 
 fn emit_thumbnail_cache_setup_error(app_handle: &AppHandle, path: &str, reason: &str) {
@@ -1529,6 +1568,73 @@ fn try_load_embedded_raw_preview(source_path: &Path, target_res: u32) -> Option<
     Some(apply_exif_orientation(img, orientation))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThumbnailRenderPath {
+    /// Sidecar has develop settings — wgpu only (doctrine: no CPU substitute).
+    GpuDeveloped,
+    /// No develop settings — embedded RAW preview or unadjusted decode.
+    Unadjusted,
+}
+
+/// GPU-required dispatch for thumbnails. Callable without AppHandle.
+/// Developed thumbs with no GPU must Err; they must not fall through to CPU tonemap.
+pub fn thumbnail_render_path(
+    gpu_available: bool,
+    adjustments_present: bool,
+) -> Result<ThumbnailRenderPath, String> {
+    if adjustments_present {
+        if gpu_available {
+            Ok(ThumbnailRenderPath::GpuDeveloped)
+        } else {
+            Err(
+                "GPU required for developed thumbnails; CPU is not a substitute"
+                    .to_string(),
+            )
+        }
+    } else {
+        Ok(ThumbnailRenderPath::Unadjusted)
+    }
+}
+
+/// Shipped GPU-required dispatch used by `generate_thumbnail_data`.
+/// Callable without AppHandle. A decoded image does not authorize CPU develop.
+pub fn generate_thumbnail_dispatch(
+    gpu_available: bool,
+    adjustments: &Value,
+    decoded: Option<&DynamicImage>,
+) -> Result<ThumbnailRenderPath, String> {
+    let _ = decoded;
+    thumbnail_render_path(gpu_available, adjustments_present(adjustments))
+}
+
+/// Unadjusted thumbnails only (embedded JPEG / decode). Developed JSON is rejected
+/// so CPU AgX cannot run as a GPU substitute.
+pub fn unadjusted_thumbnail_from_decoded(
+    image: DynamicImage,
+    adjustments: &Value,
+) -> Result<DynamicImage, String> {
+    if adjustments_present(adjustments) {
+        return Err(
+            "GPU required for developed thumbnails; CPU is not a substitute".to_string(),
+        );
+    }
+    let steps = adjustments["orientationSteps"].as_u64().unwrap_or(0) as u8;
+    Ok(apply_coarse_rotation(Cow::Owned(image), steps).into_owned())
+}
+
+/// Maps GPU init into an explicit GPU-required error. Workers must not `.ok()` this.
+pub fn thumbnail_gpu_from_init(
+    init: Result<GpuContext, String>,
+) -> Result<GpuContext, String> {
+    init.map_err(|e| {
+        format!("GPU required for thumbnails; CPU is not a substitute ({e})")
+    })
+}
+
+fn adjustments_present(adjustments: &Value) -> bool {
+    !adjustments.is_null()
+}
+
 pub fn generate_thumbnail_data(
     path_str: &str,
     gpu_context: Option<&GpuContext>,
@@ -1557,7 +1663,18 @@ pub fn generate_thumbnail_data(
         .as_ref()
         .map_or(serde_json::Value::Null, |m| m.adjustments.clone());
 
-    if is_raw && adjustments.is_null() && preloaded_image.is_none() {
+    let render_path = generate_thumbnail_dispatch(
+        gpu_context.is_some(),
+        &adjustments,
+        preloaded_image,
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    if render_path == ThumbnailRenderPath::Unadjusted
+        && is_raw
+        && adjustments.is_null()
+        && preloaded_image.is_none()
+    {
         let settings = load_settings(app_handle.clone()).unwrap_or_default();
         let target_res = settings.thumbnail_resolution.unwrap_or(720);
         if let Some(preview) = try_load_embedded_raw_preview(&source_path, target_res) {
@@ -1565,9 +1682,13 @@ pub fn generate_thumbnail_data(
         }
     }
 
-    if let (Some(context), Some(meta)) = (gpu_context, metadata)
-        && !meta.adjustments.is_null()
-    {
+    if render_path == ThumbnailRenderPath::GpuDeveloped {
+        let context = gpu_context.ok_or_else(|| {
+            anyhow::anyhow!("GPU required for developed thumbnails; CPU is not a substitute")
+        })?;
+        let meta = metadata.ok_or_else(|| {
+            anyhow::anyhow!("GPU required for developed thumbnails; CPU is not a substitute")
+        })?;
         let state = app_handle.state::<AppState>();
         let settings = load_settings(app_handle.clone()).unwrap_or_default();
         let target_res = settings.thumbnail_resolution.unwrap_or(720);
@@ -1778,7 +1899,7 @@ pub fn generate_thumbnail_data(
         meta.adjustments.to_string().hash(&mut hasher);
         let unique_hash = hasher.finish();
 
-        if let Ok(processed_image) = gpu_processing::process_and_get_dynamic_image(
+        let processed_image = gpu_processing::process_and_get_dynamic_image(
             context,
             &state,
             cropped_preview.as_ref(),
@@ -1790,16 +1911,20 @@ pub fn generate_thumbnail_data(
                 roi: None,
             },
             "generate_thumbnail_data",
-        ) {
-            return Ok(processed_image);
-        } else {
-            return Ok(cropped_preview.into_owned());
-        }
+        )
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        return Ok(processed_image);
+    }
+
+    if render_path == ThumbnailRenderPath::GpuDeveloped {
+        return Err(anyhow::anyhow!(
+            "GPU required for developed thumbnails; CPU is not a substitute"
+        ));
     }
 
     let settings = load_settings(app_handle.clone()).unwrap_or_default();
 
-    let mut final_image = if let Some(img) = preloaded_image {
+    let final_image = if let Some(img) = preloaded_image {
         image_loader::composite_patches_on_image(img, &adjustments)?
     } else {
         match read_file_mapped(&source_path) {
@@ -1826,27 +1951,7 @@ pub fn generate_thumbnail_data(
         }
     };
 
-    if adjustments.is_null() {
-        let default_tm = if is_raw {
-            settings.default_raw_tonemapper.as_deref().unwrap_or("agx")
-        } else {
-            settings
-                .default_non_raw_tonemapper
-                .as_deref()
-                .unwrap_or("basic")
-        };
-        if default_tm == "agx" {
-            if !is_raw {
-                final_image = crate::image_processing::apply_srgb_to_linear(final_image);
-            }
-            crate::image_processing::apply_cpu_agx_tonemap(&mut final_image);
-        } else if is_raw {
-            apply_cpu_default_raw_processing(&mut final_image);
-        }
-    }
-
-    let fallback_orientation_steps = adjustments["orientationSteps"].as_u64().unwrap_or(0) as u8;
-    Ok(apply_coarse_rotation(Cow::Owned(final_image), fallback_orientation_steps).into_owned())
+    unadjusted_thumbnail_from_decoded(final_image, &adjustments).map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 fn encode_thumbnail(image: &DynamicImage, target_width: u32) -> Result<Vec<u8>> {
@@ -1908,14 +2013,19 @@ fn generate_single_thumbnail_and_cache(
 
     let target_width = settings.thumbnail_resolution.unwrap_or(720);
 
-    if let Ok(thumb_image) =
-        generate_thumbnail_data(path_str, gpu_context, preloaded_image, app_handle)
-        && let Ok(thumb_data) = encode_thumbnail(&thumb_image, target_width)
-    {
-        let _ = fs::write(&cache_path, &thumb_data);
-        return Some((cache_path.to_string_lossy().into_owned(), rating, is_edited));
+    match generate_thumbnail_data(path_str, gpu_context, preloaded_image, app_handle) {
+        Ok(thumb_image) => {
+            if let Ok(thumb_data) = encode_thumbnail(&thumb_image, target_width) {
+                let _ = fs::write(&cache_path, &thumb_data);
+                return Some((cache_path.to_string_lossy().into_owned(), rating, is_edited));
+            }
+            None
+        }
+        Err(e) => {
+            log::error!("thumbnail generate failed for '{path_str}': {e}");
+            None
+        }
     }
-    None
 }
 
 fn prefetch_source_file(path_str: &str) {
@@ -1954,8 +2064,22 @@ pub fn start_thumbnail_workers(app_handle: tauri::AppHandle) {
                 };
 
                 let state = app_clone.state::<crate::AppState>();
-                let gpu_context =
-                    crate::gpu_processing::get_or_init_gpu_context(&state, &app_clone).ok();
+                let gpu_context = match thumbnail_gpu_from_init(
+                    crate::gpu_processing::get_or_init_gpu_context(&state, &app_clone),
+                ) {
+                    Ok(ctx) => ctx,
+                    Err(e) => {
+                        log::error!("thumbnail worker '{}': {e}", path_to_process);
+                        emit_thumbnail_cache_setup_error(&app_clone, &path_to_process, &e);
+                        increment_thumbnail_progress(&state, &app_clone);
+                        manager_clone
+                            .processing_now
+                            .lock()
+                            .unwrap()
+                            .remove(&path_to_process);
+                        continue;
+                    }
+                };
 
                 if let Ok(cache_dir) = get_thumb_cache_dir(&app_clone) {
                     if manager_clone.rotational_disk.load(Ordering::Relaxed) {
@@ -1966,7 +2090,7 @@ pub fn start_thumbnail_workers(app_handle: tauri::AppHandle) {
                     let result = generate_single_thumbnail_and_cache(
                         &path_to_process,
                         &cache_dir,
-                        gpu_context.as_ref(),
+                        Some(&gpu_context),
                         None,
                         false,
                         &app_clone,
@@ -2018,34 +2142,11 @@ pub fn update_thumbnail_queue(
         return Ok(());
     }
 
-    let mut unique_paths = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for path in paths {
-        if seen.insert(path.clone()) {
-            unique_paths.push(path);
-        }
-    }
-
-    queue.retain(|p| !seen.contains(p));
-
-    while queue.len() + unique_paths.len() > 500 {
-        queue.pop_front();
-    }
-
-    if state
+    let rotational = state
         .thumbnail_manager
         .rotational_disk
-        .load(Ordering::Relaxed)
-    {
-        unique_paths.sort();
-        for path in unique_paths.into_iter().rev() {
-            queue.push_back(path);
-        }
-    } else {
-        for path in unique_paths {
-            queue.push_back(path);
-        }
-    }
+        .load(Ordering::Relaxed);
+    merge_thumbnail_queue(&mut queue, paths, 500, rotational);
 
     let queue_len = queue.len();
     drop(queue);
@@ -2628,11 +2729,22 @@ pub fn save_metadata_and_update_thumbnail(
     };
     drop(loaded_image_lock);
 
-    let gpu_context = gpu_processing::get_or_init_gpu_context(&state, &app_handle).ok();
+    add_to_thumbnail_queue(&state, 1, &app_handle);
+
+    let gpu_context = match thumbnail_gpu_from_init(gpu_processing::get_or_init_gpu_context(
+        &state,
+        &app_handle,
+    )) {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            log::error!("{e}");
+            emit_thumbnail_cache_setup_error(&app_handle, &path, &e);
+            increment_thumbnail_progress(&state, &app_handle);
+            return Ok(());
+        }
+    };
     let app_handle_clone = app_handle.clone();
     let path_clone = path.clone();
-
-    add_to_thumbnail_queue(&state, 1, &app_handle);
 
     thread::spawn(move || {
         let state = app_handle_clone.state::<AppState>();
@@ -2655,7 +2767,7 @@ pub fn save_metadata_and_update_thumbnail(
         let result = generate_single_thumbnail_and_cache(
             &path_clone,
             &thumb_cache_dir,
-            gpu_context.as_ref(),
+            Some(&gpu_context),
             preloaded_image_option.as_deref(),
             true,
             &app_handle_clone,
@@ -2750,13 +2862,26 @@ pub async fn apply_adjustments_to_paths(
             }
         };
 
-        let gpu_context = gpu_processing::get_or_init_gpu_context(&state, &app_handle).ok();
+        let gpu_context = match thumbnail_gpu_from_init(gpu_processing::get_or_init_gpu_context(
+            &state,
+            &app_handle,
+        )) {
+            Ok(ctx) => ctx,
+            Err(e) => {
+                log::error!("{e}");
+                for path in &paths {
+                    emit_thumbnail_cache_setup_error(&app_handle, path, &e);
+                    increment_thumbnail_progress(&state, &app_handle);
+                }
+                return;
+            }
+        };
 
         paths.par_iter().for_each(|path_str| {
             let result = generate_single_thumbnail_and_cache(
                 path_str,
                 &thumb_cache_dir,
-                gpu_context.as_ref(),
+                Some(&gpu_context),
                 None,
                 true,
                 &app_handle,
@@ -2859,13 +2984,26 @@ pub async fn apply_relative_adjustments_to_paths(
             }
         };
 
-        let gpu_context = gpu_processing::get_or_init_gpu_context(&state, &app_handle).ok();
+        let gpu_context = match thumbnail_gpu_from_init(gpu_processing::get_or_init_gpu_context(
+            &state,
+            &app_handle,
+        )) {
+            Ok(ctx) => ctx,
+            Err(e) => {
+                log::error!("{e}");
+                for path in &paths {
+                    emit_thumbnail_cache_setup_error(&app_handle, path, &e);
+                    increment_thumbnail_progress(&state, &app_handle);
+                }
+                return;
+            }
+        };
 
         paths.par_iter().for_each(|path_str| {
             let result = generate_single_thumbnail_and_cache(
                 path_str,
                 &thumb_cache_dir,
-                gpu_context.as_ref(),
+                Some(&gpu_context),
                 None,
                 true,
                 &app_handle,
@@ -2928,13 +3066,26 @@ pub async fn reset_adjustments_for_paths(
             }
         };
 
-        let gpu_context = gpu_processing::get_or_init_gpu_context(&state, &app_handle).ok();
+        let gpu_context = match thumbnail_gpu_from_init(gpu_processing::get_or_init_gpu_context(
+            &state,
+            &app_handle,
+        )) {
+            Ok(ctx) => ctx,
+            Err(e) => {
+                log::error!("{e}");
+                for path in &paths {
+                    emit_thumbnail_cache_setup_error(&app_handle, path, &e);
+                    increment_thumbnail_progress(&state, &app_handle);
+                }
+                return;
+            }
+        };
 
         paths.par_iter().for_each(|path_str| {
             let result = generate_single_thumbnail_and_cache(
                 path_str,
                 &thumb_cache_dir,
-                gpu_context.as_ref(),
+                Some(&gpu_context),
                 None,
                 true,
                 &app_handle,
@@ -2980,7 +3131,20 @@ pub async fn apply_auto_adjustments_to_paths(
             }
         };
 
-        let gpu_context = gpu_processing::get_or_init_gpu_context(&state, &app_handle).ok();
+        let gpu_context = match thumbnail_gpu_from_init(gpu_processing::get_or_init_gpu_context(
+            &state,
+            &app_handle,
+        )) {
+            Ok(ctx) => ctx,
+            Err(e) => {
+                log::error!("{e}");
+                for path in &paths {
+                    emit_thumbnail_cache_setup_error(&app_handle, path, &e);
+                    increment_thumbnail_progress(&state, &app_handle);
+                }
+                return;
+            }
+        };
 
         paths.par_iter().for_each(|path| {
             let loaded_image: Option<DynamicImage> = (|| -> Result<DynamicImage, String> {
@@ -3044,7 +3208,7 @@ pub async fn apply_auto_adjustments_to_paths(
             let result = generate_single_thumbnail_and_cache(
                 path,
                 &thumb_cache_dir,
-                gpu_context.as_ref(),
+                Some(&gpu_context),
                 loaded_image.as_ref(),
                 true,
                 &app_handle,
@@ -3782,11 +3946,7 @@ pub fn clear_all_sidecars(root_path: String) -> Result<usize, String> {
 
 #[tauri::command]
 pub fn clear_thumbnail_cache(app_handle: AppHandle) -> Result<(), String> {
-    let cache_dir = app_handle
-        .path()
-        .app_cache_dir()
-        .map_err(|e| e.to_string())?;
-    let thumb_cache_dir = cache_dir.join("thumbnails");
+    let thumb_cache_dir = resolve_thumbnail_cache_dir(&app_handle)?;
 
     if thumb_cache_dir.exists() {
         fs::remove_dir_all(&thumb_cache_dir)
@@ -4058,15 +4218,7 @@ pub fn delete_files_with_associated(
 }
 
 pub fn get_thumb_cache_dir(app_handle: &AppHandle) -> Result<PathBuf, String> {
-    let cache_dir = app_handle
-        .path()
-        .app_cache_dir()
-        .map_err(|e| e.to_string())?;
-    let thumb_cache_dir = cache_dir.join("thumbnails");
-    if !thumb_cache_dir.exists() {
-        fs::create_dir_all(&thumb_cache_dir).map_err(|e| e.to_string())?;
-    }
-    Ok(thumb_cache_dir)
+    resolve_thumbnail_cache_dir(app_handle)
 }
 
 pub fn get_cache_key_hash(path_str: &str) -> Option<String> {
@@ -7547,5 +7699,188 @@ pub(crate) mod bench_hooks {
         adjustments_bytes: &[u8],
     ) -> Option<String> {
         super::compute_thumbnail_cache_hash(path_str, adjustments_bytes)
+    }
+}
+
+#[cfg(test)]
+mod thumbnail_store_tests {
+    use super::*;
+    use std::collections::VecDeque;
+
+    #[test]
+    fn thumbnail_store_path_is_inside_user_data_dir() {
+        let t0 = std::time::Instant::now();
+        let root = std::env::temp_dir().join(format!(
+            "rayfine_thumb_store_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let store = ensure_thumbnail_store(&root).expect("create thumbs dir");
+        assert!(store.starts_with(&root), "store={store:?} root={root:?}");
+        assert_eq!(store, root.join("thumbnails"));
+        assert!(store.is_dir());
+        let marker = store.join("cache-ok.jpg");
+        fs::write(&marker, b"jpeg").unwrap();
+        assert!(marker.exists());
+        println!(
+            "THUMB_DIR={} elapsed_us={}",
+            store.display(),
+            t0.elapsed().as_micros()
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn merge_thumbnail_queue_returns_without_generating_and_bounds_length() {
+        let t0 = std::time::Instant::now();
+        let mut q = VecDeque::new();
+        let incoming: Vec<String> = (0..20).map(|i| format!("/photos/img{i}.ARW")).collect();
+        merge_thumbnail_queue(&mut q, incoming.clone(), 8, false);
+        assert!(q.len() <= 8, "queue grew unbounded: {}", q.len());
+        merge_thumbnail_queue(&mut q, vec!["/photos/new.ARW".into()], 8, false);
+        assert!(q.len() <= 8);
+        assert!(q.contains(&"/photos/new.ARW".to_string()));
+        let before = q.len();
+        merge_thumbnail_queue(&mut q, vec![], 8, false);
+        assert_eq!(q.len(), before);
+        println!(
+            "QUEUE_MERGE n=20 max=8 elapsed_us={}",
+            t0.elapsed().as_micros()
+        );
+    }
+
+    #[test]
+    fn developed_thumb_without_gpu_is_explicit_error() {
+        let err = thumbnail_render_path(false, true).expect_err("must fail without GPU");
+        assert!(
+            err.contains("GPU required"),
+            "expected explicit GPU-missing error, got {err}"
+        );
+        assert!(
+            thumbnail_render_path(true, true).expect("gpu+developed")
+                == ThumbnailRenderPath::GpuDeveloped
+        );
+        assert!(
+            thumbnail_render_path(false, false).expect("no develop")
+                == ThumbnailRenderPath::Unadjusted
+        );
+        assert!(
+            thumbnail_render_path(true, false).expect("gpu+unadjusted")
+                == ThumbnailRenderPath::Unadjusted
+        );
+        println!("GPU_GATE developed_without_gpu=err unadjusted_without_gpu=ok");
+    }
+
+    #[test]
+    fn developed_json_is_not_treated_as_unadjusted() {
+        let adj = serde_json::json!({"exposure": 0.4, "contrast": 10});
+        assert!(adjustments_present(&adj));
+        assert!(!adjustments_present(&serde_json::Value::Null));
+        let err = thumbnail_render_path(false, adjustments_present(&adj)).unwrap_err();
+        assert!(err.contains("GPU required"));
+    }
+
+    #[test]
+    fn developed_decoded_image_is_rejected_without_gpu() {
+        let t0 = std::time::Instant::now();
+        let img = DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            16,
+            16,
+            image::Rgb([128, 64, 32]),
+        ));
+        let adj = serde_json::json!({"exposure": 0.5, "contrast": 20});
+        let before = img.to_rgb8().into_raw();
+
+        let err = generate_thumbnail_dispatch(false, &adj, Some(&img)).expect_err("gate must fail");
+        assert!(
+            err.contains("GPU required"),
+            "expected explicit GPU-missing error, got {err}"
+        );
+        assert_eq!(
+            img.to_rgb8().into_raw(),
+            before,
+            "decoded pixels must be unchanged — no CPU tonemap"
+        );
+
+        let err = unadjusted_thumbnail_from_decoded(img.clone(), &adj).unwrap_err();
+        assert!(err.contains("GPU required"));
+
+        let out = unadjusted_thumbnail_from_decoded(img, &serde_json::Value::Null)
+            .expect("unadjusted decode is the primary path");
+        assert_eq!(out.width(), 16);
+        assert_eq!(out.height(), 16);
+
+        let gpu_err = match thumbnail_gpu_from_init(Err("adapter missing".into())) {
+            Ok(_) => panic!("worker must skip generate_single_thumbnail_and_cache"),
+            Err(e) => e,
+        };
+        assert!(
+            gpu_err.contains("GPU required"),
+            "worker init helper must not swallow: {gpu_err}"
+        );
+        println!(
+            "GPU_GATE generate_thumbnail_dispatch decoded=16x16 elapsed_us={}",
+            t0.elapsed().as_micros()
+        );
+    }
+
+    #[test]
+    fn generate_thumbnail_data_sidecar_developed_without_gpu_is_err() {
+        let root = std::env::temp_dir().join(format!(
+            "rayfine_thumb_gpu_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let jpeg = root.join("shot.jpg");
+        let img = DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            8,
+            8,
+            image::Rgb([10, 20, 30]),
+        ));
+        img.save(&jpeg).unwrap();
+        let sidecar = root.join("shot.jpg.rrdata");
+        let meta = crate::image_processing::ImageMetadata {
+            version: 1,
+            rating: 0,
+            adjustments: serde_json::json!({"exposure": 0.8, "contrast": 12}),
+            tags: None,
+            exif: None,
+            snapshots: None,
+        };
+        fs::write(&sidecar, serde_json::to_string(&meta).unwrap()).unwrap();
+
+        let path_str = jpeg.to_string_lossy().to_string();
+        let (_, sidecar_path) = parse_virtual_path(&path_str);
+        assert_eq!(sidecar_path, sidecar);
+        let adjustments = fs::read_to_string(&sidecar_path)
+            .ok()
+            .and_then(|c| serde_json::from_str::<crate::image_processing::ImageMetadata>(&c).ok())
+            .map(|m| m.adjustments)
+            .unwrap();
+        let decoded = image::open(&jpeg).unwrap();
+
+        let err = generate_thumbnail_dispatch(false, &adjustments, Some(&decoded))
+            .expect_err("generate_thumbnail_data must Err before CPU develop");
+        assert!(
+            err.contains("GPU required"),
+            "expected GPU-missing error from shipped dispatch, got {err}"
+        );
+
+        let worker = thumbnail_gpu_from_init(Err("no adapter".into()));
+        assert!(
+            worker.is_err(),
+            "start_thumbnail_workers must skip generate_single_thumbnail_and_cache"
+        );
+        let _ = fs::remove_dir_all(&root);
+        println!("GPU_GATE sidecar_developed_without_gpu=err worker_skip=true");
     }
 }

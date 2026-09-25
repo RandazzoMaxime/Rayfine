@@ -82,6 +82,7 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
   const appSettings = useSettingsStore((s) => s.appSettings);
   const osPlatform = useSettingsStore((s) => s.osPlatform);
   const isFullScreen = useUIStore((s) => s.isFullScreen);
+  const dualDisplayActive = useUIStore((s) => s.dualDisplayActive);
   const activeRightPanel = useUIStore((s) => s.activeRightPanel);
   const isInstantTransition = useUIStore((s) => s.isInstantTransition);
   const setUI = useUIStore((s) => s.setUI);
@@ -1178,6 +1179,10 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
 
     const syncWgpu = () => {
       if (!isEffectActive) return;
+      if (useUIStore.getState().dualDisplayActive) {
+        wgpuSyncRef.current = requestAnimationFrame(syncWgpu);
+        return;
+      }
 
       const state = wgpuStateRef.current;
       const container = imageContainerRef.current;
@@ -1987,7 +1992,10 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
   }
 
   const isWgpuActive =
-    appSettings?.useWgpuRenderer !== false && !!selectedImage?.isReady && hasRenderedFirstFrame;
+    !dualDisplayActive &&
+    appSettings?.useWgpuRenderer !== false &&
+    !!selectedImage?.isReady &&
+    hasRenderedFirstFrame;
   const hasRenderedAnyPreview = hasRenderedFirstFrame || !!finalPreviewUrl;
 
   return (
@@ -2068,14 +2076,18 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
             transform: `translate(${transformState.positionX}px, ${transformState.positionY}px) scale(${transformState.scale})`,
           }}
         >
-          {!selectedImage ? (
+          {dualDisplayActive ? (
+            <div className="text-text-secondary text-sm px-6 text-center">
+              Image affichée en plein écran sur l&apos;écran principal
+            </div>
+          ) : !selectedImage ? (
             <div className="text-text-secondary text-sm px-6 text-center">
               {t('editor.emptyDevelop' as any, {
                 defaultValue: 'Aucune photo. Importez ou sélectionnez une image dans le filmstrip.',
               })}
             </div>
           ) : (
-          <ImageCanvas
+          <ImageCanvas>
             appSettings={appSettings}
             activeAiPatchContainerId={activeAiPatchContainerId}
             activeAiSubMaskId={activeAiSubMaskId}
@@ -2131,7 +2143,7 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
         </div>
 
         {/* LR Loupe Info overlay (I cycles off → basic → full) */}
-        {selectedImage && developInfoMode !== 'off' && (
+        {selectedImage && !dualDisplayActive && developInfoMode !== 'off' && (
           <div
             className="absolute bottom-3 left-1/2 -translate-x-1/2 z-40 pointer-events-none max-w-[min(92%,720px)]"
             data-tooltip="Develop info (I to cycle)"

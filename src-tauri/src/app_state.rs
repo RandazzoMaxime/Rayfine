@@ -183,4 +183,6 @@ pub struct AppState {
     pub metadata_manager: Arc<MetadataManager>,
     pub disks_cache: Mutex<Option<Disks>>,
     pub disks_cache_refreshing: AtomicBool,
+    pub dual_display_enabled: AtomicBool,
+    pub dual_display_principal_id: Mutex<String>,
 }

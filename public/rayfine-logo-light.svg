@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1254" height="1254" viewBox="0 0 1254 1254">
+  <defs>
+    <linearGradient id="discGradient" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2b2b2d"/>
+      <stop offset="1" stop-color="#202022"/>
+    </linearGradient>
+    <pattern id="grid" width="52" height="52" patternUnits="userSpaceOnUse">
+      <path d="M 52 0 L 0 0 0 52" fill="none" stroke="#c8c8c8" stroke-width="1.2" stroke-dasharray="4 5" opacity="0.62"/>
+    </pattern>
+  </defs>
+
+  <!-- warm white background -->
+  <rect width="1254" height="1254" fill="#fbfaf7"/>
+
+  <!-- subtle editing-grid background -->
+  <rect width="1254" height="1254" fill="url(#grid)" opacity="0.78"/>
+
+  <!-- tone curve BEHIND the eclipse symbol; exactly two visible control points -->
+  <path d="M 98 996
+           C 164 984, 217 899, 275 811
+           C 316 749, 342 724, 370 700"
+        fill="none" stroke="#929294" stroke-width="2.4" stroke-linecap="round"/>
+  <path d="M 916.836 479.089
+           C 959 411, 997 334, 1045 284
+           C 1089 238, 1119 225, 1151 221"
+        fill="none" stroke="#929294" stroke-width="2.4" stroke-linecap="round"/>
+
+  <!-- only two curve points -->
+  <circle cx="98" cy="996" r="13" fill="#fbfaf7" stroke="#8d8d8f" stroke-width="4"/>
+  <circle cx="1151" cy="221" r="13" fill="#fbfaf7" stroke="#8d8d8f" stroke-width="4"/>
+
+  <!-- main eclipse / bitten-disc mark -->
+  <path d="
+    M 916.836 479.089
+    A 323 323 0 1 0 916.836 742.911
+    A 132 132 0 1 1 916.836 479.089
+    Z
+  " fill="url(#discGradient)"/>
+
+  <!-- framing brackets -->
+  <g fill="none" stroke="#8f8f91" stroke-width="4" stroke-linecap="square">
+    <path d="M 85 160 V 83 H 161"/>
+    <path d="M 1091 83 H 1167 V 160"/>
+    <path d="M 85 1068 V 1147 H 161"/>
+    <path d="M 1091 1147 H 1167 V 1068"/>
+  </g>
+
+  <!-- midpoint crop/alignment ticks -->
+  <g stroke="#8f8f91" stroke-width="1.8" opacity="0.9">
+    <path d="M 627 40 V 106"/>
+    <path d="M 627 1148 V 1210"/>
+    <path d="M 42 627 H 106"/>
+    <path d="M 1148 627 H 1210"/>
+  </g>
+</svg>

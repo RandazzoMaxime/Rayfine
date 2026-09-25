@@ -36,8 +36,8 @@ export function useThumbnails() {
 
           pendingQueueRef.current.clear();
         },
-        150,
-        { maxWait: 300 },
+        32,
+        { maxWait: 80 },
       ),
     [],
   );

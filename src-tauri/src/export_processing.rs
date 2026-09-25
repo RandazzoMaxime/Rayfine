@@ -1897,6 +1897,7 @@ pub async fn run_headless_export(
         output_sharpening: Some("none".to_string()),
         resolution_dpi: Some(240),
         limit_file_size_kb: None,
+        bit_depth: None,
     };
 
     let mut custom_adjustments = None;

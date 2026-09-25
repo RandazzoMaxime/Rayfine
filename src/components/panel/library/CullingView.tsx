@@ -28,6 +28,7 @@ import { useSettingsStore } from '../../../store/useSettingsStore';
 import { useLibraryActions } from '../../../hooks/useLibraryActions';
 import { COLOR_LABELS, Color } from '../../../utils/adjustments';
 import { IconAperture, IconFocalLength, IconIso, IconShutter } from '../editor/ExifIcons';
+import { generateLibraryPreview } from '../../../utils/libraryPreview';
 
 interface SyncViewport {
   isActive: boolean;
@@ -236,62 +237,27 @@ function CullingPreview({
     }
 
     let active = true;
-    setIsLoading(true);
-    setHighResSrc(null);
+    setIsLoading(!highResSrc && !thumbUrl);
 
     const fetchPreviewWithAdjustments = async () => {
       try {
-        const metadata: any = await invoke(Invokes.LoadMetadata, { path: image.path });
+        const url = await generateLibraryPreview(image.path);
         if (!active) return;
-
-        const adjustments =
-          metadata && metadata.adjustments && !metadata.adjustments.is_null ? metadata.adjustments : {};
-
-        const bytes = await invoke<Uint8Array>(Invokes.GeneratePreviewForPath, {
-          path: image.path,
-          jsAdjustments: adjustments,
-        });
-        if (!active) return;
-
-        const blob = new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' });
-        const localBlobUrl = URL.createObjectURL(blob);
-
-        setPreview(image.path, localBlobUrl, safeThumbKey);
-
-        if (active) {
-          setHighResSrc(localBlobUrl);
-          setIsLoading(false);
+        if (url) {
+          setPreview(image.path, url, safeThumbKey);
+          setHighResSrc(url);
         }
+        setIsLoading(false);
       } catch (err) {
         console.error('Error loading culling preview with adjustments:', err);
-
-        if (active) {
-          try {
-            const fallbackBytes = await invoke<Uint8Array>(Invokes.GeneratePreviewForPath, {
-              path: image.path,
-              jsAdjustments: {},
-            });
-            if (!active) return;
-            const blob = new Blob([new Uint8Array(fallbackBytes)], { type: 'image/jpeg' });
-            const localBlobUrl = URL.createObjectURL(blob);
-
-            setPreview(image.path, localBlobUrl, safeThumbKey);
-            setHighResSrc(localBlobUrl);
-          } catch (fallbackErr) {
-            console.error('Fallback preview generation also failed:', fallbackErr);
-          }
-          setIsLoading(false);
-        }
+        if (active) setIsLoading(false);
       }
     };
 
-    const delayTimeout = setTimeout(() => {
-      fetchPreviewWithAdjustments();
-    }, 200);
+    fetchPreviewWithAdjustments();
 
     return () => {
       active = false;
-      clearTimeout(delayTimeout);
     };
   }, [image.path, safeThumbKey, setPreview]);
 

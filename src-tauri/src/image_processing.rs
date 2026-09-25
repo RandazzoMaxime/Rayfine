@@ -1857,6 +1857,8 @@ pub fn resolve_tonemapper_override_from_handle(
     resolve_tonemapper_override(&settings, is_raw)
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 pub fn apply_cpu_agx_tonemap(image: &mut DynamicImage) {
     const AGX_EPSILON: f32 = 1.0e-6;
     const AGX_MIN_EV: f32 = -15.2;
@@ -2508,6 +2510,8 @@ pub fn get_all_adjustments_from_json(
 
 #[derive(Clone)]
 pub struct GpuContext {
+    pub instance: Option<Arc<wgpu::Instance>>,
+    pub adapter: Option<Arc<wgpu::Adapter>>,
     pub device: Arc<wgpu::Device>,
     pub queue: Arc<wgpu::Queue>,
     pub limits: wgpu::Limits,

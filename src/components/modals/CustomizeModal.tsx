@@ -6,6 +6,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { toast } from 'react-toastify';
 import { Invokes, Theme } from '../ui/AppProperties';
+import RayfineLogo from '../ui/RayfineLogo';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import {
   AppearanceId,
@@ -96,15 +97,10 @@ function AppearanceTile({
       )}
     >
       <div
-        className="h-16 rounded-md overflow-hidden border border-black/20 mb-2 flex"
+        className="h-16 rounded-md overflow-hidden border border-black/20 mb-2 flex items-center justify-center"
         style={{ backgroundColor: seeds.canvas }}
       >
-        <div className="w-5 h-full" style={{ backgroundColor: seeds.accent, opacity: 0.85 }} />
-        <div className="flex-1 p-1.5 flex flex-col gap-1">
-          <div className="h-1.5 w-10 rounded-full" style={{ backgroundColor: seeds.text, opacity: 0.9 }} />
-          <div className="h-1.5 w-16 rounded-full" style={{ backgroundColor: seeds.text, opacity: 0.35 }} />
-          <div className="mt-auto h-4 rounded-sm" style={{ backgroundColor: seeds.accent, opacity: 0.45 }} />
-        </div>
+        <RayfineLogo variant={id} className="h-14 w-14 rounded-sm" />
       </div>
       <div className="text-[12px] font-medium text-text-primary">{label}</div>
     </button>
