@@ -1161,6 +1161,7 @@
       "loading": "Chargement des dossiers...",
       "noFoldersFound": "Aucun dossier trouvé.",
       "openFolderInstruction": "Ouvrez un dossier pour voir sa structure.",
+      "drive": "Disque {{letter}}",
       "searchPlaceholder": "Rechercher des dossiers...",
       "sections": {
         "albums": "Collections",

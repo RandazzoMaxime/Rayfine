@@ -15,6 +15,7 @@ import { globalImageCache } from '../utils/ImageLRUCache';
 import { debouncedSave, debouncedSetHistory } from './useEditorActions';
 import i18n from '../i18n';
 import { isPathImported, filterRemovedFromCatalog } from '../utils/catalogMembership';
+import { dedupeLibraryRoots, isLibraryPathInside, libraryRootCoveredBy, sameLibraryPath } from '../utils/libraryRoots';
 
 export interface AppNavigationProps {
   clearThumbnailQueue: () => void;
@@ -560,28 +561,32 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
       }
 
       if (selectedPath) {
-        if (!rootPaths.includes(selectedPath)) {
-          const newRootPaths = [...rootPaths, selectedPath];
-          setLibrary({ rootPaths: newRootPaths });
+        if (libraryRootCoveredBy(rootPaths, selectedPath)) return;
 
-          if (appSettings) {
-            handleSettingsChange({ ...appSettings, rootFolders: newRootPaths } as any);
-          }
+        const keptRoots = rootPaths.filter((root) => !isLibraryPathInside(selectedPath, root));
+        const newRootPaths = dedupeLibraryRoots([...keptRoots, selectedPath]);
+        setLibrary({ rootPaths: newRootPaths });
 
-          setLibrary({ isTreeLoading: true });
-          try {
-            const newTree = await invoke(Invokes.GetFolderTree, {
-              path: selectedPath,
-              expandedFolders: [selectedPath],
-              showImageCounts:
-                appSettings?.enableFolderImageCounts || appSettings?.folderTreeSort?.key === 'imageCount',
-            });
-            setLibrary({ folderTrees: [...folderTrees, newTree] });
-          } catch (e) {
-            toast.error(`Failed to load folder tree: ${e}`);
-          } finally {
-            setLibrary({ isTreeLoading: false });
-          }
+        if (appSettings) {
+          handleSettingsChange({ ...appSettings, rootFolders: newRootPaths } as any);
+        }
+
+        setLibrary({ isTreeLoading: true });
+        try {
+          const newTree = await invoke(Invokes.GetFolderTree, {
+            path: selectedPath,
+            expandedFolders: [selectedPath],
+            showImageCounts:
+              appSettings?.enableFolderImageCounts || appSettings?.folderTreeSort?.key === 'imageCount',
+          });
+          const keptTrees = folderTrees.filter((tree: { path: string }) =>
+            keptRoots.some((root) => sameLibraryPath(root, tree.path)),
+          );
+          setLibrary({ folderTrees: [...keptTrees, newTree] });
+        } catch (e) {
+          toast.error(`Failed to load folder tree: ${e}`);
+        } finally {
+          setLibrary({ isTreeLoading: false });
         }
         await handleSelectSubfolder(selectedPath, true);
       }
@@ -593,16 +598,21 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
 
   const handleContinueSession = () => {
     const restore = async () => {
-      const { appSettings } = useSettingsStore.getState();
+      const { appSettings, handleSettingsChange } = useSettingsStore.getState();
       const { setLibrary } = useLibraryStore.getState();
 
-      const rootFolders = appSettings?.rootFolders?.length
+      const storedRoots = appSettings?.rootFolders?.length
         ? appSettings.rootFolders
         : appSettings?.lastRootPath
           ? [appSettings.lastRootPath]
           : [];
+      const rootFolders = dedupeLibraryRoots(storedRoots);
 
       if (rootFolders.length === 0) return;
+
+      if (appSettings && rootFolders.join('\n') !== storedRoots.join('\n')) {
+        handleSettingsChange({ ...appSettings, rootFolders } as any);
+      }
 
       const folderState = appSettings?.lastFolderState;
       const pathToSelect = folderState?.currentFolderPath || rootFolders[0];

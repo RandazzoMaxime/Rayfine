@@ -1,6 +1,7 @@
 import {
   Folder,
   FolderOpen,
+  HardDrive,
   ChevronLeft,
   ChevronRight,
   ChevronUp,
@@ -52,6 +53,7 @@ import {
   albumDisplayName,
   ensureUncategorizedAlbum,
 } from '../../utils/catalogMembership';
+import { groupTreesByDrive, isDriveRootPath, mergeImportedBranches, type PathBranch } from '../../utils/libraryRoots';
 
 export interface FolderTree {
   children: FolderTree[];
@@ -463,6 +465,95 @@ function AlbumTreeNode({
   );
 }
 
+function ImportedBranches({
+  branches,
+  collapsed,
+  onToggleBranch,
+  expandedFolders,
+  onContextMenu,
+  onFolderSelect,
+  onToggle,
+  selectedPath,
+  pinnedFolders,
+  showImageCounts,
+  isInstantTransition,
+  folderIcons,
+}: {
+  branches: PathBranch<FolderTree>[];
+  collapsed: Set<string>;
+  onToggleBranch(path: string): void;
+  expandedFolders: Set<string>;
+  onContextMenu: FolderTreeProps['onContextMenu'];
+  onFolderSelect: FolderTreeProps['onFolderSelect'];
+  onToggle: FolderTreeProps['onToggleFolder'];
+  selectedPath: string | null;
+  pinnedFolders: string[];
+  showImageCounts: boolean;
+  isInstantTransition: boolean;
+  folderIcons: Record<string, string>;
+}) {
+  return (
+    <>
+      {branches.map((branch) => {
+        if (branch.imported) {
+          return (
+            <TreeNode
+              key={branch.imported.path}
+              expandedFolders={expandedFolders}
+              isExpanded={expandedFolders.has(branch.imported.path)}
+              node={branch.imported}
+              onContextMenu={onContextMenu}
+              onFolderSelect={onFolderSelect}
+              onToggle={onToggle}
+              selectedPath={selectedPath}
+              pinnedFolders={pinnedFolders}
+              showImageCounts={showImageCounts}
+              isInstantTransition={isInstantTransition}
+              folderIcons={folderIcons}
+            />
+          );
+        }
+        const open = !collapsed.has(branch.path);
+        return (
+          <div key={branch.path}>
+            <button
+              type="button"
+              className="flex w-full items-center gap-1.5 px-1.5 py-1 rounded-sm text-left hover:bg-card-active/60"
+              onClick={() => onToggleBranch(branch.path)}
+            >
+              {open ? (
+                <ChevronDown size={14} className="shrink-0 text-text-secondary" />
+              ) : (
+                <ChevronRight size={14} className="shrink-0 text-text-secondary" />
+              )}
+              <Folder size={15} className="shrink-0 text-text-secondary" />
+              <span className="truncate text-sm">{branch.name}</span>
+            </button>
+            {open && branch.children.length > 0 && (
+              <div className="pl-3">
+                <ImportedBranches
+                  branches={branch.children}
+                  collapsed={collapsed}
+                  onToggleBranch={onToggleBranch}
+                  expandedFolders={expandedFolders}
+                  onContextMenu={onContextMenu}
+                  onFolderSelect={onFolderSelect}
+                  onToggle={onToggle}
+                  selectedPath={selectedPath}
+                  pinnedFolders={pinnedFolders}
+                  showImageCounts={showImageCounts}
+                  isInstantTransition={isInstantTransition}
+                  folderIcons={folderIcons}
+                />
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
 function TreeNode({
   expandedFolders,
   isExpanded,
@@ -701,6 +792,8 @@ export default function FolderTree({
   );
 
   const [searchQuery, setSearchQuery] = useState('');
+  const [collapsedDrives, setCollapsedDrives] = useState<Set<string>>(new Set());
+  const [collapsedBranches, setCollapsedBranches] = useState<Set<string>>(new Set());
   const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
   const [smartOpen, setSmartOpen] = useState(false);
   const pinnedFolders = appSettings?.pinnedFolders || [];
@@ -802,6 +895,8 @@ export default function FolderTree({
     }
     return sortFolderTree(base, folderTreeSort);
   }, [folderTrees, trimmedQuery, isSearching, folderTreeSort]);
+
+  const driveGroups = useMemo(() => groupTreesByDrive(filteredTrees || []), [filteredTrees]);
 
   const filteredPinnedTrees = useMemo(() => {
     let base = pinnedFolderTrees;
@@ -1172,39 +1267,84 @@ export default function FolderTree({
                     >
                       <div className="pt-1">
                         <AnimatePresence>
-                          {filteredTrees.map((tree: any, index: number) => (
-                            <motion.div
-                              key={tree.path}
-                              animate="visible"
-                              custom={{ index, total: filteredTrees.length }}
-                              exit="exit"
-                              initial={isInstantTransition ? 'visible' : 'hidden'}
-                              layout={isInstantTransition ? false : 'position'}
-                              variants={{
-                                hidden: { opacity: 0, x: -15 },
-                                visible: ({ index, total }: VisibleProps) => ({
-                                  opacity: 1,
-                                  x: 0,
-                                  transition: { duration: 0.25, delay: total < 8 ? index * 0.05 : 0 },
-                                }),
-                                exit: { opacity: 0, x: -15, transition: { duration: 0.2 } },
-                              }}
-                            >
-                              <TreeNode
-                                expandedFolders={effectiveExpandedFolders}
-                                isExpanded={effectiveExpandedFolders.has(tree.path)}
-                                node={tree}
-                                onContextMenu={onContextMenu}
-                                onFolderSelect={onFolderSelect}
-                                onToggle={onToggleFolder}
-                                selectedPath={selectedPath}
-                                pinnedFolders={pinnedFolders}
-                                showImageCounts={showImageCounts}
-                                isInstantTransition={isInstantTransition}
-                                folderIcons={folderIcons}
-                              />
-                            </motion.div>
-                          ))}
+                          {driveGroups.map((group) => {
+                            const soleDrive =
+                              group.trees.length === 1 && isDriveRootPath(group.trees[0].path);
+                            if (soleDrive) {
+                              const tree = group.trees[0];
+                              return (
+                                <TreeNode
+                                  key={tree.path}
+                                  expandedFolders={effectiveExpandedFolders}
+                                  isExpanded={effectiveExpandedFolders.has(tree.path)}
+                                  node={tree}
+                                  onContextMenu={onContextMenu}
+                                  onFolderSelect={onFolderSelect}
+                                  onToggle={onToggleFolder}
+                                  selectedPath={selectedPath}
+                                  pinnedFolders={pinnedFolders}
+                                  showImageCounts={showImageCounts}
+                                  isInstantTransition={isInstantTransition}
+                                  folderIcons={folderIcons}
+                                />
+                              );
+                            }
+                            const open = isSearching || !collapsedDrives.has(group.id);
+                            return (
+                              <div key={group.id}>
+                                <button
+                                  type="button"
+                                  className="flex w-full items-center gap-1.5 px-1.5 py-1 rounded-sm text-left hover:bg-card-active/60"
+                                  onClick={() =>
+                                    setCollapsedDrives((prev) => {
+                                      const next = new Set(prev);
+                                      if (next.has(group.id)) next.delete(group.id);
+                                      else next.add(group.id);
+                                      return next;
+                                    })
+                                  }
+                                >
+                                  {open ? (
+                                    <ChevronDown size={14} className="shrink-0 text-text-secondary" />
+                                  ) : (
+                                    <ChevronRight size={14} className="shrink-0 text-text-secondary" />
+                                  )}
+                                  <HardDrive size={15} className="shrink-0 text-text-secondary" />
+                                  <span className="truncate text-sm font-medium">
+                                    {t('library.folders.drive' as any, {
+                                      letter: group.letter,
+                                      defaultValue: 'Disque {{letter}}',
+                                    })}
+                                  </span>
+                                </button>
+                                {open && (
+                                  <div className="pl-3">
+                                    <ImportedBranches
+                                      branches={mergeImportedBranches(group.trees)}
+                                      collapsed={isSearching ? new Set() : collapsedBranches}
+                                      onToggleBranch={(path) =>
+                                        setCollapsedBranches((prev) => {
+                                          const next = new Set(prev);
+                                          if (next.has(path)) next.delete(path);
+                                          else next.add(path);
+                                          return next;
+                                        })
+                                      }
+                                      expandedFolders={effectiveExpandedFolders}
+                                      onContextMenu={onContextMenu}
+                                      onFolderSelect={onFolderSelect}
+                                      onToggle={onToggleFolder}
+                                      selectedPath={selectedPath}
+                                      pinnedFolders={pinnedFolders}
+                                      showImageCounts={showImageCounts}
+                                      isInstantTransition={isInstantTransition}
+                                      folderIcons={folderIcons}
+                                    />
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
                         </AnimatePresence>
 
                         {!isSearching && (

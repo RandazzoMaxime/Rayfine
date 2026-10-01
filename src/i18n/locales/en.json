@@ -1138,6 +1138,7 @@
       "loading": "Loading folders...",
       "noFoldersFound": "No folders found.",
       "openFolderInstruction": "Open a folder to see its structure.",
+      "drive": "Drive {{letter}}",
       "searchPlaceholder": "Search folders...",
       "sections": {
         "albums": "Collections",

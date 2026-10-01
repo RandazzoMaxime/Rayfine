@@ -21,6 +21,7 @@ import {
   ThumbnailAspectRatio,
 } from '../components/ui/AppProperties';
 import { useTranslation } from 'react-i18next';
+import { dedupeLibraryRoots } from '../utils/libraryRoots';
 
 interface UseAppInitializationProps {
   preloadedDataRef: React.RefObject<any>;
@@ -214,11 +215,13 @@ export const useAppInitialization = ({
           }
         }
 
-        const rootFolders = settings.rootFolders?.length
-          ? settings.rootFolders
-          : settings.lastRootPath
-            ? [settings.lastRootPath]
-            : [];
+        const rootFolders = dedupeLibraryRoots(
+          settings.rootFolders?.length
+            ? settings.rootFolders
+            : settings.lastRootPath
+              ? [settings.lastRootPath]
+              : [],
+        );
 
         if (!isAndroid && rootFolders.length > 0) {
           const currentPath = settings.lastFolderState?.currentFolderPath || rootFolders[0];
@@ -383,11 +386,13 @@ export const useAppInitialization = ({
     if (prevImageCountsNeed.current !== needsImageCounts) {
       prevImageCountsNeed.current = needsImageCounts;
 
-      const rootFolders = appSettings.rootFolders?.length
-        ? appSettings.rootFolders
-        : appSettings.lastRootPath
-          ? [appSettings.lastRootPath]
-          : [];
+      const rootFolders = dedupeLibraryRoots(
+        appSettings.rootFolders?.length
+          ? appSettings.rootFolders
+          : appSettings.lastRootPath
+            ? [appSettings.lastRootPath]
+            : [],
+      );
       const pinnedFolders = appSettings.pinnedFolders || [];
 
       const currentExpanded = Array.from(useLibraryStore.getState().expandedFolders);
