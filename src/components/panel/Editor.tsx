@@ -1981,14 +1981,8 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
   let cursorStyle = 'default';
   if (isPanningState && isMiddleMousePanning.current) {
     cursorStyle = 'grabbing';
-  } else if (isZoomActionActive) {
-    if (isPanningState) {
-      cursorStyle = 'grabbing';
-    } else if (transformState.scale > 1.01) {
-      cursorStyle = 'zoom-out';
-    } else {
-      cursorStyle = 'zoom-in';
-    }
+  } else if (isZoomActionActive && isPanningState) {
+    cursorStyle = 'grabbing';
   }
 
   const isWgpuActive =

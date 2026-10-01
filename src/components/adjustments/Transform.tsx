@@ -27,18 +27,38 @@ export default function TransformPanel({ adjustments, setAdjustments, onDragStat
     { value: 2, label: t('adjustments.transform.uprightLevel' as any) },
     { value: 3, label: t('adjustments.transform.uprightVertical' as any) },
     { value: 4, label: t('adjustments.transform.uprightFull' as any) },
-    {
-      value: 5,
-      label: t('adjustments.transform.uprightGuided' as any, { defaultValue: 'Guided' }),
-    },
   ];
+  const guideCount = Array.isArray((adjustments as any).guidedUprightLines)
+    ? (adjustments as any).guidedUprightLines.length
+    : 0;
 
   return (
     <div>
-      <div className="mb-0.5 text-[10px] uppercase tracking-wider text-text-secondary font-semibold">
-        {t('adjustments.transform.upright' as any)}
-      </div>
-      <div className="flex flex-wrap gap-0.5 mb-2">
+      <div className="flex flex-wrap items-center gap-1 mb-2">
+        <button
+          type="button"
+          aria-pressed={isGuidedUprightActive}
+          title={t('adjustments.transform.drawGuides' as any, { defaultValue: 'Place guides' })}
+          className={`w-7 h-7 rounded-full border flex items-center justify-center shrink-0 transition-colors ${
+            isGuidedUprightActive
+              ? 'bg-card-active border-text-primary/70 text-text-primary'
+              : 'bg-surface border-border-color text-text-secondary hover:bg-card-active hover:text-text-primary'
+          }`}
+          onClick={() => {
+            const next = !isGuidedUprightActive;
+            setEditor({
+              isGuidedUprightActive: next,
+              isStraightenActive: false,
+              isPointColorPickerActive: false,
+              isWbPickerActive: false,
+            });
+            if (next) set('perspectiveUpright', 5);
+          }}
+        >
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+            <path d="M7 1.1v3.1M7 9.8v3.1M1.1 7h3.1M9.8 7h3.1" stroke="currentColor" strokeWidth="1.25" strokeLinecap="square" />
+          </svg>
+        </button>
         {uprightModes.map((m) => {
           const active = upright === m.value;
           return (
@@ -52,74 +72,31 @@ export default function TransformPanel({ adjustments, setAdjustments, onDragStat
               }`}
               onClick={() => {
                 set('perspectiveUpright', m.value);
-                if (m.value === 5) {
-                  setEditor({
-                    isGuidedUprightActive: true,
-                    isStraightenActive: false,
-                    isPointColorPickerActive: false,
-                    isWbPickerActive: false,
-                  });
-                } else {
-                  setEditor({ isGuidedUprightActive: false });
-                }
+                setEditor({ isGuidedUprightActive: false });
               }}
             >
               {m.label}
             </button>
           );
         })}
-      </div>
-      {upright === 5 && (
-        <div className="mb-2 space-y-1 rounded border border-border-color/40 bg-surface/40 p-1.5">
+        {guideCount > 0 && (
           <button
             type="button"
-            className={`w-full px-2 py-1 rounded text-[10px] uppercase tracking-wide transition-colors ${
-              isGuidedUprightActive
-                ? 'bg-accent text-button-text'
-                : 'bg-card-active text-text-primary hover:opacity-90'
-            }`}
-            onClick={() => {
-              setEditor({
-                isGuidedUprightActive: !isGuidedUprightActive,
-                isStraightenActive: false,
-                isPointColorPickerActive: false,
-                isWbPickerActive: false,
-              });
-            }}
+            className="px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wide text-text-secondary hover:text-text-primary hover:bg-surface/80"
+            onClick={() =>
+              setAdjustments((prev) => ({
+                ...prev,
+                guidedUprightLines: [],
+                transformVertical: 0,
+                transformHorizontal: 0,
+                transformRotate: 0,
+              }))
+            }
           >
-            {t('adjustments.transform.drawGuides' as any, { defaultValue: 'Draw guides on image' })}
+            {t('adjustments.transform.clearGuides' as any, { defaultValue: 'Clear' })}
           </button>
-          <p className="text-[9px] text-text-secondary/70 leading-snug">
-            {t('adjustments.transform.guidedHint' as any, {
-              defaultValue:
-                'Draw 1–2 lines along edges that should be horizontal or vertical. Geometry is estimated from the guides.',
-            })}
-          </p>
-          <div className="flex gap-1">
-            <button
-              type="button"
-              className="flex-1 px-1.5 py-0.5 rounded text-[9px] bg-surface hover:bg-card-active text-text-secondary"
-              onClick={() =>
-                setAdjustments((prev) => ({
-                  ...prev,
-                  guidedUprightLines: [],
-                  transformVertical: 0,
-                  transformHorizontal: 0,
-                  transformRotate: 0,
-                }))
-              }
-            >
-              {t('adjustments.transform.clearGuides' as any, { defaultValue: 'Clear guides' })}
-            </button>
-            <span className="text-[9px] text-text-secondary/60 self-center tabular-nums">
-              {Array.isArray((adjustments as any).guidedUprightLines)
-                ? (adjustments as any).guidedUprightLines.length
-                : 0}
-              /2
-            </span>
-          </div>
-        </div>
-      )}
+        )}
+      </div>
       <div className="mb-2">
         <Switch
           label={t('adjustments.transform.constrainToWarp' as any)}
@@ -130,15 +107,6 @@ export default function TransformPanel({ adjustments, setAdjustments, onDragStat
       <div className="mb-0.5 text-[10px] uppercase tracking-wider text-text-secondary font-semibold">
         {t('adjustments.transform.geometry' as any)}
       </div>
-      <Slider
-        label={t('adjustments.transform.distortion' as any)}
-        min={-100}
-        max={100}
-        step={1}
-        value={adjustments.transformDistortion ?? 0}
-        onChange={(e) => set(TransformAdjustment.TransformDistortion, num(e))}
-        onDragStateChange={onDragStateChange}
-      />
       <Slider
         label={t('adjustments.transform.vertical' as any)}
         min={-100}

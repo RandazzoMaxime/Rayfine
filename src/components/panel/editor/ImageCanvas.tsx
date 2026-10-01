@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import { useState, useEffect, useRef, useCallback, memo, useMemo } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, memo, useMemo } from 'react';
 import { useEditorStore } from '../../../store/useEditorStore';
 import { softProofCssFilter } from '../../../utils/softProofProfiles';
 import ReactCrop from 'react-image-crop';
@@ -1230,7 +1230,11 @@ const ImageCanvas = memo(
     const [straightenLine, setStraightenLine] = useState<any>(null);
     const isStraightening = useRef(false);
     const [guidedDraft, setGuidedDraft] = useState<{ start: { x: number; y: number }; end: { x: number; y: number } } | null>(null);
+    const [guideLoupe, setGuideLoupe] = useState<{ sx: number; sy: number } | null>(null);
     const isGuidedDrawing = useRef(false);
+    const loupeCanvasRef = useRef<HTMLCanvasElement>(null);
+    const guideImgRef = useRef<HTMLImageElement | null>(null);
+    const guideLoupeSampleRef = useRef<{ x: number; y: number; stageW: number; stageH: number } | null>(null);
 
     const [displayState, setDisplayState] = useState({
       base: finalPreviewUrl || selectedImage.thumbnailUrl,
@@ -2619,8 +2623,46 @@ const ImageCanvas = memo(
       }
     };
 
+    const paintGuideLoupe = () => {
+      const sample = guideLoupeSampleRef.current;
+      const canvas = loupeCanvasRef.current;
+      const img = guideImgRef.current;
+      if (!sample || !canvas || !img || !img.complete || !img.naturalWidth) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      const size = canvas.width;
+      const zoom = 5;
+      const sw = size / zoom;
+      const sh = size / zoom;
+      const px = (sample.x / Math.max(1, sample.stageW)) * img.naturalWidth;
+      const py = (sample.y / Math.max(1, sample.stageH)) * img.naturalHeight;
+      ctx.imageSmoothingEnabled = false;
+      ctx.fillStyle = '#1c1c1c';
+      ctx.fillRect(0, 0, size, size);
+      ctx.drawImage(img, px - sw / 2, py - sh / 2, sw, sh, 0, 0, size, size);
+    };
+
+    const trackGuideLoupe = (e: any) => {
+      const stage = e.target?.getStage?.();
+      const pos = stage?.getPointerPosition?.();
+      if (!stage || !pos) {
+        guideLoupeSampleRef.current = null;
+        setGuideLoupe(null);
+        return;
+      }
+      const box = stage.container().getBoundingClientRect();
+      guideLoupeSampleRef.current = { x: pos.x, y: pos.y, stageW: stage.width(), stageH: stage.height() };
+      setGuideLoupe({ sx: box.left + pos.x, sy: box.top + pos.y });
+      paintGuideLoupe();
+    };
+
+    useLayoutEffect(() => {
+      if (guideLoupe) paintGuideLoupe();
+    }, [guideLoupe]);
+
     /** Guided Upright: draw 1–2 lines; estimate vertical/horizontal/rotate from guides. */
     const handleGuidedMouseDown = (e: any) => {
+      trackGuideLoupe(e);
       if (e.evt.button !== 0 && !e.evt.touches) return;
       const existing = Array.isArray((adjustments as any).guidedUprightLines)
         ? (adjustments as any).guidedUprightLines
@@ -2635,6 +2677,7 @@ const ImageCanvas = memo(
     };
 
     const handleGuidedMouseMove = (e: any) => {
+      trackGuideLoupe(e);
       if (!isGuidedDrawing.current) return;
       const pos = e.target.getStage().getPointerPosition();
       setGuidedDraft((prev) => (prev ? { ...prev, end: pos } : prev));
@@ -2732,6 +2775,7 @@ const ImageCanvas = memo(
     };
 
     const handleGuidedMouseLeave = () => {
+      setGuideLoupe(null);
       if (isGuidedDrawing.current) {
         isGuidedDrawing.current = false;
         setGuidedDraft(null);
@@ -2740,6 +2784,16 @@ const ImageCanvas = memo(
 
 
     const cropPreviewUrl = uncroppedAdjustedPreviewUrl || selectedImage.thumbnailUrl;
+    useEffect(() => {
+      const url = finalPreviewUrl || cropPreviewUrl;
+      if (!url) {
+        guideImgRef.current = null;
+        return;
+      }
+      const img = new Image();
+      img.src = url;
+      guideImgRef.current = img;
+    }, [finalPreviewUrl, cropPreviewUrl]);
     const originalSrc = transformedOriginalUrl;
     const isShowingOriginal = showOriginal && !!originalSrc;
     const isSplitBA = !!beforeAfterSplit && !!originalSrc && originalLoaded;
@@ -3587,6 +3641,22 @@ const ImageCanvas = memo(
                     )}
                   </Layer>
                 </Stage>
+              )}
+              {isGuidedUprightActive && guideLoupe && (
+                <div
+                  className="pointer-events-none fixed z-[80] overflow-hidden border-[3px] border-black bg-neutral-900 shadow-lg"
+                  style={{
+                    width: 128,
+                    height: 128,
+                    left: Math.min(window.innerWidth - 136, guideLoupe.sx + 8),
+                    top: Math.min(window.innerHeight - 136, guideLoupe.sy + 16),
+                  }}
+                >
+                  <canvas ref={loupeCanvasRef} width={128} height={128} className="block h-full w-full" />
+                  <svg className="absolute inset-0 h-full w-full" viewBox="0 0 128 128" aria-hidden>
+                    <path d="M64 54v20M54 64h20" stroke="white" strokeWidth="1.6" />
+                  </svg>
+                </div>
               )}
             </div>
           )}
