@@ -105,6 +105,7 @@
       "resetAllPoint": "Reset All Point Curves",
       "resetParametric": "Reset {{channel}} Parametric Curve",
       "resetPoint": "Reset {{channel}} Point Curve",
+      "readout": "Input: {{x}}   Output: {{y}}",
       "pointShort": "Point",
       "paramShort": "Param"
     },

@@ -105,6 +105,7 @@
       "resetAllPoint": "Réinitialiser toutes les courbes à points",
       "resetParametric": "Réinitialiser la courbe paramétrique {{channel}}",
       "resetPoint": "Réinitialiser la courbe à points {{channel}}",
+      "readout": "Entrée : {{x}}   Sortie : {{y}}",
       "pointShort": "Points",
       "paramShort": "Param."
     },
