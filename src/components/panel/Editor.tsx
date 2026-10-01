@@ -2051,6 +2051,7 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
         )}
         style={{ cursor: cursorStyle }}
         onContextMenu={onContextMenu}
+        id="editor-canvas-stage"
         ref={imageContainerRef}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}

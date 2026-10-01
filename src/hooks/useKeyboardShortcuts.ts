@@ -5170,6 +5170,22 @@ export const useKeyboardShortcuts = ({
           s.editor.setEditor({ adjustments: { ...prev, masks: nextMasks } });
         },
       },
+      // LR Masks: K brush, M linear, Shift+M radial while the Masks panel is open.
+      {
+        match: (e: KeyboardEvent, s: any) =>
+          !!s.editor.selectedImage &&
+          s.ui.activeRightPanel === Panel.Masks &&
+          !e.ctrlKey &&
+          !e.metaKey &&
+          !e.altKey &&
+          !e.repeat &&
+          ((e.code === 'KeyK' && !e.shiftKey) || e.code === 'KeyM'),
+        execute: (e: KeyboardEvent) => {
+          e.preventDefault();
+          const action = e.code === 'KeyK' ? 'brush' : e.shiftKey ? 'radial' : 'linear';
+          window.dispatchEvent(new CustomEvent('rayfine:add-mask', { detail: action }));
+        },
+      },
       // LR Masks: [ / ] resize brush (takes priority over rotate while Masks panel is open)
       {
         match: (e: KeyboardEvent, s: any) =>

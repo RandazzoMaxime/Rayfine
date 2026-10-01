@@ -127,7 +127,7 @@ function SubMenu({ cancelCloseSubmenu, closeSubmenu, hideContextMenu, options, p
         style={style}
       >
         <div
-          className={clsx('backdrop-blur-md rounded-lg shadow-xl', !CustomComponent && 'bg-surface/95 p-2 w-56')}
+          className={clsx('backdrop-blur-md rounded-lg shadow-xl', !CustomComponent && 'bg-surface/95 p-2 min-w-56 w-max max-w-sm')}
           role="menu"
         >
           {CustomComponent && customOption ? (
@@ -219,12 +219,15 @@ function MenuItem({ option, path, hideContextMenu }: MenuItemProps) {
         ref={itemRef}
         role="menuitem"
       >
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 min-w-0">
           {option.color && <div className="w-3 h-3 rounded-full" style={{ backgroundColor: option.color }}></div>}
           {option.icon && <option.icon size={16} />}
-          <span>{option.label}</span>
+          <span className="truncate">{option.label}</span>
         </div>
-        {option.submenu && <ChevronRight size={16} />}
+        <span className="flex items-center gap-2 shrink-0 text-xs text-text-secondary">
+          {option.shortcut}
+          {option.submenu && <ChevronRight size={14} />}
+        </span>
       </button>
 
       {isSubmenuOpen && (
@@ -254,7 +257,7 @@ function ContextMenu() {
       ref={menuRef}
       style={{ top: y, left: x }}
     >
-      <div className="bg-surface/95 backdrop-blur-md rounded-lg shadow-xl p-2 w-64" role="menu">
+      <div className="bg-surface/95 backdrop-blur-md rounded-lg shadow-xl p-2 min-w-64 w-max max-w-sm" role="menu">
         {options.map((option: any, index: number) => (
           <MenuItem hideContextMenu={hideContextMenu} key={index} option={option} path={[index]} />
         ))}

@@ -1,16 +1,18 @@
 import { motion, LayoutGroup } from 'framer-motion';
-import {
-  SlidersHorizontal,
-  Crop,
-  Layers,
-  Paintbrush,
-  type LucideIcon,
-} from 'lucide-react';
+import type { ComponentType } from 'react';
+import { SlidersHorizontal, Crop } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { InpaintIcon, MaskIcon } from '../../icons/DevelopToolIcons';
 import { Panel } from '../../ui/AppProperties';
 
+type BarIcon = ComponentType<{
+  size?: number | string;
+  strokeWidth?: number | string;
+  className?: string;
+}>;
+
 interface PanelOptions {
-  icon: LucideIcon;
+  icon: BarIcon;
   id: Panel;
   title: string;
 }
@@ -26,8 +28,8 @@ const panelGroups: Array<Array<PanelOptions>> = [
   [
     { id: Panel.Adjustments, icon: SlidersHorizontal, title: 'editor.switcher.tooltips.adjust' },
     { id: Panel.Crop, icon: Crop, title: 'editor.switcher.tooltips.crop' },
-    { id: Panel.Ai, icon: Paintbrush, title: 'editor.switcher.tooltips.inpaint' },
-    { id: Panel.Masks, icon: Layers, title: 'editor.switcher.tooltips.masks' },
+    { id: Panel.Ai, icon: InpaintIcon, title: 'editor.switcher.tooltips.inpaint' },
+    { id: Panel.Masks, icon: MaskIcon, title: 'editor.switcher.tooltips.masks' },
   ],
 ];
 

@@ -453,6 +453,7 @@ export interface Option {
   label?: string;
   onClick?(): void;
   onRightClick?(): void;
+  shortcut?: string;
   submenu?: any;
   type?: string;
 }

@@ -1,19 +1,21 @@
 import clsx from 'clsx';
-import {
-  Crop,
-  Layers,
-  Paintbrush,
-  SlidersHorizontal,
-  type LucideIcon,
-} from 'lucide-react';
+import type { ComponentType } from 'react';
+import { Crop, SlidersHorizontal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { InpaintIcon, MaskIcon } from '../../icons/DevelopToolIcons';
 import { Panel } from '../../ui/AppProperties';
 import { useUIStore } from '../../../store/useUIStore';
 import { useShallow } from 'zustand/react/shallow';
 
+type BarIcon = ComponentType<{
+  size?: number | string;
+  strokeWidth?: number | string;
+  className?: string;
+}>;
+
 interface ToolDef {
   id: Panel;
-  icon: LucideIcon;
+  icon: BarIcon;
   labelKey: string;
   short: string;
 }
@@ -22,8 +24,8 @@ interface ToolDef {
 const TOOLS: ToolDef[] = [
   { id: Panel.Adjustments, icon: SlidersHorizontal, labelKey: 'editor.switcher.tooltips.adjust', short: 'Basic' },
   { id: Panel.Crop, icon: Crop, labelKey: 'editor.switcher.tooltips.crop', short: 'Crop' },
-  { id: Panel.Ai, icon: Paintbrush, labelKey: 'editor.switcher.tooltips.inpaint', short: 'Healing' },
-  { id: Panel.Masks, icon: Layers, labelKey: 'editor.switcher.tooltips.masks', short: 'Masking' },
+  { id: Panel.Ai, icon: InpaintIcon, labelKey: 'editor.switcher.tooltips.inpaint', short: 'Healing' },
+  { id: Panel.Masks, icon: MaskIcon, labelKey: 'editor.switcher.tooltips.masks', short: 'Masking' },
 ];
 
 interface DevelopToolsBarProps {

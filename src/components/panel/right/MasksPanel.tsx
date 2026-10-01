@@ -6,6 +6,7 @@ import {
   useRef,
   useCallback,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { useShallow } from 'zustand/react/shallow';
 import { v4 as uuidv4 } from 'uuid';
 import clsx from 'clsx';
@@ -25,6 +26,8 @@ import {
 } from '@dnd-kit/core';
 import {
   ChartArea,
+  ChevronDown,
+  ChevronUp,
   Circle,
   ClipboardPaste,
   Copy,
@@ -76,6 +79,7 @@ import {
   ADJUSTMENT_SECTIONS,
 } from '../../../utils/adjustments';
 import { useContextMenu } from '../../../context/ContextMenuContext';
+import AddMaskMenu, { type AddMaskAction } from './AddMaskMenu';
 import { OPTION_SEPARATOR, Orientation } from '../../ui/AppProperties';
 import { createSubMask } from '../../../utils/maskUtils';
 import { usePresets } from '../../../hooks/usePresets';
@@ -316,6 +320,13 @@ export default function MasksPanel() {
   const onSelectMask = useCallback((id: string | null) => setEditor({ activeMaskId: id }), [setEditor]);
 
   const [expandedContainers, setExpandedContainers] = useState<Set<string>>(new Set());
+  const [addMenu, setAddMenu] = useState<null | {
+    anchor: { left: number; top: number; bottom: number };
+    target: { kind: 'new' } | { kind: 'component'; containerId: string; mode: SubMaskMode };
+    title?: string;
+  }>(null);
+  const [maskListCollapsed, setMaskListCollapsed] = useState(false);
+  const [canvasHost, setCanvasHost] = useState<HTMLElement | null>(null);
   const [activeDragItem, setActiveDragItem] = useState<DragData | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [tempName, setTempName] = useState('');
@@ -474,8 +485,10 @@ export default function MasksPanel() {
     return subMask;
   };
 
-  const handleAddMaskContainer = (type: Mask) => {
+  const handleAddMaskContainer = (type: Mask, options?: { invert?: boolean; name?: string }) => {
     const subMask = createMaskLogic(type);
+    if (options?.invert) subMask.invert = true;
+    if (options?.name) subMask.name = options.name;
     const count = (adjustments.masks?.length || 0) + 1;
     const newContainer = {
       ...INITIAL_MASK_CONTAINER,
@@ -493,13 +506,94 @@ export default function MasksPanel() {
     else if (type === Mask.AiDepth) handleGenerateAiDepthMask(subMask.id, subMask.parameters);
   };
 
+  const applyAddMask = (action: AddMaskAction) => {
+    if (action === 'background') {
+      handleAddMaskContainer(Mask.AiForeground, {
+        invert: true,
+        name: t('editor.masks.addMenu.background'),
+      });
+      return;
+    }
+    const typeByAction: Record<Exclude<AddMaskAction, 'background'>, Mask> = {
+      subject: Mask.AiSubject,
+      sky: Mask.AiSky,
+      foreground: Mask.AiForeground,
+      brush: Mask.Brush,
+      flow: Mask.Flow,
+      linear: Mask.Linear,
+      radial: Mask.Radial,
+      color: Mask.Color,
+      luminance: Mask.Luminance,
+      depth: Mask.AiDepth,
+      all: Mask.All,
+    };
+    handleAddMaskContainer(typeByAction[action]);
+  };
+
+  const addComponentFromAction = (containerId: string, action: AddMaskAction, mode: SubMaskMode) => {
+    if (action === 'background') {
+      handleAddSubMask(containerId, Mask.AiForeground, mode, -1, {
+        invert: true,
+        name: t('editor.masks.addMenu.background'),
+      });
+      return;
+    }
+    const typeByAction: Record<Exclude<AddMaskAction, 'background'>, Mask> = {
+      subject: Mask.AiSubject,
+      sky: Mask.AiSky,
+      foreground: Mask.AiForeground,
+      brush: Mask.Brush,
+      flow: Mask.Flow,
+      linear: Mask.Linear,
+      radial: Mask.Radial,
+      color: Mask.Color,
+      luminance: Mask.Luminance,
+      depth: Mask.AiDepth,
+      all: Mask.All,
+    };
+    handleAddSubMask(containerId, typeByAction[action], mode);
+  };
+
+  const deleteEmptyMasks = () => {
+    const emptyIds = new Set(
+      (adjustments.masks || []).filter((m) => !(m.subMasks?.length)).map((m) => m.id),
+    );
+    if (emptyIds.size === 0) return;
+    if (activeMaskContainerId && emptyIds.has(activeMaskContainerId)) handleDeselect();
+    setAdjustments((prev: Adjustments) => ({
+      ...prev,
+      masks: (prev.masks || []).filter((m) => !emptyIds.has(m.id)),
+    }));
+  };
+
+  const applyAddMaskRef = useRef(applyAddMask);
+  applyAddMaskRef.current = applyAddMask;
+
+  useEffect(() => {
+    setCanvasHost(document.getElementById('editor-canvas-stage'));
+  }, []);
+
+  useEffect(() => {
+    const onAdd = (event: Event) => {
+      const action = (event as CustomEvent<AddMaskAction>).detail;
+      if (!action) return;
+      applyAddMaskRef.current(action);
+      setAddMenu(null);
+    };
+    window.addEventListener('rayfine:add-mask', onAdd);
+    return () => window.removeEventListener('rayfine:add-mask', onAdd);
+  }, []);
+
   const handleAddSubMask = (
     containerId: string,
     type: Mask,
     mode: SubMaskMode = SubMaskMode.Additive,
     insertIndex: number = -1,
+    options?: { invert?: boolean; name?: string },
   ) => {
     const subMask = createMaskLogic(type, mode);
+    if (options?.invert) subMask.invert = true;
+    if (options?.name) subMask.name = options.name;
     setAdjustments((prev: Adjustments) => ({
       ...prev,
       masks: prev.masks?.map((c: MaskContainer) => {
@@ -977,23 +1071,8 @@ export default function MasksPanel() {
     >
       <div className="flex flex-col h-full select-none overflow-hidden" onContextMenu={handlePanelContextMenu}>
         <div className="px-3 py-2 flex justify-between items-center shrink-0 border-b border-border-color/40">
-          <Text variant={TextVariants.title}>{t('editor.masks.maskingTitle')}</Text>
+          <Text variant={TextVariants.title}>{t('editor.masks.maskAdjustmentsTitle')}</Text>
           <div className="flex items-center gap-1">
-            <button
-              type="button"
-              className={clsx(
-                'p-2 rounded-full transition-colors',
-                showMaskOverlay ? 'bg-surface hover:bg-card-active' : 'hover:bg-surface opacity-60',
-              )}
-              onClick={() => setEditor({ showMaskOverlay: !showMaskOverlay })}
-              data-tooltip={
-                showMaskOverlay
-                  ? t('editor.masks.hideOverlayTip' as any, { defaultValue: 'Hide mask overlay (O)' })
-                  : t('editor.masks.showOverlayTip' as any, { defaultValue: 'Show mask overlay (O)' })
-              }
-            >
-              {showMaskOverlay ? <Eye size={18} /> : <EyeOff size={18} />}
-            </button>
             <button
               className={clsx(
                 'p-2 rounded-full transition-colors',
@@ -1016,125 +1095,7 @@ export default function MasksPanel() {
 
 
         <div className="flex-1 overflow-y-auto overflow-x-hidden flex flex-col min-h-0 p-4">
-          <AnimatePresence mode="wait">
-            {!adjustments.masks || adjustments.masks.length === 0 ? (
-              <motion.div
-                key="empty-masks-grid"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.2 }}
-                className="z-10 shrink-0"
-                onClick={handleDeselect}
-              >
-                <Text variant={TextVariants.heading} className="mb-2">
-                  {t('editor.masks.createNewTitle')}
-                </Text>
-                <div className="grid grid-cols-3 gap-2" onClick={(e) => e.stopPropagation()}>
-                  {MASK_PANEL_CREATION_TYPES.map((maskType: MaskType) => (
-                    <DraggableGridItem
-                      key={maskType.type || maskType.id}
-                      maskType={maskType}
-                      onClick={(e: any) =>
-                        maskType.id === 'others' ? handleAddOthersMask(e) : handleGridClick(maskType.type)
-                      }
-                      onRightClick={(e: React.MouseEvent) => handleGridRightClick(e, maskType.type)}
-                      isDraggable={maskType.id !== 'others'}
-                      activeMaskContainerId={activeMaskContainerId}
-                    />
-                  ))}
-                </div>
-              </motion.div>
-            ) : (
-              <motion.div
-                key="masks-list-container"
-                ref={setRootDroppableRef}
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.2 }}
-                className={`flex-col transition-colors ${isRootOver ? 'bg-surface' : ''}`}
-                onClick={handleDeselect}
-              >
-                <Text variant={TextVariants.heading} className="mb-2">
-                  {t('editor.masks.masksTitle')}
-                </Text>
-
-                <AnimatePresence
-                  initial={false}
-                  mode="popLayout"
-                  onExitComplete={() => {
-                    if (pendingAction) {
-                      pendingAction();
-                      setPendingAction(null);
-                    }
-                  }}
-                >
-                  {adjustments.masks.map((container) => (
-                    <ContainerRow
-                      key={container.id}
-                      container={container}
-                      isSelected={activeMaskContainerId === container.id && activeMaskId === null}
-                      hasActiveChild={activeMaskContainerId === container.id && activeMaskId !== null}
-                      isExpanded={expandedContainers.has(container.id)}
-                      onToggle={() => handleToggleExpand(container.id)}
-                      onSelect={() => {
-                        onSelectContainer(container.id);
-                        onSelectMask(null);
-                      }}
-                      renamingId={renamingId}
-                      setRenamingId={setRenamingId}
-                      tempName={tempName}
-                      setTempName={setTempName}
-                      updateContainer={updateContainer}
-                      handleDelete={handleDeleteContainer}
-                      handleDuplicate={handleDuplicateContainer}
-                      handleDuplicateAndInvert={handleDuplicateAndInvertContainer}
-                      handlePasteMask={handlePasteMask}
-                      copyMaskToClipboard={copyMaskToClipboard}
-                      copiedMask={copiedMask}
-                      presets={presets}
-                      setAdjustments={setAdjustments}
-                      activeDragItem={activeDragItem}
-                      activeMaskId={activeMaskId}
-                      onSelectContainer={onSelectContainer}
-                      onSelectMask={onSelectMask}
-                      updateSubMask={updateSubMask}
-                      handleDeleteSubMask={handleDeleteSubMask}
-                      handleDuplicateSubMask={handleDuplicateSubMask}
-                      handleDuplicateAndInvertSubMask={handleDuplicateAndInvertSubMask}
-                      handlePasteSubMask={handlePasteSubMask}
-                      copySubMaskToClipboard={copySubMaskToClipboard}
-                      copiedSubMask={copiedSubMask}
-                      analyzingSubMaskId={analyzingSubMaskId}
-                      setIsMaskControlHovered={setIsMaskControlHovered}
-                      onAddComponent={(e: React.MouseEvent) => handleAddMaskContextMenu(e, container.id)}
-                    />
-                  ))}
-                </AnimatePresence>
-
-                <AnimatePresence>
-                  {activeDragItem?.type === 'Creation' && adjustments.masks.length > 0 && (
-                    <NewMaskDropZone isOver={isRootOver} />
-                  )}
-                </AnimatePresence>
-
-                <Text
-                  as="div"
-                  weight={TextWeights.medium}
-                  className="flex items-center gap-2 p-2 rounded-md transition-colors transition-opacity opacity-70 hover:opacity-100 hover:bg-card-active cursor-pointer hover:text-text-primary"
-                  onClick={(e) => handleAddMaskContextMenu(e, null)}
-                >
-                  <div className="p-0.5">
-                    <Plus size={18} />
-                  </div>
-                  <span>{t('editor.masks.addNewMask')}</span>
-                </Text>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          <div className="h-4 shrink-0 w-full" onClick={handleDeselect} />
+          <div className="h-2 shrink-0 w-full" onClick={handleDeselect} />
 
           <AnimatePresence>
             {isSettingsPanelEverOpened && (
@@ -1234,6 +1195,133 @@ export default function MasksPanel() {
           </div>
         ) : null}
       </DragOverlay>
+      {canvasHost &&
+        createPortal(
+          <div
+            className="absolute top-3 left-3 z-30 w-[250px] max-h-[min(72%,560px)] flex flex-col rounded-lg border border-white/10 bg-[#2c2c2c]/95 text-text-primary shadow-2xl backdrop-blur-md"
+            onPointerDown={(e) => e.stopPropagation()}
+            onPointerMove={(e) => e.stopPropagation()}
+            onPointerUp={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+            onContextMenu={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-1 px-2 py-1.5">
+              <span className="flex-1 text-center text-xs font-medium tracking-wide">{t('editor.masks.maskingTitle')}</span>
+              <button
+                type="button"
+                className="rounded p-1 text-text-secondary hover:bg-white/10 hover:text-text-primary"
+                aria-label={maskListCollapsed ? t('editor.masks.panel.expand') : t('editor.masks.panel.collapse')}
+                onClick={() => setMaskListCollapsed((v) => !v)}
+              >
+                {maskListCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+              </button>
+            </div>
+            {!maskListCollapsed && (
+              <div className="flex min-h-0 flex-col gap-1 overflow-y-auto px-2 pb-2">
+                <button
+                  type="button"
+                  className="flex items-center gap-2 rounded-md px-1.5 py-1.5 text-left text-sm hover:bg-white/10"
+                  onClick={(e) => {
+                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    setAddMenu({
+                      anchor: { left: rect.left, top: rect.top, bottom: rect.bottom },
+                      target: { kind: 'new' },
+                    });
+                  }}
+                >
+                  <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white/10">
+                    <Plus size={16} />
+                  </span>
+                  {t('editor.masks.panel.create')}
+                </button>
+                <div ref={setRootDroppableRef} className={isRootOver ? 'rounded-md bg-white/5' : ''} onClick={handleDeselect}>
+                  <AnimatePresence initial={false}>
+                    {(adjustments.masks || []).map((container) => (
+                      <ContainerRow
+                        key={container.id}
+                        container={container}
+                        isSelected={activeMaskContainerId === container.id && activeMaskId === null}
+                        hasActiveChild={activeMaskContainerId === container.id && activeMaskId !== null}
+                        isExpanded={expandedContainers.has(container.id)}
+                        onToggle={() => handleToggleExpand(container.id)}
+                        onSelect={() => {
+                          onSelectContainer(container.id);
+                          onSelectMask(null);
+                        }}
+                        renamingId={renamingId}
+                        setRenamingId={setRenamingId}
+                        tempName={tempName}
+                        setTempName={setTempName}
+                        updateContainer={updateContainer}
+                        handleDelete={handleDeleteContainer}
+                        handleDuplicate={handleDuplicateContainer}
+                        handleDuplicateAndInvert={handleDuplicateAndInvertContainer}
+                        handlePasteMask={handlePasteMask}
+                        copyMaskToClipboard={copyMaskToClipboard}
+                        copiedMask={copiedMask}
+                        presets={presets}
+                        setAdjustments={setAdjustments}
+                        activeDragItem={activeDragItem}
+                        activeMaskId={activeMaskId}
+                        onSelectContainer={onSelectContainer}
+                        onSelectMask={onSelectMask}
+                        updateSubMask={updateSubMask}
+                        handleDeleteSubMask={handleDeleteSubMask}
+                        handleDuplicateSubMask={handleDuplicateSubMask}
+                        handleDuplicateAndInvertSubMask={handleDuplicateAndInvertSubMask}
+                        handlePasteSubMask={handlePasteSubMask}
+                        copySubMaskToClipboard={copySubMaskToClipboard}
+                        copiedSubMask={copiedSubMask}
+                        analyzingSubMaskId={analyzingSubMaskId}
+                        setIsMaskControlHovered={setIsMaskControlHovered}
+                        onRequestAdd={(e: React.MouseEvent, mode: SubMaskMode) => {
+                          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                          setAddMenu({
+                            anchor: { left: rect.left, top: rect.top, bottom: rect.bottom },
+                            target: { kind: 'component', containerId: container.id, mode },
+                            title:
+                              mode === SubMaskMode.Subtractive ? t('editor.masks.panel.subtractTitle') : undefined,
+                          });
+                        }}
+                        onAddToMask={addComponentFromAction}
+                        onDeleteEmptyMasks={deleteEmptyMasks}
+                        onDeleteAllMasks={handleResetAllMasks}
+                        emptyMaskCount={(adjustments.masks || []).filter((m) => !(m.subMasks?.length)).length}
+                      />
+                    ))}
+                  </AnimatePresence>
+                  {activeDragItem?.type === 'Creation' && (adjustments.masks || []).length > 0 && (
+                    <NewMaskDropZone isOver={isRootOver} />
+                  )}
+                </div>
+                <label className="mt-1 flex items-center gap-2 px-1 py-1 text-xs text-text-secondary">
+                  <input
+                    type="checkbox"
+                    className="accent-red-500"
+                    checked={showMaskOverlay}
+                    onChange={() => setEditor({ showMaskOverlay: !showMaskOverlay })}
+                  />
+                  <span className="flex-1">{t('editor.masks.panel.showOverlay')}</span>
+                  <span className="h-3.5 w-3.5 rounded-sm bg-red-600 ring-1 ring-white/30" />
+                </label>
+              </div>
+            )}
+          </div>,
+          canvasHost,
+        )}
+      {addMenu && (
+        <AddMaskMenu
+          anchor={addMenu.anchor}
+          title={addMenu.title}
+          onClose={() => setAddMenu(null)}
+          onPick={(action) => {
+            const target = addMenu.target;
+            setAddMenu(null);
+            if (target.kind === 'new') applyAddMask(action);
+            else addComponentFromAction(target.containerId, action, target.mode);
+          }}
+        />
+      )}
     </DndContext>
   );
 }
@@ -1298,6 +1386,52 @@ function DraggableGridItem({ maskType, onClick, onRightClick, isDraggable, activ
   );
 }
 
+function MaskThumb({ container }: { container: MaskContainer }) {
+  const first = container.subMasks?.[0];
+  const light = container.invert ? 'bg-black' : 'bg-white';
+  return (
+    <span className={`absolute inset-0 ${container.invert ? 'bg-white' : 'bg-black'}`}>
+      {first?.type === Mask.Radial && <span className={`absolute inset-1.5 rounded-full ${light}`} />}
+      {first?.type === Mask.Linear && <span className={`absolute inset-y-0 left-0 w-1/2 ${light}`} />}
+      {first && first.type !== Mask.Radial && first.type !== Mask.Linear && (
+        <span className={`absolute left-1/2 top-1/2 h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full ${light}`} />
+      )}
+    </span>
+  );
+}
+
+function toolLabel(subMask: SubMask, index: number) {
+  const typeName = formatMaskTypeName(subMask.type);
+  const custom = subMask.name?.trim();
+  if (!custom || custom === typeName) return `${typeName} ${index}`;
+  return custom;
+}
+
+function buildIntersectSubmenu(
+  t: (key: any, options?: any) => string,
+  onAdd: (containerId: string, action: AddMaskAction, mode: SubMaskMode) => void,
+  containerId: string,
+) {
+  const item = (label: string, action: AddMaskAction) => ({
+    label,
+    onClick: () => onAdd(containerId, action, SubMaskMode.Intersect),
+  });
+  return [
+    item(t('editor.masks.actions.selectSubject'), 'subject' as AddMaskAction),
+    item(t('editor.masks.actions.selectSky'), 'sky'),
+    item(t('editor.masks.actions.selectBackground'), 'background'),
+    item(t('masks.types.foreground'), 'foreground'),
+    { type: OPTION_SEPARATOR },
+    item(t('masks.types.brush'), 'brush'),
+    item(t('editor.masks.addMenu.linear'), 'linear'),
+    item(t('editor.masks.addMenu.radial'), 'radial'),
+    { type: OPTION_SEPARATOR },
+    item(t('editor.masks.panel.colorRange'), 'color'),
+    item(t('editor.masks.panel.luminanceRange'), 'luminance'),
+    item(t('editor.masks.panel.depthRange'), 'depth'),
+  ];
+}
+
 function ContainerRow({
   container,
   isSelected,
@@ -1331,7 +1465,11 @@ function ContainerRow({
   copiedSubMask,
   analyzingSubMaskId,
   setIsMaskControlHovered,
-  onAddComponent,
+  onRequestAdd,
+  onAddToMask,
+  onDeleteEmptyMasks,
+  onDeleteAllMasks,
+  emptyMaskCount,
 }: any) {
   const { t } = useTranslation();
   const { setNodeRef: setDroppableRef, isOver } = useDroppable({
@@ -1365,75 +1503,55 @@ function ContainerRow({
   const onContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    const generatePresetSubmenu = (list: any[]): any[] =>
-      list
-        .map((item) => {
-          if (item.folder)
-            return { label: item.folder.name, icon: FolderIcon, submenu: generatePresetSubmenu(item.folder.children) };
-          if (item.preset || item.adjustments)
-            return {
-              label: item.name || item.preset.name,
-              onClick: () => {
-                const newAdj = { ...container.adjustments, ...(item.adjustments || item.preset.adjustments) };
-                newAdj.sectionVisibility = { ...container.adjustments.sectionVisibility, ...newAdj.sectionVisibility };
-                updateContainer(container.id, { adjustments: newAdj });
-              },
-            };
-          return null;
-        })
-        .filter(Boolean);
-
     showContextMenu(e.clientX, e.clientY, [
       {
-        label: t('editor.masks.actions.rename'),
-        icon: FileEdit,
+        label: t('editor.masks.actions.renameEllipsis'),
         onClick: () => {
           setRenamingId(container.id);
           setTempName(container.name);
         },
       },
-      { label: t('editor.masks.actions.duplicateMask'), icon: PlusSquare, onClick: () => handleDuplicate(container) },
+      {
+        label: t('editor.masks.actions.invertNamed', { name: container.name }),
+        shortcut: 'I',
+        onClick: () => updateContainer(container.id, { invert: !container.invert }),
+      },
       {
         label: t('editor.masks.actions.duplicateAndInvertMask'),
-        icon: RotateCcw,
         onClick: () => handleDuplicateAndInvert(container),
       },
-      { label: t('editor.masks.actions.copyMask'), icon: Copy, onClick: () => copyMaskToClipboard(container) },
       {
-        label: t('editor.masks.actions.pasteMask'),
-        icon: ClipboardPaste,
-        disabled: !copiedMask,
-        onClick: () => handlePasteMask(container.id),
+        label: t('editor.masks.actions.intersectWith'),
+        submenu: buildIntersectSubmenu(t, onAddToMask, container.id),
       },
       {
-        label: t('editor.masks.actions.pasteMaskAdjustments'),
-        icon: ClipboardPaste,
-        disabled: !copiedMask,
-        onClick: () => {
-          if (copiedMask) {
-            updateContainer(container.id, { adjustments: JSON.parse(JSON.stringify(copiedMask.adjustments)) });
-          }
-        },
+        label: t('editor.masks.actions.duplicateNamed', { name: container.name }),
+        onClick: () => handleDuplicate(container),
       },
       {
-        label: t('editor.masks.actions.applyPreset'),
-        icon: SwatchBook,
-        submenu: generatePresetSubmenu(presets).length
-          ? generatePresetSubmenu(presets)
-          : [{ label: t('editor.masks.actions.noPresets'), disabled: true }],
+        label: container.visible ? t('editor.masks.actions.hide') : t('editor.masks.actions.show'),
+        shortcut: 'H',
+        onClick: () => updateContainer(container.id, { visible: !container.visible }),
+      },
+      {
+        label: t('editor.masks.actions.deleteNamed', { name: container.name }),
+        onClick: () => handleDelete(container.id),
       },
       { type: OPTION_SEPARATOR },
       {
-        label: t('editor.masks.actions.resetMaskAdjustments'),
-        icon: RotateCcw,
-        onClick: () =>
-          updateContainer(container.id, { adjustments: JSON.parse(JSON.stringify(INITIAL_MASK_ADJUSTMENTS)) }),
+        label: t('editor.masks.actions.deleteEmptyMasks'),
+        disabled: emptyMaskCount === 0,
+        onClick: onDeleteEmptyMasks,
       },
       {
-        label: t('editor.masks.actions.deleteMask'),
-        icon: Trash2,
-        isDestructive: true,
-        onClick: () => handleDelete(container.id),
+        label: t('editor.masks.actions.deleteAllEmptyMasks'),
+        disabled: emptyMaskCount === 0,
+        onClick: onDeleteEmptyMasks,
+      },
+      { type: OPTION_SEPARATOR },
+      {
+        label: t('editor.masks.actions.deleteAllMasks'),
+        onClick: onDeleteAllMasks,
       },
     ]);
   };
@@ -1464,8 +1582,9 @@ function ContainerRow({
       <div
         {...listeners}
         {...attributes}
-        className={`flex items-center gap-2 p-2 rounded-md transition-colors group
-             ${isSelected ? 'bg-surface' : 'hover:bg-card-active'}
+        className={`flex items-center gap-2 px-1.5 py-1 rounded-md transition-colors group
+             ${isSelected ? 'bg-white/10' : 'hover:bg-white/5'}
+             ${!container.visible ? 'opacity-50' : ''}
              ${borderClass}`}
         onClick={(e) => {
           e.stopPropagation();
@@ -1473,22 +1592,24 @@ function ContainerRow({
         }}
         onContextMenu={onContextMenu}
       >
-        <Text
-          as="div"
-          color={hasActiveChild || isExpanded ? TextColors.primary : TextColors.secondary}
+        <button
+          type="button"
+          className="relative h-7 w-7 shrink-0 overflow-hidden rounded-sm bg-black ring-1 ring-white/30"
           onClick={(e) => {
             e.stopPropagation();
+            onSelect();
             onToggle();
           }}
-          className="p-0.5 rounded transition-colors cursor-pointer"
+          aria-label={container.name}
         >
-          {isExpanded ? <FolderOpen size={18} /> : <FolderIcon size={18} />}
-        </Text>
+          <MaskThumb container={container} />
+        </button>
         <div
           className="flex-1 min-w-0 cursor-pointer"
           onDoubleClick={(e) => {
             e.stopPropagation();
-            onToggle();
+            setRenamingId(container.id);
+            setTempName(container.name);
           }}
         >
           {renamingId === container.id ? (
@@ -1507,33 +1628,6 @@ function ContainerRow({
             </Text>
           )}
         </div>
-        <div className="flex opacity-0 group-hover:opacity-100 transition-opacity">
-          <button
-            className="p-1 hover:text-text-primary text-text-secondary"
-            onMouseEnter={() => setIsMaskControlHovered(true)}
-            onMouseLeave={() => setIsMaskControlHovered(false)}
-            data-tooltip={
-              container.visible
-                ? t('editor.masks.actions.hideMaskTip' as any, { defaultValue: 'Hide mask (H)' })
-                : t('editor.masks.actions.showMaskTip' as any, { defaultValue: 'Show mask (H)' })
-            }
-            onClick={(e) => {
-              e.stopPropagation();
-              updateContainer(container.id, { visible: !container.visible });
-            }}
-          >
-            {container.visible ? <Eye size={16} /> : <EyeOff size={16} />}
-          </button>
-          <button
-            className="p-1 hover:text-red-500 text-text-secondary"
-            onClick={(e) => {
-              e.stopPropagation();
-              handleDelete(container.id);
-            }}
-          >
-            <Trash2 size={16} />
-          </button>
-        </div>
       </div>
 
       <AnimatePresence initial={false}>
@@ -1542,7 +1636,7 @@ function ContainerRow({
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            className="overflow-hidden pl-2 border-l-[1.5px] border-border-color/50 ml-3.75"
+            className="overflow-hidden pl-7"
             layout
           >
             <AnimatePresence mode="popLayout" initial={false}>
@@ -1573,37 +1667,37 @@ function ContainerRow({
                   tempName={tempName}
                   setTempName={setTempName}
                   setIsMaskControlHovered={setIsMaskControlHovered}
+                  onAddToMask={onAddToMask}
                 />
               ))}
             </AnimatePresence>
 
-            <AnimatePresence initial={false}>
-              {(isSelected || hasActiveChild || container.subMasks.length === 0) && (
-                <motion.div
-                  key="add-component-btn"
-                  layout="position"
-                  initial={{ opacity: 0, height: 0, overflow: 'hidden' }}
-                  animate={{ opacity: 1, height: 'auto', overflow: 'hidden' }}
-                  exit={{ opacity: 0, height: 0, overflow: 'hidden' }}
-                  transition={{ duration: 0.2 }}
+            {(isSelected || hasActiveChild || container.subMasks.length === 0) && (
+              <div className="flex gap-1 px-0.5 py-1">
+                <button
+                  type="button"
+                  className="flex items-center gap-1 rounded-md bg-white/5 px-2 py-1 text-xs text-text-primary hover:bg-white/10"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRequestAdd(e, SubMaskMode.Additive);
+                  }}
                 >
-                  <Text
-                    as="div"
-                    weight={TextWeights.medium}
-                    className="flex items-center gap-2 p-2 rounded-md transition-colors transition-opacity opacity-70 hover:opacity-100 hover:bg-card-active cursor-pointer hover:text-text-primary"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onAddComponent(e);
-                    }}
-                  >
-                    <div className="relative w-4 h-4 ml-1 shrink-0 flex items-center justify-center">
-                      <Plus size={16} />
-                    </div>
-                    <span className="select-none">{t('editor.masks.actions.addNewComponent')}</span>
-                  </Text>
-                </motion.div>
-              )}
-            </AnimatePresence>
+                  <Plus size={13} />
+                  {t('editor.masks.panel.add')}
+                </button>
+                <button
+                  type="button"
+                  className="flex items-center gap-1 rounded-md bg-white/5 px-2 py-1 text-xs text-text-primary hover:bg-white/10"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRequestAdd(e, SubMaskMode.Subtractive);
+                  }}
+                >
+                  <Minus size={13} />
+                  {t('editor.masks.panel.subtract')}
+                </button>
+              </div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
@@ -1633,6 +1727,7 @@ function SubMaskRow({
   tempName,
   setTempName,
   setIsMaskControlHovered,
+  onAddToMask,
 }: any) {
   const { t } = useTranslation();
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
@@ -1686,30 +1781,46 @@ function SubMaskRow({
   const onContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    const label = toolLabel(subMask, index);
+    const subtractive = subMask.mode === SubMaskMode.Subtractive;
     showContextMenu(e.clientX, e.clientY, [
       {
-        label: t('editor.masks.actions.rename'),
-        icon: FileEdit,
+        label: t('editor.masks.actions.renameEllipsis'),
         onClick: () => {
           setRenamingId(subMask.id);
           setTempName(getSubMaskName(subMask));
         },
       },
-      { label: t('editor.masks.actions.duplicateComponent'), icon: PlusSquare, onClick: handleDuplicate },
       {
-        label: t('editor.masks.actions.duplicateAndInvertComponent'),
-        icon: RotateCcw,
-        onClick: handleDuplicateAndInvert,
+        label: subtractive ? t('editor.masks.actions.convertToAdd') : t('editor.masks.actions.convertToSubtract'),
+        onClick: () =>
+          updateSubMask(subMask.id, {
+            mode: subtractive ? SubMaskMode.Additive : SubMaskMode.Subtractive,
+          }),
       },
-      { label: t('editor.masks.actions.copyComponent'), icon: Copy, onClick: handleCopy },
       {
-        label: t('editor.masks.actions.pasteComponent'),
-        icon: ClipboardPaste,
-        disabled: !hasCopiedSubMask,
-        onClick: handlePaste,
+        label: t('editor.masks.actions.invertTool'),
+        onClick: () => updateSubMask(subMask.id, { invert: !subMask.invert }),
+      },
+      {
+        label: t('editor.masks.actions.intersectWith'),
+        submenu: buildIntersectSubmenu(t, onAddToMask, containerId),
+      },
+      {
+        label: t('editor.masks.actions.duplicateNamed', { name: label }),
+        onClick: handleDuplicate,
+      },
+      {
+        label: subMask.visible ? t('editor.masks.actions.hide') : t('editor.masks.actions.show'),
+        onClick: () => updateSubMask(subMask.id, { visible: !subMask.visible }),
+      },
+      {
+        label: t('editor.masks.actions.deleteNamed', { name: label }),
+        onClick: handleDelete,
       },
       { type: OPTION_SEPARATOR },
-      { label: t('editor.masks.actions.deleteComponent'), icon: Trash2, isDestructive: true, onClick: handleDelete },
+      { label: t('editor.masks.actions.copy'), onClick: handleCopy },
+      { label: t('editor.masks.actions.paste'), disabled: !hasCopiedSubMask, onClick: handlePaste },
     ]);
   };
 
@@ -1726,13 +1837,12 @@ function SubMaskRow({
       {...listeners}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
-      className={`flex items-center gap-2 p-2 rounded-md transition-colors group cursor-pointer
-            ${isActive ? 'bg-surface' : 'hover:bg-card-active'}
+      className={`flex items-center gap-2 px-1 py-1 rounded-md transition-colors group cursor-pointer
+            ${isActive ? 'bg-white/10' : 'hover:bg-white/5'}
             ${isOver && !isDraggingContainer ? 'border-t-2 border-accent' : ''}
             ${isDragging ? 'opacity-40 z-50' : ''}
-            ${parentVisible === false ? 'opacity-50' : ''}
-            ${isDraggingContainer ? 'opacity-30 pointer-events-none' : ''}
-            transition-opacity duration-300`}
+            ${parentVisible === false || subMask.visible === false ? 'opacity-50' : ''}
+            ${isDraggingContainer ? 'opacity-30 pointer-events-none' : ''}`}
       onClick={(e) => {
         e.stopPropagation();
         onSelect();
@@ -1794,66 +1904,13 @@ function SubMaskRow({
         />
       ) : (
         <Text color={TextColors.primary} className="flex-1 truncate select-none">
-          {getSubMaskName(subMask)}
+          {toolLabel(subMask, index)}
         </Text>
       )}
-      <div className="flex opacity-0 group-hover:opacity-100 transition-opacity">
-        {index > 1 && (
-          <button
-            className="p-1 hover:text-text-primary text-text-secondary"
-            data-tooltip={
-              subMask.mode === SubMaskMode.Additive
-                ? t('editor.masks.actions.switchToSubtract')
-                : subMask.mode === SubMaskMode.Subtractive
-                  ? t('editor.masks.actions.switchToIntersect')
-                  : t('editor.masks.actions.switchToAdd')
-            }
-            onClick={(e) => {
-              e.stopPropagation();
-              updateSubMask(subMask.id, {
-                mode:
-                  subMask.mode === SubMaskMode.Additive
-                    ? SubMaskMode.Subtractive
-                    : subMask.mode === SubMaskMode.Subtractive
-                      ? SubMaskMode.Intersect
-                      : SubMaskMode.Additive,
-              });
-            }}
-          >
-            {subMask.mode === SubMaskMode.Additive ? (
-              <Plus size={16} />
-            ) : subMask.mode === SubMaskMode.Subtractive ? (
-              <Minus size={16} />
-            ) : (
-              <SquaresIntersect size={16} />
-            )}
-          </button>
-        )}
-        <button
-          className="p-1 hover:text-text-primary text-text-secondary"
-          data-tooltip={
-            subMask.visible ? t('editor.masks.actions.hideComponent') : t('editor.masks.actions.showComponent')
-          }
-          onMouseEnter={() => setIsMaskControlHovered(true)}
-          onMouseLeave={() => setIsMaskControlHovered(false)}
-          onClick={(e) => {
-            e.stopPropagation();
-            updateSubMask(subMask.id, { visible: !subMask.visible });
-          }}
-        >
-          {subMask.visible ? <Eye size={16} /> : <EyeOff size={16} />}
-        </button>
-        <button
-          className="p-1 hover:text-red-500 text-text-secondary"
-          data-tooltip={t('editor.ai.actions.deleteComponent')}
-          onClick={(e) => {
-            e.stopPropagation();
-            handleDelete();
-          }}
-        >
-          <Trash2 size={16} />
-        </button>
-      </div>
+      {subMask.mode === SubMaskMode.Subtractive && <Minus size={13} className="shrink-0 text-text-secondary" />}
+      {subMask.mode === SubMaskMode.Intersect && (
+        <SquaresIntersect size={13} className="shrink-0 text-text-secondary" />
+      )}
     </motion.div>
   );
 }
