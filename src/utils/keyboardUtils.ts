@@ -2,6 +2,8 @@ export interface KeybindDefinition {
   action: string;
   description: string;
   defaultCombo: string[];
+  /** Extra default shortcuts for the same action. They do not replace `defaultCombo`. */
+  alsoDefaultCombos?: string[][];
   section: 'library' | 'view' | 'rating' | 'panels' | 'editing';
 }
 
@@ -1259,7 +1261,13 @@ export const KEYBIND_DEFINITIONS: KeybindDefinition[] = [
     section: 'library',
   },
   { action: 'undo', description: 'settings.keybinds.actions.undo', defaultCombo: ['ctrl', 'KeyZ'], section: 'editing' },
-  { action: 'redo', description: 'settings.keybinds.actions.redo', defaultCombo: ['ctrl', 'KeyY'], section: 'editing' },
+  {
+    action: 'redo',
+    description: 'settings.keybinds.actions.redo',
+    defaultCombo: ['ctrl', 'KeyY'],
+    alsoDefaultCombos: [['ctrl', 'shift', 'KeyZ']],
+    section: 'editing',
+  },
   {
     action: 'history_step_back',
     description: 'settings.keybinds.actions.history_step_back',

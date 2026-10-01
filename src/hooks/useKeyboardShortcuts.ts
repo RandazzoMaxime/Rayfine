@@ -93,15 +93,25 @@ export const useKeyboardShortcuts = ({
       process: useProcessStore.getState(),
     });
 
-    const comboMap = new Map<string, string>();
+    const comboMap = new Map<string, string[]>();
     const keybinds = useSettingsStore.getState().appSettings?.keybinds;
+
+    const addCombo = (combo: string[] | undefined, action: string) => {
+      if (!combo || combo.length === 0) return;
+      const key = combo.join('+');
+      const existing = comboMap.get(key);
+      if (existing) {
+        if (!existing.includes(action)) existing.push(action);
+      } else {
+        comboMap.set(key, [action]);
+      }
+    };
 
     for (const def of KEYBIND_DEFINITIONS) {
       const userCombo = keybinds?.[def.action];
       const effective = userCombo && userCombo.length > 0 ? userCombo : def.defaultCombo;
-      if (effective) {
-        comboMap.set(effective.join('+'), def.action);
-      }
+      addCombo(effective, def.action);
+      for (const extra of def.alsoDefaultCombos || []) addCombo(extra, def.action);
     }
 
     const actions: Record<string, any> = {
@@ -5337,13 +5347,15 @@ export const useKeyboardShortcuts = ({
       }
 
       const normalized = normalizeCombo(event, state.settings.osPlatform);
-      const action = comboMap.get(normalized.join('+'));
+      const candidates = comboMap.get(normalized.join('+'));
 
-      if (action) {
-        const handler = actions[action];
-        if (handler && (!handler.shouldFire || handler.shouldFire(state))) {
-          handler.execute(event, state);
-          return;
+      if (candidates) {
+        for (const action of candidates) {
+          const handler = actions[action];
+          if (handler && (!handler.shouldFire || handler.shouldFire(state))) {
+            handler.execute(event, state);
+            return;
+          }
         }
       }
     };
