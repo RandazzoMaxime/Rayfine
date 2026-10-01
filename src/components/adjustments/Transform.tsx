@@ -1,5 +1,4 @@
 import Slider from '../ui/Slider';
-import Switch from '../ui/Switch';
 import { Adjustments, TransformAdjustment } from '../../utils/adjustments';
 import { useTranslation } from 'react-i18next';
 import { useEditorStore } from '../../store/useEditorStore';
@@ -96,13 +95,6 @@ export default function TransformPanel({ adjustments, setAdjustments, onDragStat
             {t('adjustments.transform.clearGuides' as any, { defaultValue: 'Clear' })}
           </button>
         )}
-      </div>
-      <div className="mb-2">
-        <Switch
-          label={t('adjustments.transform.constrainToWarp' as any)}
-          checked={!!(adjustments as any).cropConstrainToWarp}
-          onChange={(v: boolean) => set('cropConstrainToWarp', v)}
-        />
       </div>
       <div className="mb-0.5 text-[10px] uppercase tracking-wider text-text-secondary font-semibold">
         {t('adjustments.transform.geometry' as any)}

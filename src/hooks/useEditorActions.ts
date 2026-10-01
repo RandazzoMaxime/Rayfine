@@ -77,6 +77,8 @@ export function useEditorActions() {
         autoTone: true,
         sectionVisibility: { ...prev.sectionVisibility, ...autoAdjustments.sectionVisibility },
       } as Adjustments));
+      // Slider edits wait 500 ms before a history step. Auto must be undoable at once.
+      debouncedSetHistory.flush();
     } catch (err) {
       toast.error(`Failed to apply auto adjustments: ${err}`);
     }

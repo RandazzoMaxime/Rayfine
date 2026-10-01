@@ -33,10 +33,10 @@ export default function DevelopFooterBar() {
   };
 
   const btn =
-    'flex-1 h-8 text-[12px] text-text-primary bg-surface/80 hover:bg-card-active disabled:opacity-40 disabled:hover:bg-surface/80 border-border-color/40';
+    'flex h-8 w-full min-w-0 items-center justify-center px-2 text-center text-[12px] text-text-primary bg-surface/80 hover:bg-card-active disabled:opacity-40 disabled:hover:bg-surface/80 border-border-color/40';
 
   return (
-    <div className="shrink-0 flex border-t border-border-color/50">
+    <div className="grid w-full shrink-0 grid-cols-2 border-t border-border-color/50">
       <button
         type="button"
         className={`${btn} border-r`}
