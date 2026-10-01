@@ -2149,18 +2149,7 @@ if let Some(profile) = adj.get("cameraProfile").and_then(|v| v.as_str()) {
                         lines.push(format!(r#"   crs:CropAngle="{}""#, angle));
                     }
                 }
-                if let Some(v) = adj.get("cropConstrainToWarp") {
-                    let on = match v {
-                        serde_json::Value::Bool(b) => *b,
-                        serde_json::Value::Number(n) => n.as_i64().unwrap_or(0) != 0,
-                        serde_json::Value::String(s) => s == "1" || s.eq_ignore_ascii_case("true"),
-                        _ => false,
-                    };
-                    lines.push(format!(
-                        r#"   crs:CropConstrainToWarp="{}""#,
-                        if on { "1" } else { "0" }
-                    ));
-                }
+                lines.push(r#"   crs:CropConstrainToWarp="1""#.to_string());
             }
         }
     }

@@ -8,7 +8,6 @@ import clsx from 'clsx';
 import Slider from '../ui/Slider';
 import Switch from '../ui/Switch';
 import { Adjustments, Effect, CreativeAdjustment } from '../../utils/adjustments';
-import LUTControl from '../ui/LUTControl';
 import { AppSettings } from '../ui/AppProperties';
 import Text from '../ui/Text';
 import { TextVariants } from '../../types/typography';
@@ -149,6 +148,7 @@ export default function EffectsPanel({
 }: EffectsPanelProps) {
   const { t } = useTranslation();
   const [isGeneratingDepth, setIsGeneratingDepth] = useState(false);
+  const [creativeAdvanced, setCreativeAdvanced] = useState(false);
   const aiModelDownloadStatus = useProcessStore((state) => state.aiModelDownloadStatus);
 
   const handleGenerateLensBlurDepthMap = async () => {
@@ -170,21 +170,6 @@ export default function EffectsPanel({
   const handleAdjustmentChange = (key: string, value: any) => {
     const numericValue = typeof value === 'boolean' ? value : parseInt(value, 10);
     setAdjustments((prev: Partial<Adjustments>) => ({ ...prev, [key]: numericValue }));
-  };
-
-  const handleLutIntensityChange = (intensity: number) => {
-    setAdjustments((prev: Partial<Adjustments>) => ({ ...prev, lutIntensity: intensity }));
-  };
-
-  const handleLutClear = () => {
-    setAdjustments((prev: Partial<Adjustments>) => ({
-      ...prev,
-      lutPath: null,
-      lutName: null,
-      lutData: null,
-      lutSize: 0,
-      lutIntensity: 100,
-    }));
   };
 
   const handleLensBlurToggle = (enabled: boolean) => {
@@ -331,15 +316,63 @@ export default function EffectsPanel({
         />
 
         {!isForMask && (
-          <Slider
-            label={t('adjustments.effects.lightFlares')}
-            max={100}
-            min={0}
-            onChange={(e: any) => handleAdjustmentChange(CreativeAdjustment.FlareAmount, e.target.value)}
-            step={1}
-            value={adjustments.flareAmount}
-            onDragStateChange={onDragStateChange}
-          />
+          <div className="pt-1">
+            <button
+              type="button"
+              className="text-[10px] uppercase tracking-wide text-text-secondary hover:text-text-primary"
+              onClick={() => setCreativeAdvanced((open) => !open)}
+            >
+              {t('adjustments.effects.advanced' as any, { defaultValue: 'Advanced' })}
+            </button>
+            {creativeAdvanced && (
+              <div className="mt-1 space-y-1">
+                <Slider
+                  label={t('adjustments.effects.glowThreshold' as any, { defaultValue: 'Glow threshold' })}
+                  max={100}
+                  min={0}
+                  defaultValue={50}
+                  onChange={(e: any) => handleAdjustmentChange('glowThreshold', e.target.value)}
+                  step={1}
+                  value={adjustments.glowThreshold ?? 50}
+                  onDragStateChange={onDragStateChange}
+                  fillOrigin="min"
+                />
+                <Slider
+                  label={t('adjustments.effects.glowWarmth' as any, { defaultValue: 'Glow warmth' })}
+                  max={100}
+                  min={0}
+                  defaultValue={50}
+                  onChange={(e: any) => handleAdjustmentChange('glowWarmth', e.target.value)}
+                  step={1}
+                  value={adjustments.glowWarmth ?? 50}
+                  onDragStateChange={onDragStateChange}
+                  fillOrigin="min"
+                />
+                <Slider
+                  label={t('adjustments.effects.halationThreshold' as any, { defaultValue: 'Halation threshold' })}
+                  max={100}
+                  min={0}
+                  defaultValue={50}
+                  onChange={(e: any) => handleAdjustmentChange('halationThreshold', e.target.value)}
+                  step={1}
+                  value={adjustments.halationThreshold ?? 50}
+                  onDragStateChange={onDragStateChange}
+                  fillOrigin="min"
+                />
+                <Slider
+                  label={t('adjustments.effects.halationHue' as any, { defaultValue: 'Halation hue' })}
+                  max={100}
+                  min={0}
+                  defaultValue={50}
+                  onChange={(e: any) => handleAdjustmentChange('halationHue', e.target.value)}
+                  step={1}
+                  value={adjustments.halationHue ?? 50}
+                  onDragStateChange={onDragStateChange}
+                  fillOrigin="min"
+                />
+              </div>
+            )}
+          </div>
         )}
       </div>
 
@@ -347,22 +380,6 @@ export default function EffectsPanel({
 
       {!isForMask && (
         <div className="space-y-1">
-          <div className="pt-1 mt-1 border-t border-white/15">
-            <Text variant={TextVariants.heading} className="mb-0.5 text-[11px] text-text-primary">
-              {t('adjustments.effects.lut')}
-            </Text>
-            <LUTControl
-              lutPath={adjustments.lutPath || null}
-              lutName={adjustments.lutName || null}
-              lutIntensity={adjustments.lutIntensity || 100}
-              onLutSelect={handleLutSelect}
-              onLutHover={onLutHover}
-              onIntensityChange={handleLutIntensityChange}
-              onClear={handleLutClear}
-              onDragStateChange={onDragStateChange}
-            />
-          </div>
-
           {adjustmentVisibility.vignette !== false && (
             <div className="pt-1 mt-1 border-t border-white/15">
               <Text variant={TextVariants.heading} className="mb-0.5 text-[11px] text-text-primary">

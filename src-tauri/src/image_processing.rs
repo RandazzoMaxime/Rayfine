@@ -1511,6 +1511,10 @@ pub struct GlobalAdjustments {
     pub halation_amount: f32,
     pub flare_amount: f32,
     pub sharpness_threshold: f32,
+    pub glow_threshold: f32,
+    pub glow_warmth: f32,
+    pub halation_threshold: f32,
+    pub halation_hue: f32,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Pod, Zeroable, Default)]
@@ -2334,6 +2338,10 @@ fn get_global_adjustments_from_json(
         glow_amount: get_val("effects", "glowAmount", SCALES.glow, None),
         halation_amount: get_val("effects", "halationAmount", SCALES.halation, None),
         flare_amount: get_val("effects", "flareAmount", SCALES.flares, None),
+        glow_threshold: get_val("effects", "glowThreshold", 100.0, Some(50.0)),
+        glow_warmth: get_val("effects", "glowWarmth", 100.0, Some(50.0)),
+        halation_threshold: get_val("effects", "halationThreshold", 100.0, Some(50.0)),
+        halation_hue: get_val("effects", "halationHue", 100.0, Some(50.0)),
         sharpness_threshold: get_val(
             "details",
             "sharpnessThreshold",

@@ -115,6 +115,10 @@ struct GlobalAdjustments {
     halation_amount: f32,
     flare_amount: f32,
     sharpness_threshold: f32,
+    glow_threshold: f32,
+    glow_warmth: f32,
+    halation_threshold: f32,
+    halation_hue: f32,
 }
 
 struct MaskAdjustments {
@@ -1351,7 +1355,8 @@ fn apply_glow_bloom(
         perceptual_luma = 1.0 + pow(linear_luma - 1.0, 1.0 / 2.2);
     }
 
-    let luma_cutoff = mix(0.75, 0.08, clamp(amount, 0.0, 1.0));
+    let threshold_shift = (adjustments.global.glow_threshold - 0.5) * 0.55;
+    let luma_cutoff = clamp(mix(0.75, 0.08, clamp(amount, 0.0, 1.0)) + threshold_shift, 0.02, 0.95);
 
     let cutoff_fade = smoothstep(
         luma_cutoff,
@@ -1370,7 +1375,7 @@ fn apply_glow_bloom(
     var bloom_color: vec3<f32>;
     if (linear_luma > 0.01) {
         let color_ratio = blurred_linear / linear_luma;
-        let warm_tint = vec3<f32>(1.03, 1.0, 0.97);
+        let warm_tint = mix(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(1.06, 1.0, 0.94), adjustments.global.glow_warmth);
         bloom_color = color_ratio * warm_tint;
     } else {
         bloom_color = vec3<f32>(1.0, 0.99, 0.98);
@@ -1419,7 +1424,8 @@ fn apply_halation(
         perceptual_luma = 1.0 + pow(linear_luma - 1.0, 1.0 / 2.2);
     }
 
-    let luma_cutoff = mix(0.85, 0.1, clamp(amount, 0.0, 1.0));
+    let threshold_shift = (adjustments.global.halation_threshold - 0.5) * 0.5;
+    let luma_cutoff = clamp(mix(0.85, 0.1, clamp(amount, 0.0, 1.0)) + threshold_shift, 0.02, 0.95);
 
     if (perceptual_luma <= luma_cutoff) { return color; }
 
@@ -1427,8 +1433,9 @@ fn apply_halation(
     let range = max(1.5 - luma_cutoff, 0.1);
     let halation_mask = smoothstep(0.0, range * 0.6, excess);
 
-    let halation_core = vec3<f32>(1.0, 0.15, 0.03);
-    let halation_fringe = vec3<f32>(1.0, 0.32, 0.10);
+    let hue = adjustments.global.halation_hue - 0.5;
+    let halation_core = vec3<f32>(1.0, clamp(0.15 - hue * 0.28, 0.0, 1.0), clamp(0.03 + hue * 0.55, 0.0, 1.0));
+    let halation_fringe = vec3<f32>(1.0, clamp(0.32 - hue * 0.35, 0.0, 1.0), clamp(0.10 + hue * 0.45, 0.0, 1.0));
 
     let intensity_blend = smoothstep(0.0, 0.7, halation_mask);
     let halation_tint = mix(halation_fringe, halation_core, intensity_blend);

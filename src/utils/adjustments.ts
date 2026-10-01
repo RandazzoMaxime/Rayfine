@@ -181,10 +181,14 @@ export interface Adjustments {
   flipVertical: boolean;
   flareAmount: number;
   glowAmount: number;
+  glowThreshold: number;
+  glowWarmth: number;
   grainAmount: number;
   grainRoughness: number;
   grainSize: number;
   halationAmount: number;
+  halationThreshold: number;
+  halationHue: number;
   highlights: number;
   hsl: Hsl;
   hue: number;
@@ -469,7 +473,11 @@ export const INITIAL_MASK_ADJUSTMENTS: MaskAdjustments = {
   exposure: 0,
   flareAmount: 0,
   glowAmount: 0,
+  glowThreshold: 50,
+  glowWarmth: 50,
   halationAmount: 0,
+  halationThreshold: 50,
+  halationHue: 50,
   highlights: 0,
   hsl: {
     aquas: { hue: 0, saturation: 0, luminance: 0 },
@@ -539,10 +547,14 @@ export const INITIAL_ADJUSTMENTS: Adjustments = {
   flipVertical: false,
   flareAmount: 0,
   glowAmount: 0,
+  glowThreshold: 50,
+  glowWarmth: 50,
   grainAmount: 0,
   grainRoughness: 50,
   grainSize: 25,
   halationAmount: 0,
+  halationThreshold: 50,
+  halationHue: 50,
   highlights: 0,
   hsl: {
     aquas: { hue: 0, saturation: 0, luminance: 0 },
@@ -711,7 +723,11 @@ export const normalizeLoadedAdjustments = (loadedAdjustments: Adjustments): any 
     ...loadedAdjustments,
     flareAmount: loadedAdjustments.flareAmount ?? INITIAL_ADJUSTMENTS.flareAmount,
     glowAmount: loadedAdjustments.glowAmount ?? INITIAL_ADJUSTMENTS.glowAmount,
+    glowThreshold: loadedAdjustments.glowThreshold ?? INITIAL_ADJUSTMENTS.glowThreshold,
+    glowWarmth: loadedAdjustments.glowWarmth ?? INITIAL_ADJUSTMENTS.glowWarmth,
     halationAmount: loadedAdjustments.halationAmount ?? INITIAL_ADJUSTMENTS.halationAmount,
+    halationThreshold: loadedAdjustments.halationThreshold ?? INITIAL_ADJUSTMENTS.halationThreshold,
+    halationHue: loadedAdjustments.halationHue ?? INITIAL_ADJUSTMENTS.halationHue,
     lensBlurAmount: loadedAdjustments.lensBlurAmount ?? INITIAL_ADJUSTMENTS.lensBlurAmount,
     lensBlurDiffusion: loadedAdjustments.lensBlurDiffusion ?? INITIAL_ADJUSTMENTS.lensBlurDiffusion,
     lensBlurShape: loadedAdjustments.lensBlurShape ?? INITIAL_ADJUSTMENTS.lensBlurShape,
