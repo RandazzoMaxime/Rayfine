@@ -9,7 +9,6 @@ import {
 import { createPortal } from 'react-dom';
 import { useShallow } from 'zustand/react/shallow';
 import { v4 as uuidv4 } from 'uuid';
-import clsx from 'clsx';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import {
@@ -25,7 +24,6 @@ import {
   pointerWithin,
 } from '@dnd-kit/core';
 import {
-  ChartArea,
   ChevronDown,
   ChevronUp,
   Circle,
@@ -54,8 +52,6 @@ import CurveGraph from '../../adjustments/Curves';
 import ColorPanel, { ColorGradingPanel } from '../../adjustments/Color';
 import DetailsPanel from '../../adjustments/Details';
 import EffectsPanel from '../../adjustments/Effects';
-import Waveform from '../editor/Waveform';
-import Resizer from '../../ui/Resizer';
 import { DepthRangePicker } from '../../ui/DepthRangePicker';
 
 import {
@@ -91,7 +87,6 @@ import { useProcessStore } from '../../../store/useProcessStore';
 import { useAiMasking } from '../../../hooks/useAiMasking';
 import { useEditorActions } from '../../../hooks/useEditorActions';
 import { useUIStore } from '../../../store/useUIStore';
-import { useWaveformControls } from '../../../hooks/useWaveformControls';
 
 interface DragData {
   type: 'Container' | 'SubMask' | 'Creation';
@@ -264,10 +259,6 @@ export default function MasksPanel() {
     histogram,
     isGeneratingAiMask,
     selectedImage,
-    isWaveformVisible,
-    waveform,
-    activeWaveformChannel,
-    waveformHeight,
     showMaskOverlay,
     setEditor,
   } = useEditorStore(
@@ -280,17 +271,10 @@ export default function MasksPanel() {
       histogram: state.histogram,
       isGeneratingAiMask: state.isGeneratingAiMask,
       selectedImage: state.selectedImage,
-      isWaveformVisible: state.isWaveformVisible,
-      waveform: state.waveform,
-      activeWaveformChannel: state.activeWaveformChannel,
-      waveformHeight: state.waveformHeight,
       showMaskOverlay: state.showMaskOverlay !== false,
       setEditor: state.setEditor,
     })),
   );
-
-  const { isResizingWaveform, onToggleWaveform, setActiveWaveformChannel, setWaveformHeight, handleWaveformResize } =
-    useWaveformControls();
 
   const setBrushSettings = useCallback(
     (updater: any) => {
@@ -903,7 +887,7 @@ export default function MasksPanel() {
     insertSubMaskIntoContainer(containerId, pastedSubMask, insertIndex);
   };
 
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
 
   const handleDragStart = (event: DragStartEvent) => {
     setActiveDragItem(event.active.data.current as DragData);
@@ -975,33 +959,7 @@ export default function MasksPanel() {
       const sourceContainerId = dragData.parentId;
       if (!sourceContainerId) return;
 
-      if (over?.id === 'mask-list-root' || !over) {
-        setAdjustments((prev: Adjustments) => {
-          const newMasks = JSON.parse(JSON.stringify(prev.masks));
-          const sourceContainer = newMasks.find((m: MaskContainer) => m.id === sourceContainerId);
-          if (!sourceContainer) return prev;
-          const subMaskIndex = sourceContainer.subMasks.findIndex((sm: SubMask) => sm.id === dragData.item!.id);
-          if (subMaskIndex === -1) return prev;
-          const [movedSubMask] = sourceContainer.subMasks.splice(subMaskIndex, 1);
-
-          const newContainer = {
-            ...INITIAL_MASK_CONTAINER,
-            id: uuidv4(),
-            name: `Mask ${newMasks.length + 1}`,
-            subMasks: [movedSubMask],
-          };
-          newMasks.push(newContainer);
-          setTimeout(() => {
-            onSelectContainer(newContainer.id);
-            onSelectMask(movedSubMask.id);
-            setExpandedContainers((p) => new Set(p).add(newContainer.id));
-          }, 0);
-          return { ...prev, masks: newMasks };
-        });
-        return;
-      }
-
-      if (!over) return;
+      if (!over || over.id === 'mask-list-root') return;
 
       let targetContainerId: string | null = null;
       if (overData?.type === 'Container') targetContainerId = overData.item!.id;
@@ -1070,33 +1028,11 @@ export default function MasksPanel() {
       collisionDetection={pointerWithin}
     >
       <div className="flex flex-col h-full select-none overflow-hidden" onContextMenu={handlePanelContextMenu}>
-        <div className="px-3 py-2 flex justify-between items-center shrink-0 border-b border-border-color/40">
+        <div className="px-3 py-2 flex items-center shrink-0">
           <Text variant={TextVariants.title}>{t('editor.masks.maskAdjustmentsTitle')}</Text>
-          <div className="flex items-center gap-1">
-            <button
-              className={clsx(
-                'p-2 rounded-full transition-colors',
-                isWaveformVisible ? 'bg-surface hover:bg-card-active' : 'hover:bg-surface',
-              )}
-              onClick={onToggleWaveform}
-              data-tooltip={t('editor.masks.toggleAnalyticsTooltip')}
-            >
-              <ChartArea size={18} />
-            </button>
-            <button
-              className="p-2 rounded-full hover:bg-surface transition-colors"
-              onClick={handleResetAllMasks}
-              data-tooltip={t('editor.masks.resetMaskingTooltip')}
-            >
-              <RotateCcw size={18} />
-            </button>
-          </div>
         </div>
 
-
-        <div className="flex-1 overflow-y-auto overflow-x-hidden flex flex-col min-h-0 p-4">
-          <div className="h-2 shrink-0 w-full" onClick={handleDeselect} />
-
+        <div className="flex-1 overflow-y-auto overflow-x-hidden flex flex-col min-h-0 px-4 pb-4">
           <AnimatePresence>
             {isSettingsPanelEverOpened && (
               <motion.div
@@ -1107,9 +1043,6 @@ export default function MasksPanel() {
                 transition={{ duration: 0.2, ease: 'easeOut' }}
                 className="flex-1 min-h-0"
               >
-                <Text variant={TextVariants.heading} className="mb-2">
-                  {t('editor.masks.maskAdjustmentsTitle')}
-                </Text>
                 <SettingsPanel
                   container={activeContainer}
                   activeSubMask={activeSubMaskData || null}
@@ -1198,7 +1131,7 @@ export default function MasksPanel() {
       {canvasHost &&
         createPortal(
           <div
-            className="absolute top-3 left-3 z-30 w-[250px] max-h-[min(72%,560px)] flex flex-col rounded-lg border border-white/10 bg-[#2c2c2c]/95 text-text-primary shadow-2xl backdrop-blur-md"
+            className="absolute top-3 right-0 z-30 w-[250px] max-h-[min(72%,560px)] flex flex-col rounded-lg border border-border-color bg-bg-secondary text-text-primary shadow-xl"
             onPointerDown={(e) => e.stopPropagation()}
             onPointerMove={(e) => e.stopPropagation()}
             onPointerUp={(e) => e.stopPropagation()}
@@ -1209,7 +1142,7 @@ export default function MasksPanel() {
               <span className="flex-1 text-center text-xs font-medium tracking-wide">{t('editor.masks.maskingTitle')}</span>
               <button
                 type="button"
-                className="rounded p-1 text-text-secondary hover:bg-white/10 hover:text-text-primary"
+                className="rounded p-1 text-text-secondary hover:bg-card-active hover:text-text-primary"
                 aria-label={maskListCollapsed ? t('editor.masks.panel.expand') : t('editor.masks.panel.collapse')}
                 onClick={() => setMaskListCollapsed((v) => !v)}
               >
@@ -1220,7 +1153,7 @@ export default function MasksPanel() {
               <div className="flex min-h-0 flex-col gap-1 overflow-y-auto px-2 pb-2">
                 <button
                   type="button"
-                  className="flex items-center gap-2 rounded-md px-1.5 py-1.5 text-left text-sm hover:bg-white/10"
+                  className="flex items-center gap-2 rounded-md px-1.5 py-1.5 text-left text-sm text-text-primary hover:bg-card-active"
                   onClick={(e) => {
                     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
                     setAddMenu({
@@ -1229,12 +1162,12 @@ export default function MasksPanel() {
                     });
                   }}
                 >
-                  <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white/10">
+                  <span className="flex h-7 w-7 items-center justify-center rounded-full bg-surface text-text-secondary">
                     <Plus size={16} />
                   </span>
                   {t('editor.masks.panel.create')}
                 </button>
-                <div ref={setRootDroppableRef} className={isRootOver ? 'rounded-md bg-white/5' : ''} onClick={handleDeselect}>
+                <div ref={setRootDroppableRef} className={isRootOver ? 'rounded-md bg-surface' : ''} onClick={handleDeselect}>
                   <AnimatePresence initial={false}>
                     {(adjustments.masks || []).map((container) => (
                       <ContainerRow
@@ -1302,7 +1235,7 @@ export default function MasksPanel() {
                     onChange={() => setEditor({ showMaskOverlay: !showMaskOverlay })}
                   />
                   <span className="flex-1">{t('editor.masks.panel.showOverlay')}</span>
-                  <span className="h-3.5 w-3.5 rounded-sm bg-red-600 ring-1 ring-white/30" />
+                  <span className="h-3.5 w-3.5 rounded-sm bg-red-600 ring-1 ring-border-color" />
                 </label>
               </div>
             )}
@@ -1582,8 +1515,8 @@ function ContainerRow({
       <div
         {...listeners}
         {...attributes}
-        className={`flex items-center gap-2 px-1.5 py-1 rounded-md transition-colors group
-             ${isSelected ? 'bg-white/10' : 'hover:bg-white/5'}
+        className={`flex items-center gap-2 px-1.5 py-1 rounded-md transition-colors group touch-none
+             ${isSelected ? 'bg-card-active' : 'hover:bg-surface'}
              ${!container.visible ? 'opacity-50' : ''}
              ${borderClass}`}
         onClick={(e) => {
@@ -1594,7 +1527,7 @@ function ContainerRow({
       >
         <button
           type="button"
-          className="relative h-7 w-7 shrink-0 overflow-hidden rounded-sm bg-black ring-1 ring-white/30"
+          className="relative h-7 w-7 shrink-0 overflow-hidden rounded-sm bg-black ring-1 ring-border-color"
           onClick={(e) => {
             e.stopPropagation();
             onSelect();
@@ -1676,7 +1609,7 @@ function ContainerRow({
               <div className="flex gap-1 px-0.5 py-1">
                 <button
                   type="button"
-                  className="flex items-center gap-1 rounded-md bg-white/5 px-2 py-1 text-xs text-text-primary hover:bg-white/10"
+                  className="flex items-center gap-1 rounded-md bg-surface px-2 py-1 text-xs text-text-primary hover:bg-card-active"
                   onClick={(e) => {
                     e.stopPropagation();
                     onRequestAdd(e, SubMaskMode.Additive);
@@ -1687,7 +1620,7 @@ function ContainerRow({
                 </button>
                 <button
                   type="button"
-                  className="flex items-center gap-1 rounded-md bg-white/5 px-2 py-1 text-xs text-text-primary hover:bg-white/10"
+                  className="flex items-center gap-1 rounded-md bg-surface px-2 py-1 text-xs text-text-primary hover:bg-card-active"
                   onClick={(e) => {
                     e.stopPropagation();
                     onRequestAdd(e, SubMaskMode.Subtractive);
@@ -1818,9 +1751,6 @@ function SubMaskRow({
         label: t('editor.masks.actions.deleteNamed', { name: label }),
         onClick: handleDelete,
       },
-      { type: OPTION_SEPARATOR },
-      { label: t('editor.masks.actions.copy'), onClick: handleCopy },
-      { label: t('editor.masks.actions.paste'), disabled: !hasCopiedSubMask, onClick: handlePaste },
     ]);
   };
 
@@ -1837,10 +1767,10 @@ function SubMaskRow({
       {...listeners}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
-      className={`flex items-center gap-2 px-1 py-1 rounded-md transition-colors group cursor-pointer
-            ${isActive ? 'bg-white/10' : 'hover:bg-white/5'}
+      className={`flex items-center gap-2 px-1 py-1 rounded-md transition-colors group cursor-pointer touch-none
+            ${isActive ? 'bg-card-active' : 'hover:bg-surface'}
             ${isOver && !isDraggingContainer ? 'border-t-2 border-accent' : ''}
-            ${isDragging ? 'opacity-40 z-50' : ''}
+            ${isDragging ? 'opacity-40' : ''}
             ${parentVisible === false || subMask.visible === false ? 'opacity-50' : ''}
             ${isDraggingContainer ? 'opacity-30 pointer-events-none' : ''}`}
       onClick={(e) => {
