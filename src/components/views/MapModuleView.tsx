@@ -6,10 +6,11 @@ import { save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { toast } from 'react-toastify';
 import { useShallow } from 'zustand/react/shallow';
 import ModuleShell from './ModuleShell';
-import MapCollectionsPanel, { MapCollectionsRail } from '../panel/MapCollectionsPanel';
+import MapCollectionsPanel from '../panel/MapCollectionsPanel';
 import { useLibraryStore } from '../../store/useLibraryStore';
 import { useUIStore } from '../../store/useUIStore';
-import { Album, AlbumGroup, AlbumItem, ImageFile, Invokes } from '../ui/AppProperties';
+import { useModuleCollectionSource } from '../../hooks/useModuleCollectionSource';
+import { Invokes } from '../ui/AppProperties';
 
 interface Props {
   onBackToLibrary(): void;
@@ -46,17 +47,6 @@ function gpsFromExif(exif: Record<string, any> | null | undefined): { lat: numbe
 type MapStyle = 'mapnik' | 'cycle' | 'transport';
 type MapFilter = 'all' | 'tagged' | 'untagged';
 
-function findAlbum(items: AlbumItem[] | undefined, id: string): Album | null {
-  for (const item of items || []) {
-    if (item.type === 'album' && item.id === id) return item as Album;
-    if (item.type === 'group') {
-      const found = findAlbum((item as AlbumGroup).children, id);
-      if (found) return found;
-    }
-  }
-  return null;
-}
-
 /**
  * Lightroom Classic–style Map module with real GPS pins from library EXIF.
  * Uses OpenStreetMap embed (public tiles) — original RustROOM chrome, no Adobe assets.
@@ -78,72 +68,19 @@ export default function MapModuleView({ onBackToLibrary, onOpenDevelop }: Props)
     return 'all';
   });
   const [exporting, setExporting] = useState(false);
-  /** Map-local source: null = current folder (Library image list), else a collection (album) id. */
-  const [albumId, setAlbumId] = useState<string | null>(null);
-  const [albumImages, setAlbumImages] = useState<ImageFile[] | null>(null);
-  const [albumLoading, setAlbumLoading] = useState(false);
-  const [showLeft, setShowLeft] = useState(true);
 
-  const { imageList, libraryActivePath, setLibrary, albumTree, currentFolderPath } = useLibraryStore(
+  const { libraryActivePath } = useLibraryStore(
     useShallow((s) => ({
-      imageList: s.imageList,
       libraryActivePath: s.libraryActivePath,
-      setLibrary: s.setLibrary,
-      albumTree: s.albumTree,
-      currentFolderPath: s.currentFolderPath,
     })),
   );
+  const { albumId, setAlbumId, images: sourceList, albumLoading, albumTree } = useModuleCollectionSource();
   const { developLeftPanelWidth, isInstantTransition, setUI } = useUIStore(
     useShallow((s) => ({
       developLeftPanelWidth: s.developLeftPanelWidth,
       isInstantTransition: s.isInstantTransition,
       setUI: s.setUI,
     })),
-  );
-
-  useEffect(() => {
-    invoke(Invokes.GetAlbums)
-      .then((res: any) => setLibrary({ albumTree: res as AlbumItem[] }))
-      .catch(() => {});
-  }, [setLibrary]);
-
-  const activeAlbum = useMemo(() => (albumId ? findAlbum(albumTree, albumId) : null), [albumTree, albumId]);
-
-  // Collection deleted elsewhere → back to the current folder
-  useEffect(() => {
-    if (albumId && !activeAlbum) setAlbumId(null);
-  }, [albumId, activeAlbum]);
-
-  const albumPathsKey = activeAlbum ? (activeAlbum.images || []).join('\n') : '';
-  useEffect(() => {
-    if (!activeAlbum) {
-      setAlbumImages(null);
-      setAlbumLoading(false);
-      return;
-    }
-    let cancelled = false;
-    setAlbumImages(null);
-    setAlbumLoading(true);
-    invoke<ImageFile[]>(Invokes.GetAlbumImages, { paths: activeAlbum.images || [] })
-      .then((files) => {
-        if (!cancelled) setAlbumImages(files || []);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        toast.error(`Failed to load album: ${err}`);
-        setAlbumImages([]);
-      })
-      .finally(() => {
-        if (!cancelled) setAlbumLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeAlbum?.id, albumPathsKey]);
-
-  const sourceList: ImageFile[] = useMemo(
-    () => (albumId ? albumImages ?? [] : (imageList as ImageFile[])),
-    [albumId, albumImages, imageList],
   );
 
   const pins = useMemo(() => {
@@ -170,10 +107,9 @@ export default function MapModuleView({ onBackToLibrary, onOpenDevelop }: Props)
     return sourceList.filter((img) => (filter === 'tagged' ? tagged.has(img.path) : !tagged.has(img.path)));
   }, [sourceList, pins, filter]);
 
-  // Filmstrip shows only relevant images; null = default Library list (keeps Library sort order)
   useEffect(() => {
-    setUI({ mapImageList: albumId || filter !== 'all' ? filteredImages : null });
-  }, [albumId, filter, filteredImages, setUI]);
+    setUI({ mapImageList: filteredImages });
+  }, [filteredImages, setUI]);
   useEffect(() => () => setUI({ mapImageList: null }), [setUI]);
 
   const visiblePins = useMemo(() => {
@@ -350,24 +286,16 @@ ${wpts}
       icon={MapIcon}
       onBackToLibrary={onBackToLibrary}
       leftPanel={
-        showLeft ? (
-          <MapCollectionsPanel
-            width={developLeftPanelWidth || 220}
-            isInstantTransition={isInstantTransition}
-            albumTree={albumTree || []}
-            activeAlbumId={albumId}
-            currentFolderLabel={t('ui.map.currentFolder' as any, { defaultValue: 'Current folder' })}
-            currentFolderTitle={currentFolderPath || undefined}
-            currentFolderCount={imageList.length}
-            onSelect={(id) => {
-              setAlbumId(id);
-              setSelectedPin(null);
-            }}
-            onHide={() => setShowLeft(false)}
-          />
-        ) : (
-          <MapCollectionsRail onShow={() => setShowLeft(true)} />
-        )
+        <MapCollectionsPanel
+          width={developLeftPanelWidth || 220}
+          isInstantTransition={isInstantTransition}
+          albumTree={albumTree}
+          activeAlbumId={albumId}
+          onSelect={(id) => {
+            setAlbumId(id);
+            setSelectedPin(null);
+          }}
+        />
       }
       right={
         <>
@@ -466,9 +394,13 @@ ${wpts}
                       ? t('ui.map.untaggedHint' as any, {
                           defaultValue: 'Photos without GPS are listed in count only.',
                         })
-                      : t('ui.map.noPins' as any, {
-                          defaultValue: 'No GPS coordinates in current library EXIF.',
-                        })}
+                      : !albumId
+                        ? t('ui.map.pickCollection' as any, {
+                            defaultValue: 'Select a collection to show pins.',
+                          })
+                        : t('ui.map.noPins' as any, {
+                            defaultValue: 'No GPS coordinates in this collection.',
+                          })}
                 </div>
               ) : (
                 visiblePins.map((p) => (
@@ -501,7 +433,7 @@ ${wpts}
           <section className="space-y-1 mt-4 text-[10px] text-text-secondary leading-relaxed">
             {t('ui.map.noteCollections' as any, {
               defaultValue:
-                'Pins from EXIF GPS of the selected collection or current folder. ←/→ cycle · Enter Develop · GPX export.',
+                'Pins from EXIF GPS of the selected collection. ←/→ cycle · Enter Develop · GPX export.',
             })}
           </section>
         </>

@@ -17,6 +17,7 @@ import { ToolType } from '../components/panel/right/Masks';
 import { SOFT_PROOF_PROFILES } from '../utils/softProofProfiles';
 import { COLOR_LABELS } from '../utils/adjustments';
 import { pickDevelopPath } from '../utils/catalogMembership';
+import { escapeReturnsLoupeToGrid } from '../utils/loupeExit';
 
 interface KeyboardShortcutsProps {
   sortedImageList: Array<ImageFile>;
@@ -4969,6 +4970,16 @@ export const useKeyboardShortcuts = ({
           else if (s.ui.isFullScreen) handleToggleFullScreen();
           else if (s.editor.selectedImage) handleBackToLibrary();
           else if (
+            escapeReturnsLoupeToGrid({
+              selectedImage: s.editor.selectedImage,
+              libraryDisplayMode: s.settings.appSettings?.libraryDisplayMode,
+            })
+          ) {
+            const { appSettings, handleSettingsChange } = s.settings;
+            if (appSettings) {
+              handleSettingsChange({ ...appSettings, libraryDisplayMode: LibraryDisplayMode.Grid });
+            }
+          } else if (
             // LR Library: Esc clears multi-selection / selected-only filter
             !s.editor.selectedImage &&
             ((s.library.multiSelectedPaths && s.library.multiSelectedPaths.length > 0) ||

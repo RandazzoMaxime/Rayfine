@@ -67,6 +67,9 @@ export enum DetailsAdjustment {
   ColorNoiseReduction = 'colorNoiseReduction',
   LumaNoiseReduction = 'lumaNoiseReduction',
   Sharpness = 'sharpness',
+  SharpenRadius = 'sharpenRadius',
+  SharpenDetail = 'sharpenDetail',
+  SharpenMasking = 'sharpenMasking',
   SharpnessThreshold = 'sharpnessThreshold',
   ChromaticAberrationRedCyan = 'chromaticAberrationRedCyan',
   ChromaticAberrationBlueYellow = 'chromaticAberrationBlueYellow',
@@ -236,6 +239,9 @@ export interface Adjustments {
   sharpness: number;
   sharpnessThreshold: number;
   showClipping: boolean;
+  sharpenRadius: number;
+  sharpenDetail: number;
+  sharpenMasking: number;
   /** Lightroom histogram left triangle — paint clipped shadows (blue). */
   showShadowClipping?: boolean;
   /** Lightroom histogram right triangle — paint clipped highlights (red). */
@@ -256,6 +262,8 @@ export interface Adjustments {
   perspectiveUpright?: number;
   /** Normalized guide lines for Guided Upright [[x1,y1,x2,y2], ...] 0–1 */
   guidedUprightLines?: number[][];
+  /** Horizontal unsqueeze (1 = off). Display + export stretch width by this factor. */
+  anamorphicSqueeze?: number;
   vibrance: number;
   vignetteAmount: number;
   vignetteFeather: number;
@@ -376,6 +384,7 @@ export interface Sections {
   geometry: Array<string>;
   lensBlur: Array<string>;
   calibration: Array<string>;
+  anamorphic: Array<string>;
 }
 
 export interface SectionVisibility {
@@ -389,6 +398,7 @@ export interface SectionVisibility {
   geometry: boolean;
   lensBlur: boolean;
   calibration: boolean;
+  anamorphic: boolean;
 }
 
 export const COLOR_LABELS: Array<Color> = [
@@ -503,6 +513,7 @@ export const INITIAL_MASK_ADJUSTMENTS: MaskAdjustments = {
     geometry: true,
     lensBlur: true,
     calibration: true,
+    anamorphic: true,
   },
   shadows: 0,
   sharpness: 0,
@@ -547,14 +558,10 @@ export const INITIAL_ADJUSTMENTS: Adjustments = {
   flipVertical: false,
   flareAmount: 0,
   glowAmount: 0,
-  glowThreshold: 50,
-  glowWarmth: 50,
   grainAmount: 0,
   grainRoughness: 50,
   grainSize: 25,
   halationAmount: 0,
-  halationThreshold: 50,
-  halationHue: 50,
   highlights: 0,
   hsl: {
     aquas: { hue: 0, saturation: 0, luminance: 0 },
@@ -607,11 +614,15 @@ export const INITIAL_ADJUSTMENTS: Adjustments = {
     geometry: true,
     lensBlur: true,
     calibration: true,
+    anamorphic: true,
   },
   shadows: 0,
   sharpness: 0,
   sharpnessThreshold: 15,
   showClipping: false,
+  sharpenRadius: 1,
+  sharpenDetail: 25,
+  sharpenMasking: 0,
   showShadowClipping: false,
   showHighlightClipping: false,
   structure: 0,
@@ -628,6 +639,7 @@ export const INITIAL_ADJUSTMENTS: Adjustments = {
   transformYOffset: 0,
   perspectiveUpright: 0,
   guidedUprightLines: [],
+  anamorphicSqueeze: 1,
   vibrance: 0,
   vignetteAmount: 0,
   vignetteFeather: 50,
@@ -755,6 +767,7 @@ export const normalizeLoadedAdjustments = (loadedAdjustments: Adjustments): any 
     transformScale: loadedAdjustments.transformScale ?? INITIAL_ADJUSTMENTS.transformScale,
     transformXOffset: loadedAdjustments.transformXOffset ?? INITIAL_ADJUSTMENTS.transformXOffset,
     transformYOffset: loadedAdjustments.transformYOffset ?? INITIAL_ADJUSTMENTS.transformYOffset,
+    anamorphicSqueeze: loadedAdjustments.anamorphicSqueeze ?? INITIAL_ADJUSTMENTS.anamorphicSqueeze,
     colorCalibration: { ...INITIAL_ADJUSTMENTS.colorCalibration, ...(loadedAdjustments.colorCalibration || {}) },
     colorGrading: { ...INITIAL_ADJUSTMENTS.colorGrading, ...(loadedAdjustments.colorGrading || {}) },
     hsl: { ...INITIAL_ADJUSTMENTS.hsl, ...(loadedAdjustments.hsl || {}) },
@@ -771,6 +784,9 @@ export const normalizeLoadedAdjustments = (loadedAdjustments: Adjustments): any 
       ...(loadedAdjustments.sectionVisibility || {}),
     },
     sharpnessThreshold: loadedAdjustments.sharpnessThreshold ?? INITIAL_ADJUSTMENTS.sharpnessThreshold,
+    sharpenRadius: loadedAdjustments.sharpenRadius ?? INITIAL_ADJUSTMENTS.sharpenRadius,
+    sharpenDetail: loadedAdjustments.sharpenDetail ?? INITIAL_ADJUSTMENTS.sharpenDetail,
+    sharpenMasking: loadedAdjustments.sharpenMasking ?? INITIAL_ADJUSTMENTS.sharpenMasking,
   };
 };
 
@@ -824,7 +840,12 @@ export const ADJUSTMENT_GROUPS: Record<string, AdjustmentGroup[]> = {
     },
     {
       label: 'modals.copyPaste.groups.sharpness',
-      keys: [DetailsAdjustment.Sharpness, DetailsAdjustment.SharpnessThreshold],
+      keys: [
+        DetailsAdjustment.Sharpness,
+        DetailsAdjustment.SharpenRadius,
+        DetailsAdjustment.SharpenDetail,
+        DetailsAdjustment.SharpenMasking,
+      ],
     },
     {
       label: 'modals.copyPaste.groups.noiseReduction',
@@ -926,6 +947,9 @@ export const ADJUSTMENT_SECTIONS: Sections = {
     DetailsAdjustment.Centré,
     DetailsAdjustment.Sharpness,
     DetailsAdjustment.SharpnessThreshold,
+    DetailsAdjustment.SharpenRadius,
+    DetailsAdjustment.SharpenDetail,
+    DetailsAdjustment.SharpenMasking,
     DetailsAdjustment.LumaNoiseReduction,
     DetailsAdjustment.ColorNoiseReduction,
     DetailsAdjustment.ChromaticAberrationRedCyan,
@@ -978,4 +1002,5 @@ export const ADJUSTMENT_SECTIONS: Sections = {
     TransformAdjustment.TransformXOffset,
     TransformAdjustment.TransformYOffset,
   ],
+  anamorphic: ['anamorphicSqueeze'],
 };

@@ -21,6 +21,7 @@ export interface CollapsibleSectionsState {
   geometry: boolean;
   lensBlur: boolean;
   calibration: boolean;
+  anamorphic: boolean;
 }
 
 export interface ConfirmModalState {
@@ -192,6 +193,7 @@ export const useUIStore = create<UIState>((set, get) => ({
     geometry: false,
     lensBlur: false,
     calibration: false,
+    anamorphic: false,
   },
 
   isCreateFolderModalOpen: false,

@@ -82,9 +82,9 @@ struct GlobalAdjustments {
     agx_pipe_to_rendering_matrix: mat3x3<f32>,
     agx_rendering_to_pipe_matrix: mat3x3<f32>,
 
-    _pad_cg1: f32,
-    _pad_cg2: f32,
-    _pad_cg3: f32,
+    sharpen_radius: f32,
+    sharpen_detail: f32,
+    sharpen_masking: f32,
     _pad_cg4: f32,
     color_grading_shadows: ColorGradeSettings,
     color_grading_midtones: ColorGradeSettings,
@@ -92,7 +92,7 @@ struct GlobalAdjustments {
     color_grading_global: ColorGradeSettings,
     color_grading_blending: f32,
     color_grading_balance: f32,
-    _pad2: f32,
+    raw_contrast_key: f32,
     _pad3: f32,
 
     color_calibration: ColorCalibrationSettings,
@@ -106,10 +106,10 @@ struct GlobalAdjustments {
     red_curve_count: u32,
     green_curve_count: u32,
     blue_curve_count: u32,
-    _pad_end1: f32,
-    _pad_end2: f32,
-    _pad_end3: f32,
-    _pad_end4: f32,
+    dehaze_airlight_r: f32,
+    dehaze_airlight_g: f32,
+    dehaze_airlight_b: f32,
+    dehaze_ready: f32,
 
     glow_amount: f32,
     halation_amount: f32,
@@ -119,6 +119,7 @@ struct GlobalAdjustments {
     glow_warmth: f32,
     halation_threshold: f32,
     halation_hue: f32,
+    gray_mixer: array<f32, 8>,
 }
 
 struct MaskAdjustments {
@@ -214,6 +215,57 @@ const HSL_RANGES: array<HslRange, 8> = array<HslRange, 8>(
 
 @group(0) @binding(10) var flare_texture: texture_2d<f32>;
 @group(0) @binding(11) var flare_sampler: sampler;
+@group(0) @binding(12) var dehaze_transmission: texture_2d<f32>;
+struct RawToneParams {
+    range: vec4<f32>,
+    filtered: vec4<f32>,
+    misc: vec4<f32>,
+    padding: vec4<f32>,
+}
+@group(0) @binding(13) var<uniform> raw_tone: RawToneParams;
+@group(0) @binding(14) var raw_tone_mask: texture_2d<f32>;
+
+fn read_tone_mask(coord: vec2<i32>) -> f32 {
+    let dimensions=vec2<i32>(textureDimensions(raw_tone_mask));
+    let p=(vec2<f32>(coord)+0.5)/vec2<f32>(textureDimensions(input_texture))*vec2<f32>(dimensions)-0.5;
+    let base=vec2<i32>(floor(p)); let f=fract(p); let hi=dimensions-1;
+    let a=textureLoad(raw_tone_mask,clamp(base,vec2<i32>(0),hi),0).r;
+    let b=textureLoad(raw_tone_mask,clamp(base+vec2<i32>(1,0),vec2<i32>(0),hi),0).r;
+    let c=textureLoad(raw_tone_mask,clamp(base+vec2<i32>(0,1),vec2<i32>(0),hi),0).r;
+    let d=textureLoad(raw_tone_mask,clamp(base+vec2<i32>(1,1),vec2<i32>(0),hi),0).r;
+    return mix(mix(a,b,f.x),mix(c,d,f.x),f.y);
+}
+
+fn apply_raw_tonemap(color: vec3<f32>,mask: f32,H: f32,S: f32,C: f32) -> vec3<f32> {
+    let mid=raw_tone.range.x; let lo=raw_tone.range.y; let hi=raw_tone.range.z;
+    let flare=raw_tone.range.w; let flo=raw_tone.filtered.x; let fhi=raw_tone.filtered.y;
+    let shadow_ref=2.0*lo-flo;
+    var ls=0.0; var lh=0.0;
+    if (abs(shadow_ref-mid)>raw_tone.misc.z) {ls=(flo-mid)/(shadow_ref-mid);}
+    if (abs(hi-mid)>raw_tone.misc.z) {lh=(fhi-mid)/(hi-mid);}
+    let y=max(dot(color,vec3<f32>(0.30,0.59,0.11)),0.0); let L=log2(y+flare);
+    let baseline=select(L*lh+fhi-lh*hi,L*ls+flo-ls*shadow_ref,L<=mid);
+    let clarity=max(C,0.0)*(mask+L-baseline)*clamp(2.0-0.5*(S-H),1.0,2.0);
+    var w=0.5;
+    if (L<=mid && abs(lo-mid)>raw_tone.misc.z) {w=(L-lo)*(-0.5/(lo-mid));}
+    if (L>mid && abs(mid-hi)>raw_tone.misc.z) {w=0.5+(L-mid)*(-0.5/(mid-hi));}
+    w=clamp(w,0.0,1.0);
+    let ws=1.0-pow(1.0-w,8.0); let wh=1.0-pow(w,8.0);
+    let fs=select(1.0,0.5+0.5*ws,S>0.0);
+    let fh=select(1.0,1.0+raw_tone.filtered.w*(0.5*wh-0.5),H<0.0);
+    let maximum=0.5*((hi-fhi)-(lo-flo))*raw_tone.filtered.z;
+    let balance=(H+S)/max(max(abs(H),abs(S)),raw_tone.misc.z)*maximum;
+    let dh=min(mask,0.0)*clamp(-H,-1.0,1.0)+w*balance*abs(H);
+    let ds=max(mask,0.0)*clamp(S,-1.0,1.0)+(1.0-w)*balance*abs(S);
+    var delta=ds*fs+dh*fh+min(clarity,0.0)*wh+max(clarity,0.0)*ws;
+    if (delta>0.0 && L> -2.0*delta) {delta*=1.0-pow(clamp((-2.0*delta-L)/(-2.0*delta),0.0,1.0),2.0);}
+    if (delta<0.0) {
+        let threshold=raw_tone.misc.y-2.0*delta;
+        if (L<threshold) {delta*=1.0-pow(clamp((L-threshold)/(raw_tone.misc.y-threshold),0.0,1.0),2.0);}
+    }
+    let yn=max(exp2(clamp(L+delta,-120.0,120.0))-flare,0.0);
+    return max(color*(yn/max(y,raw_tone.misc.z)),vec3<f32>(0.0));
+}
 
 const LUMA_COEFF = vec3<f32>(0.2126, 0.7152, 0.0722);
 
@@ -381,6 +433,23 @@ fn apply_curve(val: f32, points: array<Point, 16>, count: u32) -> f32 {
     return local_points[count - 1u].y / 255.0;
 }
 
+fn apply_raw_contrast(color: vec3<f32>, contrast: f32) -> vec3<f32> {
+    let key = clamp(adjustments.global.raw_contrast_key, 0.09, 0.36);
+    let p = log(0.5) / log(key);
+    let u = pow(clamp(color, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(p));
+    let k = exp2(contrast);
+    let low = 0.5 * u / (0.5 * k - (k - 1.0) * u);
+    let high = 0.5 * k * (u - 0.5) / ((k - 1.0) * (u - 0.5) + 0.5) + 0.5;
+    var f = select(high, low, u <= vec3<f32>(0.5));
+    if (contrast > 0.0) {
+        let a = 0.095 * contrast;
+        let vl = 4.0 * u - 1.0;
+        let vh = 4.0 * u - 3.0;
+        f = select(u + a * (1.0 - vh * vh), u + a * (vl * vl - 1.0), u <= vec3<f32>(0.5));
+    }
+    return select(pow(max(f, vec3<f32>(0.0)), vec3<f32>(1.0 / p)), color, color > vec3<f32>(1.0));
+}
+
 fn apply_tonal_adjustments(
     color: vec3<f32>,
     blurred_color_input_space: vec3<f32>,
@@ -399,8 +468,15 @@ fn apply_tonal_adjustments(
         blurred_linear = srgb_to_linear(blurred_color_input_space);
     }
 
+    let positive_raw_black = is_raw == 1u && adjustments.global.tonemapper_mode == 0u
+        && bl > 0.0 && max(color.r, max(color.g, color.b)) <= 1.0;
+    let deferred_negative_black = is_raw == 1u && adjustments.global.tonemapper_mode == 0u
+        && bl < 0.0 && max(color.r, max(color.g, color.b)) <= 1.0;
+
     if (wh != 0.0) {
-        let white_level = 1.0 - wh * 0.25;
+        // Avoid the former 100% setting's near-singular gain on RAWs.
+        let white_response = select(0.25, 0.15 + 0.04 * pow(clamp(wh * 0.3, 0.0, 1.0), 2.0), is_raw == 1u);
+        let white_level = 1.0 - wh * white_response;
         let w_mult = 1.0 / max(white_level, 0.01);
         rgb *= w_mult;
         blurred_linear *= w_mult;
@@ -412,12 +488,13 @@ fn apply_tonal_adjustments(
     let safe_pixel_luma = max(pixel_luma, 0.0001);
     let safe_blurred_luma = max(blurred_luma, 0.0001);
 
-    if (sh != 0.0 || bl != 0.0) {
+    if (sh != 0.0 || (bl != 0.0 && !positive_raw_black && !deferred_negative_black)) {
         let t_pixel = pow(safe_pixel_luma, 0.4545);
         let t_blurred = pow(safe_blurred_luma, 0.4545);
 
         let shadow_lift = sh * t_pixel * pow(max(1.0 - t_pixel, 0.0), 4.5);
-        let black_lift = bl * t_pixel * pow(max(1.0 - t_pixel, 0.0), 12.0);
+        let black_power = select(12.0, 8.0, is_raw == 1u);
+        let black_lift = select(bl * t_pixel * pow(max(1.0 - t_pixel, 0.0), black_power), 0.0, positive_raw_black || deferred_negative_black);
         let lift_amount = max(shadow_lift + black_lift, 0.0);
 
         let t_pixel_curved = max(t_pixel + shadow_lift + black_lift, 0.0);
@@ -452,12 +529,25 @@ fn apply_tonal_adjustments(
         }
     }
 
-    if (con != 0.0) {
+    if (positive_raw_black) {
+        // Common RAW lift reconstructed from PV6. The continuous interpolation
+        // matches +50/+100 and is validated at +1/+10/+25/+26/+75 on both scenes.
+        let u = clamp(0.4 * bl, 0.0, 1.0);
+        let amount = 0.25 * u * u / (0.5 + 0.5 * u);
+        let h = min(4.0 - 2.0 * amount, 3.0);
+        let c1 = exp2(-(4.0 * amount + h));
+        let c2 = exp2(-h);
+        let y = dot(max(rgb, vec3<f32>(0.0)), vec3<f32>(0.25, 0.5, 0.25));
+        let q = ((c1 + 1.0) / (y + c1)) * ((y + c2) / (c2 + 1.0));
+        rgb *= y + (1.0 - y) * q;
+    }
+
+    if (con != 0.0 && !(is_raw == 1u && adjustments.global.tonemapper_mode == 0u)) {
         let safe_rgb = max(rgb, vec3<f32>(0.0));
         let g = 2.2;
         let perceptual = pow(safe_rgb, vec3<f32>(1.0 / g));
         let clamped_perceptual = clamp(perceptual, vec3<f32>(0.0), vec3<f32>(1.0));
-        let strength = pow(2.0, con * 1.25);
+        let strength = pow(2.0, con * select(1.25, 0.8, is_raw == 1u));
         let condition = clamped_perceptual < vec3<f32>(0.5);
         let high_part = 1.0 - 0.5 * pow(2.0 * (1.0 - clamped_perceptual), vec3<f32>(strength));
         let low_part = 0.5 * pow(2.0 * clamped_perceptual, vec3<f32>(strength));
@@ -481,7 +571,9 @@ fn apply_highlights_adjustment(
     let safe_pixel_luma = max(pixel_luma, 0.0001);
 
     let pixel_mask_input = tanh(safe_pixel_luma * 1.5);
-    let highlight_mask = smoothstep(0.3, 0.95, pixel_mask_input);
+    // The previous threshold left RAW midtones unaffected, even at -100.
+    let highlight_mask = select(smoothstep(0.3, 0.95, pixel_mask_input),
+        smoothstep(0.0, 0.61, pixel_mask_input), is_raw == 1u);
 
     if (highlight_mask < 0.001) {
         return color_in;
@@ -493,7 +585,7 @@ fn apply_highlights_adjustment(
     if (highlights_adj < 0.0) {
         var new_luma: f32;
         if (luma <= 1.0) {
-            let gamma = 1.0 - highlights_adj * 1.75;
+            let gamma = 1.0 - highlights_adj * select(1.75, 0.65, is_raw == 1u);
             new_luma = pow(luma, gamma);
         } else {
             let luma_excess = luma - 1.0;
@@ -506,7 +598,7 @@ fn apply_highlights_adjustment(
         let white_point = vec3<f32>(new_luma);
         final_adjusted_color = mix(tonally_adjusted_color, white_point, desaturation_amount);
     } else {
-        let adjustment = highlights_adj * 1.75;
+        let adjustment = highlights_adj * select(1.75, 0.84, is_raw == 1u);
         let factor = pow(2.0, adjustment);
         final_adjusted_color = color_in * factor;
     }
@@ -598,6 +690,46 @@ fn apply_white_balance(color: vec3<f32>, temp: f32, tnt: f32) -> vec3<f32> {
     return rgb;
 }
 
+fn apply_raw_vibrance(c: vec3<f32>, v: f32) -> vec3<f32> {
+    let hi = max(c.r,max(c.g,c.b));
+    let lo = min(c.r,min(c.g,c.b));
+    let delta = hi-lo;
+    if (delta < 0.000001 || hi <= 0.0 || v == 0.0) {return c;}
+    let preserve_overrange = adjustments.global.tonemapper_mode == 1u || hi > 1.0;
+    let mid = c.r+c.g+c.b-hi-lo;
+    let z = clamp((mid-lo)/delta,0.0,1.0);
+    let M = hi + 0.5*z*z*(mid-hi);
+    let m = lo + 0.5*(1.0-z)*(1.0-z)*(mid-lo);
+    let S = (M-m)/max(M,0.000001);
+    let d = min(16.0*M,1.0);
+    let L = d*(2.0-d);
+    var Mn = M;
+    var mn = m;
+    if (v > 0.0) {
+        let hue = rgb_to_hsv(c).x / 60.0;
+        let x = (hue+1.0)%6.0;
+        let W = min(clamp(x,0.0,1.0),clamp(7.0-4.0*x,0.0,1.0));
+        let a = W*(1.0-S*S);
+        let k = v*(1.0+(v-1.0)*a);
+        var b = k*(0.833333-0.404762*a);
+        if (!preserve_overrange) {b *= 1.0-m;}
+        let Sn = S/max(1.0-b*L*(1.0-S),0.000001);
+        let g = S*(1.0-S)*(2.0-S*(1.0-S))*k*L;
+        Mn = M*(1.0+0.25*g*(1.0-min(M,1.0)));
+        mn = Mn*(1.0-Sn);
+    } else {
+        let g = S*(1.0-S)*(2.0-S*(1.0-S))*L*(-v);
+        let Sn = S*(1.0+v+S*(-v)*(0.5*S+0.5)*L)*(1.0+0.25*v);
+        Mn = M*(1.0-g*(1.0-min(M,1.0)));
+        mn = Mn*(1.0-Sn);
+    }
+    let D = z*z-z+2.0;
+    var mx = max((mn*z*z*(z-1.0)-Mn*(z*z*z-2.0*z*z+z-2.0))/D,0.0);
+    var mi = max((mn*(z*z*z-z*z+2.0)-Mn*z*(z-1.0)*(z-1.0))/D,0.0);
+    if (!preserve_overrange) {mx = min(mx,1.0); mi = min(mi,1.0);}
+    return mix(vec3<f32>(mi),vec3<f32>(mx),(c-vec3<f32>(lo))/delta);
+}
+
 fn apply_creative_color(color: vec3<f32>, sat: f32, vib: f32) -> vec3<f32> {
     var processed = color;
     let luma = get_luma(processed);
@@ -606,6 +738,11 @@ fn apply_creative_color(color: vec3<f32>, sat: f32, vib: f32) -> vec3<f32> {
         processed = mix(vec3<f32>(luma), processed, 1.0 + sat);
     }
     if (vib == 0.0) { return processed; }
+    if (adjustments.global.is_raw_image == 1u) {
+        // RAW vibrance uses the PV6 extrema response in linear ProPhoto.
+        // Unlike a saturation multiplier, it also changes brightness.
+        return prophoto_to_srgb(apply_raw_vibrance(srgb_to_prophoto(processed), vib));
+    }
     let c_max = max(processed.r, max(processed.g, processed.b));
     let c_min = min(processed.r, min(processed.g, processed.b));
     let delta = c_max - c_min;
@@ -689,6 +826,21 @@ fn apply_hsl_panel(color: vec3<f32>, hsl_adjustments: array<HslColor, 8>, coords
     return final_color;
 }
 
+fn apply_monochrome_profile(color: vec3<f32>, mixer: array<f32, 8>) -> vec3<f32> {
+    let safe_color = max(color, vec3<f32>(0.0));
+    let hsv = rgb_to_hsv(safe_color);
+    var weighted_gain = 0.0;
+    var total_weight = 0.0;
+    for (var i = 0u; i < 8u; i = i + 1u) {
+        let range = HSL_RANGES[i];
+        let weight = get_raw_hsl_influence(hsv.x, range.center, range.width);
+        weighted_gain += weight * exp2(mixer[i]);
+        total_weight += weight;
+    }
+    let gain = select(1.0, weighted_gain / total_weight, total_weight > 0.0001);
+    return vec3<f32>(max(0.0, get_luma(safe_color) * gain));
+}
+
 fn apply_color_grading(color: vec3<f32>, shadows: ColorGradeSettings, midtones: ColorGradeSettings, highlights: ColorGradeSettings, global: ColorGradeSettings, blending: f32, balance: f32) -> vec3<f32> {
     let luma = get_luma(max(vec3(0.0), color));
     let base_shadow_crossover = 0.1;
@@ -720,6 +872,27 @@ fn apply_color_grading(color: vec3<f32>, shadows: ColorGradeSettings, midtones: 
     if (global.saturation > 0.001) { let tint_rgb = hsv_to_rgb(vec3<f32>(global.hue, 1.0, 1.0)); graded_color += (tint_rgb - 0.5) * global.saturation * global_mask * global_sat_strength; }
     graded_color += global.luminance * global_mask * global_lum_strength;
     return graded_color;
+}
+
+fn sharpening_edge_mask(coord: vec2<i32>, masking: f32, is_raw: u32) -> f32 {
+    if (masking <= 0.0) { return 1.0; }
+    let hi_coord = vec2<i32>(textureDimensions(input_texture)) - vec2<i32>(1);
+    var lo = 1e30;
+    var hi = 0.0;
+    for (var y = -1; y <= 1; y += 1) {
+        for (var x = -1; x <= 1; x += 1) {
+            var c = textureLoad(input_texture,clamp(coord + vec2<i32>(x,y),vec2<i32>(0),hi_coord),0).rgb;
+            if (is_raw == 0u) { c = srgb_to_linear(c); }
+            let l = max(get_luma(c),0.0);
+            lo = min(lo,l); hi = max(hi,l);
+        }
+    }
+    // Recovered Sharpen3 edge kernel. UI-to-slope mapping is an approximation;
+    // zero deliberately exposes the entire image, progressively protecting flats.
+    let d = 1.064451 * (sqrt(hi + 1.0/256.0) - sqrt(lo + 1.0/256.0));
+    let slope = exp2(8.0 * (1.0-clamp(masking,0.0,1.0)));
+    let z = clamp(slope*d/(1.0+(slope-1.0)*d),0.0,1.0);
+    return pow(1.0-pow(1.0-z,4.0),5.0);
 }
 
 fn apply_local_contrast(
@@ -767,11 +940,12 @@ fn apply_local_contrast(
     let log_ratio = log2(safe_center_luma / safe_blurred_luma);
     var effective_amount = amount;
 
-    if (mode == 0u) {
+    if (mode == 0u || mode == 2u) {
         let edge_magnitude = abs(log_ratio);
         let normalized_edge = clamp(edge_magnitude / 3.0, 0.0, 1.0);
         let edge_dampener = 1.0 - pow(normalized_edge, 0.5);
-        let edge_mask = smoothstep(threshold * 0.5, threshold * 1.5, edge_magnitude);
+        var edge_mask = 1.0;
+        if (mode == 0u) { edge_mask = smoothstep(threshold * 0.5, threshold * 1.5, edge_magnitude); }
         effective_amount = amount * edge_dampener * edge_mask * 0.8;
     } else {
         effective_amount = amount;
@@ -849,6 +1023,26 @@ fn apply_centre_tonal_and_color(
     processed_color = apply_creative_color(processed_color, total_saturation_effect, vibrance_center_boost);
 
     return processed_color;
+}
+
+fn apply_guided_dehaze(color: vec3<f32>, slider: f32, exposure: f32, coord: vec2<i32>) -> vec3<f32> {
+    let c = srgb_to_prophoto(color);
+    let A = vec3<f32>(adjustments.global.dehaze_airlight_r,
+        adjustments.global.dehaze_airlight_g,adjustments.global.dehaze_airlight_b) * exp2(exposure);
+    let t = clamp(textureLoad(dehaze_transmission,coord,0).r,0.2,1.0);
+    // Host slider normalization is /750; Camera Raw's positive response is .8*UI/100.
+    let amount = clamp(slider*6.0,0.0,0.8);
+    let candidate = A + (1.0+amount*(1.0/t-1.0))*(c-A);
+    let src_max = max(c.r,max(c.g,c.b));
+    let src_min = min(c.r,min(c.g,c.b));
+    let src_sat = (src_max-src_min)/max(src_max,0.000001);
+    let hi = max(candidate.r,max(candidate.g,candidate.b));
+    let lo = min(candidate.r,min(candidate.g,candidate.b));
+    let sat = (hi-lo)/max(hi,0.000001);
+    let cap = src_sat+0.6*(1.0-src_sat);
+    let ratio = min(sat,cap)/max(sat,0.000001);
+    let corrected = max(vec3<f32>(hi)+ratio*(candidate-vec3<f32>(hi)),vec3<f32>(0.0));
+    return prophoto_to_srgb(corrected);
 }
 
 fn apply_dehaze(color: vec3<f32>, blurred_color_input_space: vec3<f32>, is_raw: u32, amount: f32) -> vec3<f32> {
@@ -1229,25 +1423,36 @@ fn is_default_curve(points: array<Point, 16>, count: u32) -> bool {
     return is_identity && p0_is_origin && p_last_is_end;
 }
 
-fn apply_all_curves(color: vec3<f32>, luma_curve: array<Point, 16>, luma_curve_count: u32, red_curve: array<Point, 16>, red_curve_count: u32, green_curve: array<Point, 16>, green_curve_count: u32, blue_curve: array<Point, 16>, blue_curve_count: u32) -> vec3<f32> {
-    let red_is_default = is_default_curve(red_curve, red_curve_count);
-    let green_is_default = is_default_curve(green_curve, green_curve_count);
-    let blue_is_default = is_default_curve(blue_curve, blue_curve_count);
-    let rgb_curves_are_active = !red_is_default || !green_is_default || !blue_is_default;
+// Linear sRGB (D65) ↔ ProPhoto (D50), including chromatic adaptation.
+// Rows are explicit to avoid confusing WGSL's column-major matrix constructor.
+fn srgb_to_prophoto(c: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(dot(c,vec3<f32>(0.52934593,0.33007280,0.14058127)),
+        dot(c,vec3<f32>(0.09837434,0.87346102,0.02816463)),
+        dot(c,vec3<f32>(0.01688322,0.11767247,0.86544431)));
+}
+fn prophoto_to_srgb(c: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(dot(c,vec3<f32>(2.03407594,-0.72733421,-0.30674173)),
+        dot(c,vec3<f32>(-0.22881332,1.23173016,-0.00291684)),
+        dot(c,vec3<f32>(-0.00856984,-0.15328657,1.16185641)));
+}
 
-    if (rgb_curves_are_active) {
-        let color_graded = vec3<f32>(apply_curve(color.r, red_curve, red_curve_count), apply_curve(color.g, green_curve, green_curve_count), apply_curve(color.b, blue_curve, blue_curve_count));
-        let luma_initial = get_luma(color);
-        let luma_target = apply_curve(luma_initial, luma_curve, luma_curve_count);
-        let luma_graded = get_luma(color_graded);
-        var final_color: vec3<f32>;
-        if (luma_graded > 0.001) { final_color = color_graded * (luma_target / luma_graded); } else { final_color = vec3<f32>(luma_target); }
-        let max_comp = max(final_color.r, max(final_color.g, final_color.b));
-        if (max_comp > 1.0) { final_color = final_color / max_comp; }
-        return final_color;
-    } else {
-        return vec3<f32>(apply_curve(color.r, luma_curve, luma_curve_count), apply_curve(color.g, luma_curve, luma_curve_count), apply_curve(color.b, luma_curve, luma_curve_count));
+fn apply_all_curves(color: vec3<f32>, luma_curve: array<Point, 16>, luma_curve_count: u32, red_curve: array<Point, 16>, red_curve_count: u32, green_curve: array<Point, 16>, green_curve_count: u32, blue_curve: array<Point, 16>, blue_curve_count: u32) -> vec3<f32> {
+    var working = color;
+    if (adjustments.global.is_raw_image == 1u) {
+        // RAW point curves operate in sRGB-encoded ProPhoto, not display sRGB.
+        // Convert back only after composing master and channel curves.
+        working = linear_to_srgb_extended(srgb_to_prophoto(srgb_to_linear(color)));
     }
+    let master = vec3<f32>(apply_curve(working.r, luma_curve, luma_curve_count),
+        apply_curve(working.g, luma_curve, luma_curve_count),
+        apply_curve(working.b, luma_curve, luma_curve_count));
+    let result = vec3<f32>(apply_curve(master.r, red_curve, red_curve_count),
+        apply_curve(master.g, green_curve, green_curve_count),
+        apply_curve(master.b, blue_curve, blue_curve_count));
+    if (adjustments.global.is_raw_image == 1u) {
+        return linear_to_srgb_extended(prophoto_to_srgb(srgb_to_linear(result)));
+    }
+    return result;
 }
 
 fn get_mask_influence(mask_index: u32, coords: vec2<u32>) -> f32 {
@@ -1571,10 +1776,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     var locally_contrasted_rgb = initial_linear_rgb;
 
-    locally_contrasted_rgb = apply_local_contrast(
+    if (abs(t_sharpness) > 0.0001) { locally_contrasted_rgb = apply_local_contrast(
         locally_contrasted_rgb, sharpness_blurred,
-        t_sharpness, is_raw, 0u, adjustments.global.sharpness_threshold
-    );
+        t_sharpness * sharpening_edge_mask(absolute_coord_i,adjustments.global.sharpen_masking,is_raw)
+            * (0.75 + adjustments.global.sharpen_detail), is_raw, 2u, 0.0
+    ); }
 
     var sharpness_delta = vec3<f32>(0.0);
     for (var i = 0u; i < adjustments.mask_count; i = i + 1u) {
@@ -1592,7 +1798,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     locally_contrasted_rgb += sharpness_delta;
 
-    locally_contrasted_rgb = apply_local_contrast(locally_contrasted_rgb, clarity_blurred, t_clarity, is_raw, 1u, 0.0);
+    let deferred_raw_tone = is_raw == 1u && adjustments.global.tonemapper_mode == 0u && raw_tone.misc.w > 0.5
+        && (abs(t_shadows)>0.0001 || t_clarity>0.0001) && max(initial_linear_rgb.r,max(initial_linear_rgb.g,initial_linear_rgb.b))<=1.0;
+    if (!(deferred_raw_tone && t_clarity>0.0)) {
+        locally_contrasted_rgb = apply_local_contrast(locally_contrasted_rgb, clarity_blurred, t_clarity, is_raw, 1u, 0.0);
+    }
     locally_contrasted_rgb = apply_local_contrast(locally_contrasted_rgb, structure_blurred, t_structure, is_raw, 1u, 0.0);
     locally_contrasted_rgb = apply_centre_local_contrast(locally_contrasted_rgb, adjustments.global.centre, absolute_coord_i, clarity_blurred, is_raw);
 
@@ -1626,12 +1836,19 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         processed_rgb += flare_color * t_flare * protection;
     }
 
-    var composite_rgb_linear = apply_dehaze(processed_rgb, structure_blurred, is_raw, t_dehaze);
+    var composite_rgb_linear = processed_rgb;
+    if (is_raw == 1u && t_dehaze > 0.0 && adjustments.global.dehaze_ready > 0.5) {
+        composite_rgb_linear = apply_guided_dehaze(processed_rgb,t_dehaze,t_exposure,absolute_coord_i);
+    } else {
+        composite_rgb_linear = apply_dehaze(processed_rgb,structure_blurred,is_raw,t_dehaze*select(1.0,3.5,is_raw==1u));
+    }
     composite_rgb_linear = apply_centre_tonal_and_color(composite_rgb_linear, adjustments.global.centre, absolute_coord_i);
     composite_rgb_linear = apply_white_balance(composite_rgb_linear, t_temperature, t_tint);
     composite_rgb_linear = apply_filmic_exposure(composite_rgb_linear, t_brightness);
-    composite_rgb_linear = apply_tonal_adjustments(composite_rgb_linear, tonal_blurred, is_raw, t_contrast, t_shadows, t_whites, t_blacks);
-    composite_rgb_linear = apply_highlights_adjustment(composite_rgb_linear, tonal_blurred, is_raw, t_highlights);
+    let negative_raw_black_sdr = is_raw == 1u && t_blacks < 0.0 && adjustments.global.tonemapper_mode == 0u
+        && max(composite_rgb_linear.r, max(composite_rgb_linear.g, composite_rgb_linear.b)) <= 1.0;
+    composite_rgb_linear = apply_tonal_adjustments(composite_rgb_linear, tonal_blurred, is_raw, t_contrast, select(t_shadows,0.0,deferred_raw_tone), t_whites, t_blacks);
+    composite_rgb_linear = apply_highlights_adjustment(composite_rgb_linear, tonal_blurred, is_raw, select(t_highlights,0.0,deferred_raw_tone));
     composite_rgb_linear = apply_color_calibration(composite_rgb_linear, adjustments.global.color_calibration);
     // HSL panel is costly per pixel; skip it when every hue/sat/lum slider is at zero.
     let hsl_magnitude =
@@ -1642,8 +1859,13 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if (hsl_magnitude > 0.0001) {
         composite_rgb_linear = apply_hsl_panel(composite_rgb_linear, final_hsl, absolute_coord_i);
     }
-    composite_rgb_linear = apply_hue_shift(composite_rgb_linear, t_hue);
-    composite_rgb_linear = apply_creative_color(composite_rgb_linear, t_saturation, t_vibrance);
+    let monochrome_profile = adjustments.global._pad_color1 > 0.5;
+    if (monochrome_profile) {
+        composite_rgb_linear = apply_monochrome_profile(composite_rgb_linear, adjustments.global.gray_mixer);
+    } else {
+        composite_rgb_linear = apply_hue_shift(composite_rgb_linear, t_hue);
+        composite_rgb_linear = apply_creative_color(composite_rgb_linear, t_saturation, t_vibrance);
+    }
 
     composite_rgb_linear = apply_color_grading(
         composite_rgb_linear,
@@ -1690,14 +1912,36 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if (adjustments.global.tonemapper_mode == 1u) {
         base_srgb = agx_full_transform(composite_rgb_linear);
     } else if (is_raw == 1u) {
-        var srgb_emulated = linear_to_srgb(composite_rgb_linear);
-        const BRIGHTNESS_GAMMA: f32 = 1.1;
+        // Empirical Basic RAW transfer validated against Adobe Standard on
+        // the comparison fixture. It is not a substitute for a DCP profile.
+        var srgb_emulated = linear_to_srgb(composite_rgb_linear * exp2(0.25));
+        const BRIGHTNESS_GAMMA: f32 = 1.378;
         srgb_emulated = pow(srgb_emulated, vec3<f32>(1.0 / BRIGHTNESS_GAMMA));
-        const CONTRAST_MIX: f32 = 0.75;
+        const CONTRAST_MIX: f32 = 1.0;
         let contrast_curve = srgb_emulated * srgb_emulated * (3.0 - 2.0 * srgb_emulated);
         base_srgb = mix(srgb_emulated, contrast_curve, CONTRAST_MIX);
     } else {
         base_srgb = linear_to_srgb(composite_rgb_linear);
+    }
+
+    if (deferred_raw_tone) {
+        let working=srgb_to_prophoto(srgb_to_linear(base_srgb));
+        let toned=apply_raw_tonemap(working,read_tone_mask(absolute_coord_i),t_highlights*1.2,t_shadows*1.2,t_clarity*1.25);
+        base_srgb=linear_to_srgb_extended(prophoto_to_srgb(toned));
+    }
+
+    if (negative_raw_black_sdr) {
+        // Approximate the native minimum physical black clip in linear ProPhoto.
+        // Validated at -50/-100 on both scenes; full hard/soft curve is unresolved.
+        let clip = 0.0625 * clamp(-0.4 * t_blacks, 0.0, 1.0);
+        let working = srgb_to_prophoto(srgb_to_linear(base_srgb));
+        let changed = max((working - vec3<f32>(clip)) / (1.0 - clip), vec3<f32>(0.0));
+        base_srgb = linear_to_srgb_extended(prophoto_to_srgb(changed));
+    }
+
+    if (is_raw == 1u && adjustments.global.tonemapper_mode == 0u && t_contrast != 0.0) {
+        let working = srgb_to_prophoto(srgb_to_linear(base_srgb));
+        base_srgb = linear_to_srgb_extended(prophoto_to_srgb(apply_raw_contrast(working, t_contrast)));
     }
 
     // Curves are expensive (4 x 16-point arrays copied per pixel): skip them entirely when all

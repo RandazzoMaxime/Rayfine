@@ -13,6 +13,7 @@ import { useProcessStore } from '../../store/useProcessStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
 
 import { ImageFile, LibraryDisplayMode, LibraryViewMode, ThumbnailAspectRatio, ThumbnailSize } from '../ui/AppProperties';
+import { generateLibraryPreview } from '../../utils/libraryPreview';
 import { GroupBadgeInfo, GroupId } from '../../utils/imageGrouping';
 
 interface LibraryViewProps {
@@ -131,6 +132,7 @@ export default function LibraryView({
 
   const openLoupe = (path: string) => {
     setLibrary({ libraryActivePath: path, selectionAnchorPath: path });
+    void generateLibraryPreview(path);
     if (appSettings) {
       handleSettingsChange({ ...appSettings, libraryDisplayMode: LibraryDisplayMode.Loupe });
     }

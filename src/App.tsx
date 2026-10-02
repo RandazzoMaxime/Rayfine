@@ -254,6 +254,10 @@ function App() {
     if (adjustments?.aspectRatio && adjustments.aspectRatio > 0) {
       effectiveRatio = adjustments.aspectRatio;
     }
+    const squeeze = Number((adjustments as any)?.anamorphicSqueeze);
+    if (Number.isFinite(squeeze) && squeeze > 1.01) {
+      effectiveRatio *= squeeze;
+    }
     const desiredImageHeight = viewportSize.width / effectiveRatio;
     const topUiEstimation = !appSettings?.decorations && !isWindowFullScreen ? 110 : 60;
     const totalDesiredTopHeight = desiredImageHeight + topUiEstimation;
@@ -854,7 +858,11 @@ function App() {
                   {/* Border renders its own photo strip (click/drag into the layout) */}
                   {activeView !== 'border' && (
                   <ModuleFilmstrip
-                    imageList={activeView === 'map' && mapImageList ? mapImageList : sortedImageList}
+                    imageList={
+                      activeView === 'map' || activeView === 'web'
+                        ? mapImageList ?? []
+                        : sortedImageList
+                    }
                     onImageSelect={(path, e) => handleLibraryImageSingleClick(path, e)}
                     onImageDoubleClick={handleImageSelect}
                     onContextMenu={handleThumbnailContextMenu}

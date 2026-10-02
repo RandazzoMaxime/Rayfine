@@ -30,6 +30,8 @@ interface SliderProps {
   layout?: 'inline' | 'stacked';
   /** Dark = white text (Develop). Light = dark text on a white panel. Theme = CSS vars. */
   tone?: 'dark' | 'light' | 'theme';
+  /** Taller track — color-grading hue/sat/lum under the wheels. */
+  thick?: boolean;
 }
 
 const DOUBLE_CLICK_THRESHOLD_MS = 300;
@@ -58,6 +60,7 @@ const Slider = ({
   parseValue,
   layout = 'inline',
   tone = 'theme',
+  thick = false,
 }: SliderProps) => {
   const { t } = useTranslation();
   const [displayValue, setDisplayValue] = useState<number>(value);
@@ -540,6 +543,9 @@ const Slider = ({
   const numericValue = isNaN(Number(value)) ? 0 : Number(value);
   const shownValue = formatNumber(isDragging ? displayValue : numericValue);
   const stacked = layout === 'stacked';
+  const gradientTrack = !!trackClassName && (trackClassName.startsWith('cg-') || trackClassName.startsWith('calibration-'));
+  const trackH = stacked ? (thick ? 'h-2.5' : 'h-1.5') : thick ? 'h-2' : 'h-1';
+  const hitH = stacked ? (thick ? 'h-5' : 'h-4') : thick ? 'h-4' : 'h-3';
   const textCls =
     tone === 'light' ? 'text-neutral-800' : tone === 'theme' ? 'text-text-primary' : 'text-white';
   const inputCls =
@@ -555,8 +561,8 @@ const Slider = ({
     <div
       className={
         stacked
-          ? `mb-px group grid grid-cols-[minmax(0,1fr)_auto] grid-rows-[auto_auto] items-center gap-x-2 gap-y-2 ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${emphasized ? 'rounded bg-neutral-100' : ''}`
-          : `mb-px group grid grid-cols-[7rem_minmax(0,1fr)_2.75rem] items-center gap-x-1 min-h-[18px] ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${emphasized ? 'rounded bg-white/10' : ''}`
+          ? `mb-px group grid grid-cols-[minmax(0,1fr)_auto] grid-rows-[auto_auto] items-center gap-x-2 ${thick ? 'gap-y-1' : 'gap-y-2'} ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${emphasized ? 'rounded bg-neutral-100' : ''}`
+          : `mb-0.5 group grid grid-cols-[7.25rem_minmax(0,1fr)_2.75rem] items-center gap-x-1 min-h-[28px] py-1 ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${emphasized ? 'rounded bg-white/10' : ''}`
       }
       ref={containerRef}
     >
@@ -569,7 +575,7 @@ const Slider = ({
       >
         <span
           aria-hidden={isLabelHovered && typeof label === 'string'}
-          className={`col-start-1 row-start-1 text-[11px] font-medium ${textCls} leading-none truncate select-none transition-opacity duration-200 ease-in-out ${
+          className={`col-start-1 row-start-1 text-[11px] font-medium ${textCls} leading-5 py-px truncate select-none transition-opacity duration-200 ease-in-out ${
             isLabelHovered && typeof label === 'string' ? 'opacity-0' : 'opacity-100'
           }`}
         >
@@ -578,7 +584,7 @@ const Slider = ({
         {typeof label === 'string' && (
           <span
             aria-hidden={!isLabelHovered}
-            className={`col-start-1 row-start-1 text-[11px] font-medium ${textCls} leading-none truncate select-none transition-opacity duration-200 ease-in-out pointer-events-none ${
+            className={`col-start-1 row-start-1 text-[11px] font-medium ${textCls} leading-5 py-px truncate select-none transition-opacity duration-200 ease-in-out pointer-events-none ${
               isLabelHovered ? 'opacity-100' : 'opacity-0'
             }`}
           >
@@ -587,24 +593,26 @@ const Slider = ({
         )}
       </div>
 
-      <div className={stacked ? 'relative w-full h-4 col-span-2 row-start-2' : 'relative w-full h-3'}>
+      <div className={`relative w-full ${hitH} ${stacked ? 'col-span-2 row-start-2' : ''}`}>
         <div
-          className={`absolute top-1/2 left-0 w-full ${stacked ? 'h-1.5' : 'h-1'} -translate-y-1/2 rounded-full pointer-events-none ${
-            trackClassName || defaultTrack
-          }`}
+          className={`absolute top-1/2 left-0 w-full ${trackH} -translate-y-1/2 rounded-full pointer-events-none ${
+            gradientTrack ? 'ring-1 ring-black/50 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.25)]' : ''
+          } ${trackClassName || defaultTrack}`}
         />
-        <div
-          className={`absolute top-1/2 ${stacked ? 'h-1.5' : 'h-1'} -translate-y-1/2 rounded-full pointer-events-none bg-accent/25`}
-          style={{
-            left: `${Math.min(fillPercentage, originPercentage)}%`,
-            width: `${Math.abs(fillPercentage - originPercentage)}%`,
-          }}
-        />
+        {!gradientTrack && (
+          <div
+            className={`absolute top-1/2 ${trackH} -translate-y-1/2 rounded-full pointer-events-none bg-accent/25`}
+            style={{
+              left: `${Math.min(fillPercentage, originPercentage)}%`,
+              width: `${Math.abs(fillPercentage - originPercentage)}%`,
+            }}
+          />
+        )}
         <input
           ref={rangeInputRef}
-          className={`absolute top-1/2 left-0 w-full ${stacked ? 'h-1.5' : 'h-1'} appearance-none bg-transparent cursor-pointer m-0 p-0 slider-input z-10 ${
-            isDragging ? 'slider-thumb-active' : ''
-          } ${disabled ? 'cursor-not-allowed' : ''}`}
+          className={`absolute top-1/2 left-0 w-full ${trackH} appearance-none bg-transparent cursor-pointer m-0 p-0 slider-input z-10 ${
+            gradientTrack ? 'slider-on-gradient' : ''
+          } ${isDragging ? 'slider-thumb-active' : ''} ${disabled ? 'cursor-not-allowed' : ''}`}
           disabled={disabled}
           style={{ margin: 0, touchAction: isDragging ? 'none' : 'pan-y' }}
           max={String(max)}
@@ -640,13 +648,13 @@ const Slider = ({
           />
         ) : (
           <span
-            className={`inline-flex items-center justify-end gap-px text-[11px] leading-none ${textCls} select-none ${disabled ? '' : 'cursor-text'}`}
+            className={`inline-flex items-center justify-end gap-px text-[11px] leading-5 ${textCls} select-none ${disabled ? '' : 'cursor-text'}`}
             onClick={disabled ? undefined : handleValueClick}
             onDoubleClick={disabled ? undefined : handleReset}
             data-tooltip={disabled ? undefined : t('ui.slider.clickToEdit')}
           >
-            <span className="tabular-nums leading-none">{shownValue}</span>
-            {suffix ? <span className="text-[11px] leading-none">{suffix}</span> : null}
+            <span className="tabular-nums leading-5">{shownValue}</span>
+            {suffix ? <span className="text-[11px] leading-5">{suffix}</span> : null}
           </span>
         )}
       </div>

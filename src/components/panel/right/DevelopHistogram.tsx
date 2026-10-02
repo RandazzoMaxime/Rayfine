@@ -44,14 +44,14 @@ export default function DevelopHistogram() {
         dragStartRef.current = {};
         return;
       }
-      const key = region === 'exposure' ? 'brightness' : region;
+      const key = region === 'exposure' ? 'exposure' : region;
       setAdjustments((prev: Adjustments) => {
         if (dragStartRef.current[key] === undefined) {
           dragStartRef.current[key] = Number((prev as any)[key] ?? 0);
         }
-        const scale = key === 'brightness' ? 0.02 : 0.45;
-        const min = key === 'brightness' ? -5 : -100;
-        const max = key === 'brightness' ? 5 : 100;
+        const scale = key === 'exposure' ? 0.02 : 0.45;
+        const min = key === 'exposure' ? -5 : -100;
+        const max = key === 'exposure' ? 5 : 100;
         const next = clamp(dragStartRef.current[key] + deltaX * scale, min, max);
         dragStartRef.current[key] = next;
         return { ...prev, [key]: next };

@@ -1,4 +1,5 @@
 import clsx from 'clsx';
+import { useEffect } from 'react';
 import { LayoutGrid, Pipette } from 'lucide-react';
 import Slider from '../ui/Slider';
 import PanelSelect from '../ui/PanelSelect';
@@ -7,7 +8,7 @@ import { useTranslation } from 'react-i18next';
 import { useEditorActions } from '../../hooks/useEditorActions';
 import { useUIStore } from '../../store/useUIStore';
 import { useEditorStore } from '../../store/useEditorStore';
-import { ALL_CAMERA_PROFILES } from '../../utils/cameraProfiles';
+import { ALL_CAMERA_PROFILES, normalizeCameraProfile } from '../../utils/cameraProfiles';
 import { asShotKelvinFrom, kelvinToRelativeTemp, relativeTempToKelvin } from '../../utils/whiteBalance';
 
 interface BasicAdjustmentsProps {
@@ -18,6 +19,7 @@ interface BasicAdjustmentsProps {
   appSettings?: any;
   isWbPickerActive?: boolean;
   toggleWbPicker?: () => void;
+  detectedCameraProfile?: string;
 }
 
 const WB_PRESETS: Record<string, { temperature: number; tint: number } | null> = {
@@ -37,7 +39,7 @@ const CAMERA_PROFILES = ALL_CAMERA_PROFILES.map((p) => p.name);
 
 function SubHeading({ children }: { children: React.ReactNode }) {
   return (
-    <div className="mt-1.5 mb-0.5 pt-1 border-t border-border-color/40 text-[10px] font-medium text-text-primary/80">{children}</div>
+    <div className="mt-1.5 mb-1 pt-1.5 border-t border-border-color/40 text-[10px] font-medium leading-5 text-text-primary/80">{children}</div>
   );
 }
 
@@ -49,6 +51,7 @@ export default function BasicAdjustments({
   appSettings,
   isWbPickerActive = false,
   toggleWbPicker,
+  detectedCameraProfile,
 }: BasicAdjustmentsProps) {
   const { t } = useTranslation();
   const { handleAutoAdjustments } = useEditorActions();
@@ -74,17 +77,28 @@ export default function BasicAdjustments({
 
   const isWgpuEnabled = appSettings?.useWgpuRenderer !== false;
   const isBlackAndWhite = !!(adjustments as any).convertToGrayscale;
+  const rawProfile = String((adjustments as any).cameraProfile || '');
   const asShotK = asShotKelvinFrom(adjustments as any);
   const setTreatment = (bw: boolean) =>
     setAdjustments((prev: Partial<Adjustments>) => ({
       ...prev,
       convertToGrayscale: bw,
-      saturation: bw ? -100 : prev.saturation === -100 ? 0 : prev.saturation,
+      cameraProfile: bw ? 'Monochrome' : detectedCameraProfile || 'Standard',
     }));
 
   const currentWb = String((adjustments as any).whiteBalance || 'As Shot');
   const wbValue = Object.keys(WB_PRESETS).find((k) => k.toLowerCase() === currentWb.toLowerCase()) || 'Custom';
-  const currentProfile = String((adjustments as any).cameraProfile || 'Adobe Standard');
+  const currentProfile = normalizeCameraProfile((adjustments as any).cameraProfile);
+  const cameraProfileOptions = detectedCameraProfile ? [...CAMERA_PROFILES, detectedCameraProfile] : CAMERA_PROFILES;
+  const selectedProfile = currentProfile === 'Monochrome'
+    ? 'Monochrome'
+    : ((adjustments as any).cameraProfile === detectedCameraProfile && detectedCameraProfile ? detectedCameraProfile : 'Standard');
+
+  useEffect(() => {
+    if (detectedCameraProfile && (!rawProfile || rawProfile.toLowerCase() === 'adobe standard')) {
+      setAdjustments((prev: Partial<Adjustments>) => ({ ...prev, cameraProfile: detectedCameraProfile }));
+    }
+  }, [detectedCameraProfile, rawProfile, setAdjustments]);
   const isHdr = !!(adjustments as any).hdrEditMode;
 
   return (
@@ -135,13 +149,17 @@ export default function BasicAdjustments({
           </div>
 
           <div className="grid grid-cols-[7rem_minmax(0,1fr)_2.35rem] items-center gap-x-1 mb-1">
-            <span className="text-[11px] font-medium text-text-primary text-right leading-none truncate">
+            <span className="text-[11px] font-medium text-text-primary text-right leading-5 py-px truncate">
               {t('adjustments.color.cameraProfile' as any, { defaultValue: 'Profil' })}
             </span>
             <PanelSelect
-              value={CAMERA_PROFILES.find((p) => p.toLowerCase() === currentProfile.toLowerCase()) || CAMERA_PROFILES[0]}
-              options={CAMERA_PROFILES.map((o) => ({ label: o, value: o }))}
-              onChange={(v) => setAdjustments((prev: Partial<Adjustments>) => ({ ...prev, cameraProfile: v }))}
+              value={selectedProfile}
+              options={cameraProfileOptions.map((o) => ({ label: o, value: o }))}
+              onChange={(v) => setAdjustments((prev: Partial<Adjustments>) => ({
+                ...prev,
+                cameraProfile: v,
+                convertToGrayscale: v === 'Monochrome',
+              }))}
             />
             <button
               type="button"
@@ -175,7 +193,7 @@ export default function BasicAdjustments({
                   <Pipette size={12} />
                 </button>
               )}
-              <span className="text-[11px] font-medium text-text-primary text-right leading-none truncate">
+              <span className="text-[11px] font-medium text-text-primary text-right leading-5 py-px truncate">
                 {t('adjustments.color.wbShort' as any, { defaultValue: 'BB' })}
               </span>
             </div>
@@ -230,9 +248,9 @@ export default function BasicAdjustments({
         label={t('adjustments.basic.exposure')}
         max={5}
         min={-5}
-        onChange={(e: any) => handleAdjustmentChange(BasicAdjustment.Brightness, e.target.value)}
+        onChange={(e: any) => handleAdjustmentChange(BasicAdjustment.Exposure, e.target.value)}
         step={0.01}
-        value={adjustments.brightness}
+        value={adjustments.exposure}
         onDragStateChange={onDragStateChange}
         emphasized={histogramToneRegion === 'exposure'}
       />

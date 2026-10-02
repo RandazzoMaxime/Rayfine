@@ -261,11 +261,7 @@ const Graticule = ({ mode }: { mode: string }) => {
           key={l}
           className={vertical ? 'absolute top-0 bottom-0 border-l border-white/10' : 'absolute left-0 right-0 border-t border-white/10'}
           style={vertical ? { left: `${l}%` } : { bottom: `${l}%` }}
-        >
-          {!vertical && (
-            <span className="absolute left-0.5 -top-3 text-[8px] leading-none text-white/35 tabular-nums">{l}</span>
-          )}
-        </div>
+        />
       ))}
       {mode === DisplayMode.Parade && (
         <>
@@ -380,64 +376,75 @@ export default function Waveform({
           </button>
         ))}
       </div>
-      <div
-        className="relative flex-1 min-h-0 bg-black rounded overflow-hidden border border-border-color/40"
-        style={{ filter: isLightTheme ? 'invert(1) hue-rotate(180deg)' : undefined }}
-      >
-        {isHistogram && (
-          <>
-            <ClipTriangle
-              side="left"
-              active={!!showShadowClipping}
-              hasClip={shadowClip}
-              onClick={() => onToggleShadowClipping?.()}
-              tooltip={t('ui.waveform.tooltips.shadowClipping' as any, {
-                defaultValue: 'Shadow clipping',
-              })}
-            />
-            <ClipTriangle
-              side="right"
-              active={!!showHighlightClipping}
-              hasClip={highlightClip}
-              onClick={() => onToggleHighlightClipping?.()}
-              tooltip={t('ui.waveform.tooltips.highlightClipping' as any, {
-                defaultValue: 'Highlight clipping',
-              })}
-            />
-          </>
+      <div className="flex flex-1 min-h-0">
+        {!isHistogram && !isVectorscope && (
+          <div className="w-6 shrink-0 h-full py-1.5 flex flex-col-reverse justify-between items-end pr-1 select-none">
+            {[0, 25, 50, 75, 100].map((l) => (
+              <span key={l} className="text-[8px] leading-none text-text-secondary tabular-nums">
+                {l}
+              </span>
+            ))}
+          </div>
         )}
-        <div className="absolute inset-x-1.5 top-3 bottom-1.5">
-          {isHistogram ? (
-            <div
-              ref={plotRef}
-              className="absolute inset-0 cursor-ew-resize"
-              onPointerDown={handlePointerDown}
-              onPointerMove={handlePointerMove}
-              onPointerUp={endDrag}
-              onPointerCancel={endDrag}
-              onPointerLeave={() => {
-                if (!dragRef.current) {
-                  setHoverRegion(null);
-                  onHistogramRegionChange?.(null);
-                }
-              }}
-            >
-              <HistogramView histogram={histogram} activeRegion={hoverRegion} />
-              {hoverRegion && (
-                <div
-                  className="absolute bottom-1 z-10 pointer-events-none -translate-x-1/2 px-1.5 py-0.5 rounded bg-black/75 text-[10px] leading-none text-white whitespace-nowrap"
-                  style={{ left: `${hoverLabelLeft}%` }}
-                >
-                  {t(`adjustments.basic.${hoverRegion}` as any)}
-                </div>
-              )}
-            </div>
-          ) : activeData ? (
-            <div className="absolute inset-0">
-              <WaveformCanvas base64Data={activeData} width={width} height={height} isVectorscope={isVectorscope} />
-            </div>
-          ) : null}
-          <Graticule mode={displayMode} />
+        <div
+          className="relative flex-1 min-w-0 min-h-0 bg-black rounded overflow-hidden border border-border-color/40"
+          style={{ filter: isLightTheme ? 'invert(1) hue-rotate(180deg)' : undefined }}
+        >
+          {isHistogram && (
+            <>
+              <ClipTriangle
+                side="left"
+                active={!!showShadowClipping}
+                hasClip={shadowClip}
+                onClick={() => onToggleShadowClipping?.()}
+                tooltip={t('ui.waveform.tooltips.shadowClipping' as any, {
+                  defaultValue: 'Shadow clipping',
+                })}
+              />
+              <ClipTriangle
+                side="right"
+                active={!!showHighlightClipping}
+                hasClip={highlightClip}
+                onClick={() => onToggleHighlightClipping?.()}
+                tooltip={t('ui.waveform.tooltips.highlightClipping' as any, {
+                  defaultValue: 'Highlight clipping',
+                })}
+              />
+            </>
+          )}
+          <div className={`absolute inset-0 ${isHistogram ? 'mx-1.5 my-1' : 'p-1.5'}`}>
+            {isHistogram ? (
+              <div
+                ref={plotRef}
+                className="absolute inset-0 cursor-ew-resize"
+                onPointerDown={handlePointerDown}
+                onPointerMove={handlePointerMove}
+                onPointerUp={endDrag}
+                onPointerCancel={endDrag}
+                onPointerLeave={() => {
+                  if (!dragRef.current) {
+                    setHoverRegion(null);
+                    onHistogramRegionChange?.(null);
+                  }
+                }}
+              >
+                <HistogramView histogram={histogram} activeRegion={hoverRegion} />
+                {hoverRegion && (
+                  <div
+                    className="absolute bottom-1 z-10 pointer-events-none -translate-x-1/2 px-1.5 py-0.5 rounded bg-black/75 text-[10px] leading-none text-white whitespace-nowrap"
+                    style={{ left: `${hoverLabelLeft}%` }}
+                  >
+                    {t(`adjustments.basic.${hoverRegion}` as any)}
+                  </div>
+                )}
+              </div>
+            ) : activeData ? (
+              <div className="absolute inset-0">
+                <WaveformCanvas base64Data={activeData} width={width} height={height} isVectorscope={isVectorscope} />
+              </div>
+            ) : null}
+            <Graticule mode={displayMode} />
+          </div>
         </div>
       </div>
     </div>

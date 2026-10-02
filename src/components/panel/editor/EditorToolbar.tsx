@@ -1,5 +1,5 @@
 import { memo, useState, useEffect, useRef, useMemo } from 'react';
-import { Eye, EyeOff, ArrowLeft, Maximize, Loader2, Undo, Redo, Columns2, Printer, Info } from 'lucide-react';
+import { Eye, EyeOff, ArrowLeft, Maximize, Loader2, Undo, Redo, Columns2, Info } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import clsx from 'clsx';
 import { useTranslation } from 'react-i18next';
@@ -24,8 +24,6 @@ interface EditorToolbarProps {
   onToggleShowOriginal(): void;
   onToggleBeforeAfterSplit?(opts?: { cycleOrientation?: boolean }): void;
   beforeAfterSplit?: boolean;
-  softProofing?: boolean;
-  onToggleSoftProofing?(): void;
   onUndo(): void;
   selectedImage: SelectedImage;
   showOriginal: boolean;
@@ -49,8 +47,6 @@ const EditorToolbar = memo(
     onToggleShowOriginal,
     onToggleBeforeAfterSplit,
     beforeAfterSplit = false,
-    softProofing = false,
-    onToggleSoftProofing,
     onUndo,
     selectedImage,
     showOriginal,
@@ -235,6 +231,7 @@ const EditorToolbar = memo(
           transformScale: 'Transform Scale',
           transformXOffset: 'Transform X Offset',
           transformYOffset: 'Transform Y Offset',
+          anamorphicSqueeze: 'Anamorphic',
           colorGrading: 'Color Grading',
           colorCalibration: 'Color Calibration',
           toneMapper: 'Tone Mapper',
@@ -728,21 +725,6 @@ const EditorToolbar = memo(
             })}
           >
             <Columns2 size={18} />
-          </button>
-          <button
-            className={clsx(
-              'p-2 rounded-full transition-colors',
-              softProofing
-                ? 'bg-amber-600/90 text-white hover:bg-amber-500'
-                : 'bg-surface hover:bg-card-active text-text-primary',
-            )}
-            onClick={() => onToggleSoftProofing?.()}
-            onKeyDown={handleButtonKeyDown}
-            data-tooltip={t('editor.toolbar.tooltips.softProof' as any, {
-              defaultValue: 'Soft Proofing',
-            })}
-          >
-            <Printer size={18} />
           </button>
           <button
             className="bg-surface text-text-primary p-2 rounded-full hover:bg-card-active transition-colors disabled:opacity-50 disabled:cursor-not-allowed relative"

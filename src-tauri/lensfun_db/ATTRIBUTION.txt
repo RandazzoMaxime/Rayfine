@@ -1,0 +1,10 @@
+Rayfine Lensfun camera and lens correction data
+
+Source: Lensfun database, https://github.com/lensfun/lensfun/tree/bbd4332a9ec566fd9aa548c9e0d8ced238c56261/data/db
+Upstream revision: bbd4332a9ec566fd9aa548c9e0d8ced238c56261 (2026-09-24)
+Upstream project: Lensfun contributors
+License: Creative Commons Attribution-ShareAlike 3.0 Unported (CC BY-SA 3.0)
+License text: COPYING.CC_BY-SA_3.0
+
+The bundled XML data files are Lensfun database content. Changes and local
+corrections to these files must retain this attribution and license notice.

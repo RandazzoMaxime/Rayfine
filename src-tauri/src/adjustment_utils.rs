@@ -1,4 +1,4 @@
-use image::DynamicImage;
+use image::{DynamicImage, GenericImageView};
 use std::borrow::Cow;
 use std::collections::HashMap;
 
@@ -118,4 +118,25 @@ pub fn apply_all_transformations<'a, I: IntoCowImage<'a>>(
     log::info!("apply_all_transformations took {:.2?}", total_duration);
 
     (cropped_image, unscaled_crop_offset)
+}
+
+pub fn anamorphic_squeeze(adjustments: &serde_json::Value) -> f64 {
+    adjustments
+        .get("anamorphicSqueeze")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(1.0)
+}
+
+/// Stretch width by the unsqueeze factor. Call after develop, on export / still previews.
+pub fn apply_anamorphic_unsqueeze(image: DynamicImage, adjustments: &serde_json::Value) -> DynamicImage {
+    let squeeze = anamorphic_squeeze(adjustments);
+    if squeeze <= 1.001 {
+        return image;
+    }
+    let (w, h) = image.dimensions();
+    let new_w = ((w as f64) * squeeze).round().clamp(1.0, 65500.0) as u32;
+    if new_w == w {
+        return image;
+    }
+    image.resize_exact(new_w, h, image::imageops::FilterType::Lanczos3)
 }

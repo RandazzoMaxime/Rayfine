@@ -14,8 +14,10 @@ import { useProcessStore } from '../../../store/useProcessStore';
 import { ImageFile } from '../../ui/AppProperties';
 import { COLOR_LABELS, Color } from '../../../utils/adjustments';
 import { generateLibraryPreview } from '../../../utils/libraryPreview';
+import { loupeImageSrc } from '../../../utils/loupeDisplay';
 import CheckBox from '../../ui/CheckBox';
 import { useLibraryStore } from '../../../store/useLibraryStore';
+import { isLoupeLetterboxClick } from '../../../utils/loupeExit';
 
 /**
  * Lightroom Classic–style Loupe (single-image) library view.
@@ -34,6 +36,7 @@ interface LoupeViewProps {
   onRate?(rate: number, paths?: string[]): void;
   onSetColorLabel?(color: string | null, paths?: string[]): void;
   onSetFlag?(flag: 'pick' | 'reject' | null, paths?: string[]): void;
+  onExitToGrid?(): void;
 }
 
 export default function LoupeView({
@@ -48,6 +51,7 @@ export default function LoupeView({
   onRate,
   onSetColorLabel,
   onSetFlag,
+  onExitToGrid,
 }: LoupeViewProps) {
   const { t } = useTranslation();
   const included = !!(activePath && multiSelectedPaths.includes(activePath));
@@ -88,12 +92,17 @@ export default function LoupeView({
 
   const thumbUrl = useProcessStore((s) => (path ? s.thumbnails[path] : undefined));
   const preview = useProcessStore((s) => (path ? s.previews[path] : undefined));
-  const src = preview?.url || thumbUrl;
+  const src = loupeImageSrc({
+    previewUrl: preview?.url,
+    thumbUrl,
+    isRaw: !!image?.is_raw,
+    isEdited: !!image?.is_edited,
+  });
 
   useEffect(() => {
-    if (!path) return;
-    generateLibraryPreview(path);
-  }, [path]);
+    const paths = [path, prev?.path, next?.path].filter(Boolean) as string[];
+    for (const p of paths) generateLibraryPreview(p);
+  }, [path, prev?.path, next?.path]);
 
   useEffect(() => {
     setZoom(1);
@@ -147,6 +156,13 @@ export default function LoupeView({
       )
         return;
       if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      if (e.key === 'Escape') {
+        if (!onExitToGrid) return;
+        e.preventDefault();
+        e.stopPropagation();
+        onExitToGrid();
+        return;
+      }
       if (e.key === 'i' || e.key === 'I') {
         e.preventDefault();
         e.stopPropagation();
@@ -155,7 +171,7 @@ export default function LoupeView({
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, []);
+  }, [onExitToGrid]);
 
   const rating = path ? imageRatings[path] || image?.rating || 0 : 0;
   const colorTag = image?.tags?.find((tg) => tg.startsWith('color:'))?.substring(6);
@@ -261,7 +277,15 @@ export default function LoupeView({
       <div
         ref={stageRef}
         className="flex-1 min-h-0 relative flex items-center justify-center rounded-md border border-border-color/35 bg-[#121212] overflow-hidden"
-        style={{ cursor: canPan ? 'grab' : 'default' }}
+        style={{ cursor: canPan ? 'grab' : onExitToGrid ? 'pointer' : 'default' }}
+        onClick={(e) => {
+          if (
+            onExitToGrid &&
+            isLoupeLetterboxClick({ target: e.target, stage: e.currentTarget, zoom })
+          ) {
+            onExitToGrid();
+          }
+        }}
         onMouseDown={(e) => {
           if (!canPan || e.button !== 0) return;
           e.preventDefault();
@@ -286,7 +310,8 @@ export default function LoupeView({
           <img
             src={src}
             alt={name}
-            className="select-none max-w-full max-h-full object-contain will-change-transform"
+            key={path}
+            className="block select-none w-full h-full object-contain will-change-transform cursor-default"
             draggable={false}
             style={
               zoom > 1.01
@@ -304,7 +329,9 @@ export default function LoupeView({
           />
         ) : (
           <div className="text-[12px] text-white/30 uppercase tracking-wider">
-            {t('library.loupe.empty', { defaultValue: 'Select a photo' })}
+            {path
+              ? t('library.loupe.loading', { defaultValue: 'Loading' })
+              : t('library.loupe.empty', { defaultValue: 'Select a photo' })}
           </div>
         )}
 

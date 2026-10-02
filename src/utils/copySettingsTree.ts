@@ -59,7 +59,7 @@ export const COPY_SETTINGS_COLUMNS: CopySettingsNode[][] = [
         {
           id: 'sharpen',
           labelKey: 'modals.copyPaste.tree.sharpening',
-          keys: ['sharpness', 'sharpnessThreshold'],
+          keys: ['sharpness', 'sharpenRadius', 'sharpenDetail', 'sharpenMasking'],
         },
         { id: 'lumaNr', labelKey: 'modals.copyPaste.tree.lumaNr', keys: ['lumaNoiseReduction'] },
         { id: 'colorNr', labelKey: 'modals.copyPaste.tree.colorNr', keys: ['colorNoiseReduction'] },
@@ -115,6 +115,7 @@ export const COPY_SETTINGS_COLUMNS: CopySettingsNode[][] = [
             'transformYOffset',
           ],
         },
+        { id: 'anamorphic', labelKey: 'modals.copyPaste.tree.anamorphic', keys: ['anamorphicSqueeze'] },
       ],
     },
   ],

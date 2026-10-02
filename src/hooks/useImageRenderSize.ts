@@ -12,6 +12,8 @@ export interface RenderSize {
   offsetX: number;
   offsetY: number;
   scale: number;
+  scaleX: number;
+  scaleY: number;
   width: number;
 }
 
@@ -19,6 +21,8 @@ const DEFAULT_SIZE: RenderSize = {
   width: 0,
   height: 0,
   scale: 1,
+  scaleX: 1,
+  scaleY: 1,
   offsetX: 0,
   offsetY: 0,
   containerWidth: 0,
@@ -28,10 +32,12 @@ const DEFAULT_SIZE: RenderSize = {
 export const useImageRenderSize = (
   containerRef: React.RefObject<HTMLElement | null>,
   imageDimensions: ImageDimensions | null,
+  pixelAspectX = 1,
 ) => {
   const [renderSize, setRenderSize] = useState<RenderSize>(DEFAULT_SIZE);
   const imgWidth = imageDimensions?.width;
   const imgHeight = imageDimensions?.height;
+  const aspectX = Number.isFinite(pixelAspectX) && pixelAspectX > 1.01 ? pixelAspectX : 1;
 
   useLayoutEffect(() => {
     const container = containerRef.current;
@@ -43,7 +49,7 @@ export const useImageRenderSize = (
 
     const updateSize = () => {
       const { clientWidth: containerWidth, clientHeight: containerHeight } = container;
-      const imageAspectRatio = imgWidth / imgHeight;
+      const imageAspectRatio = (imgWidth * aspectX) / imgHeight;
       const containerAspectRatio = containerWidth / containerHeight;
 
       let width, height;
@@ -57,8 +63,20 @@ export const useImageRenderSize = (
 
       const offsetX = (containerWidth - width) / 2;
       const offsetY = (containerHeight - height) / 2;
+      const scaleX = width / imgWidth;
+      const scaleY = height / imgHeight;
 
-      setRenderSize({ width, height, scale: width / imgWidth, offsetX, offsetY, containerWidth, containerHeight });
+      setRenderSize({
+        width,
+        height,
+        scale: scaleX,
+        scaleX,
+        scaleY,
+        offsetX,
+        offsetY,
+        containerWidth,
+        containerHeight,
+      });
     };
 
     updateSize();
@@ -70,7 +88,7 @@ export const useImageRenderSize = (
     resizeObserver.observe(container);
 
     return () => resizeObserver.disconnect();
-  }, [containerRef, imgWidth, imgHeight]);
+  }, [containerRef, imgWidth, imgHeight, aspectX]);
 
   return renderSize;
 };

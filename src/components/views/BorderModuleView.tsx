@@ -7,7 +7,10 @@ import { Download, Frame, Loader2, Trash2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 import ModuleShell from './ModuleShell';
-import BorderTemplatesPanel, { BorderTemplatesRail } from '../panel/BorderTemplatesPanel';
+import BorderTemplatesPanel from '../panel/BorderTemplatesPanel';
+import MapCollectionsPanel from '../panel/MapCollectionsPanel';
+import { useModuleCollectionSource } from '../../hooks/useModuleCollectionSource';
+import { placedFromCollection } from '../../utils/moduleCollectionSource';
 import Slider from '../ui/Slider';
 import { useLibraryStore } from '../../store/useLibraryStore';
 import { useProcessStore } from '../../store/useProcessStore';
@@ -25,8 +28,7 @@ import {
 
 interface Props {
   onBackToLibrary(): void;
-  /** Current folder in Library display order. */
-  imageList: ImageFile[];
+  imageList?: ImageFile[];
   onRequestThumbnails?(paths: string[]): void;
 }
 
@@ -78,9 +80,10 @@ function timestamp(): string {
  * Border module — social-media borders and multi-photo layouts. Photos are contain-fitted into
  * template cells over a solid border colour and exported as JPEG.
  */
-export default function BorderModuleView({ onBackToLibrary, imageList, onRequestThumbnails }: Props) {
+export default function BorderModuleView({ onBackToLibrary, onRequestThumbnails }: Props) {
   const { t } = useTranslation();
   const thumbs = useProcessStore((s) => s.thumbnails);
+  const { albumId, setAlbumId, images: imageList, albumTree } = useModuleCollectionSource();
   const { developLeftPanelWidth, isInstantTransition } = useUIStore(
     useShallow((s) => ({
       developLeftPanelWidth: s.developLeftPanelWidth,
@@ -88,23 +91,27 @@ export default function BorderModuleView({ onBackToLibrary, imageList, onRequest
     })),
   );
 
-  // Pre-fill with the Library's checked photos (display order), else the active photo.
-  const [initialPlaced] = useState<string[]>(() => {
-    const { multiSelectedPaths, libraryActivePath } = useLibraryStore.getState();
-    const order = new Map(imageList.map((img, i) => [img.path, i]));
-    const rank = (p: string) => order.get(p) ?? Number.MAX_SAFE_INTEGER;
-    let paths = Array.from(new Set(multiSelectedPaths || []));
-    if (paths.length === 0 && libraryActivePath) paths = [libraryActivePath];
-    return paths.sort((a, b) => rank(a) - rank(b)).slice(0, BORDER_MAX_PHOTOS);
-  });
-  const [placed, setPlaced] = useState<string[]>(initialPlaced);
-  const [template, setTemplate] = useState<TemplateRef>({ count: Math.max(1, initialPlaced.length), index: 0 });
+  const [placed, setPlaced] = useState<string[]>([]);
+  const [template, setTemplate] = useState<TemplateRef>({ count: 1, index: 0 });
   const [aspectId, setAspectId] = useState('4:5');
   const [marginPct, setMarginPct] = useState(DEFAULT_MARGIN);
   const [color, setColor] = useState('#ffffff');
   const [exportSize, setExportSize] = useState(2160);
   const [exporting, setExporting] = useState(false);
-  const [showLeft, setShowLeft] = useState(true);
+
+  useEffect(() => {
+    const { multiSelectedPaths, libraryActivePath } = useLibraryStore.getState();
+    const order = new Map(imageList.map((img, i) => [img.path, i]));
+    const rank = (p: string) => order.get(p) ?? Number.MAX_SAFE_INTEGER;
+    const next = placedFromCollection({
+      collectionPaths: imageList.map((img) => img.path),
+      multiSelectedPaths: multiSelectedPaths || [],
+      libraryActivePath,
+      max: BORDER_MAX_PHOTOS,
+    }).sort((a, b) => rank(a) - rank(b));
+    setPlaced(next);
+    setTemplate({ count: Math.max(1, next.length), index: 0 });
+  }, [albumId, imageList]);
 
   const aspect = BORDER_ASPECTS.find((a) => a.id === aspectId) ?? BORDER_ASPECTS[1];
   const layout = getBorderLayout(template);
@@ -433,18 +440,29 @@ export default function BorderModuleView({ onBackToLibrary, imageList, onRequest
         icon={Frame}
         onBackToLibrary={onBackToLibrary}
         leftPanel={
-          showLeft ? (
-            <BorderTemplatesPanel
-              width={developLeftPanelWidth || 220}
-              isInstantTransition={isInstantTransition}
-              aspect={aspect}
-              active={template}
-              onSelect={setTemplate}
-              onHide={() => setShowLeft(false)}
-            />
-          ) : (
-            <BorderTemplatesRail onShow={() => setShowLeft(true)} />
-          )
+          <div
+            className="h-full flex flex-col gap-2 shrink-0"
+            style={{ width: developLeftPanelWidth || 220 }}
+          >
+            <div className="flex-1 min-h-0">
+              <MapCollectionsPanel
+                width={developLeftPanelWidth || 220}
+                isInstantTransition={isInstantTransition}
+                albumTree={albumTree}
+                activeAlbumId={albumId}
+                onSelect={setAlbumId}
+              />
+            </div>
+            <div className="flex-1 min-h-0">
+              <BorderTemplatesPanel
+                width={developLeftPanelWidth || 220}
+                isInstantTransition={isInstantTransition}
+                aspect={aspect}
+                active={template}
+                onSelect={setTemplate}
+              />
+            </div>
+          </div>
         }
         right={
           <>
@@ -647,7 +665,7 @@ export default function BorderModuleView({ onBackToLibrary, imageList, onRequest
         </div>
       </ModuleShell>
 
-      {/* Bottom strip — current folder in Library order */}
+      {/* Bottom strip — selected collection only */}
       <div
         data-border-strip
         className={clsx(
@@ -660,7 +678,11 @@ export default function BorderModuleView({ onBackToLibrary, imageList, onRequest
       >
         {imageList.length === 0 ? (
           <div className="px-2 text-[11px] text-text-secondary">
-            {t('ui.border.noPhotos' as any, { defaultValue: 'No photos in the current folder.' })}
+            {t('ui.border.noPhotos' as any, {
+              defaultValue: albumId
+                ? 'No photos in this collection.'
+                : 'Select a collection to place photos.',
+            })}
           </div>
         ) : (
           imageList.map((img) => {

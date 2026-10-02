@@ -41,3 +41,12 @@ src-tauri/libs/
 
 # bench/replay.js result dumps
 bench/out/
+bench/lr-compare/out/
+bench/lr-compare/native-light-probes/
+bench/lr-compare/ghidra/
+bench/lr-compare/sharpen-probes/
+bench/lr-compare/probe_*.py
+bench/lr-compare/compare_demosaic.py
+bench/lr-compare/light-response-diagnostic.json
+__pycache__/
+src-tauri/target-codex-verify/

@@ -727,6 +727,31 @@ struct FlareParams {
     _pad: f32,
 }
 
+struct DehazeGpuData {
+    source_key: u64,
+    generation: u64,
+    width: u32,
+    height: u32,
+    airlight: [f32;3],
+    _texture: wgpu::Texture,
+    view: wgpu::TextureView,
+}
+
+struct RawToneData {
+    source_key: u64,
+    generation: u64,
+    width: u32,
+    height: u32,
+    stats: crate::raw_tone::SceneStats,
+    mask: Option<RawToneMask>,
+}
+
+struct RawToneMask {
+    _texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    parameters: [f32;16],
+}
+
 pub struct GpuProcessor {
     context: GpuContext,
     blur_bgl: wgpu::BindGroupLayout,
@@ -771,6 +796,9 @@ pub struct GpuProcessor {
     /// tile w, tile h, radius) it currently holds. Blurs depend only on the input image, not
     /// on slider values, so slider drags re-use them instead of recomputing.
     blur_keys: std::sync::Mutex<[Option<(u64, u32, u32, u32, u32, u32)>; 4]>,
+    dehaze_data: std::sync::Mutex<Option<DehazeGpuData>>,
+    raw_tone_data: std::sync::Mutex<Option<RawToneData>>,
+    raw_tone_params_buffer: wgpu::Buffer,
 }
 
 const FLARE_MAP_SIZE: u32 = 512;
@@ -796,6 +824,18 @@ fn main_shader_source() -> std::borrow::Cow<'static, str> {
         return src.into();
     }
     include_str!("shaders/shader.wgsl").into()
+}
+
+pub(crate) fn requires_guided_dehaze(a: &AllAdjustments) -> bool {
+    a.global.is_raw_image == 1 && (a.global.dehaze > 0.0001 ||
+        a.mask_adjustments[..(a.mask_count as usize).min(a.mask_adjustments.len())]
+            .iter().any(|m| m.dehaze > 0.0001))
+}
+
+pub(crate) fn requires_raw_tone_mask(a: &AllAdjustments) -> bool {
+    a.global.is_raw_image == 1 && a.global.tonemapper_mode == 0 &&
+        (a.global.shadows.abs()>0.0001 || a.global.clarity>0.0001 ||
+            a.mask_adjustments[..(a.mask_count as usize).min(a.mask_adjustments.len())].iter().any(|m| m.shadows.abs()>0.0001 || m.clarity>0.0001))
 }
 /// Images are processed in tiles; tile-scoped GPU textures never need to exceed one tile plus overlap.
 const TILE_SIZE: u32 = 2048;
@@ -1154,6 +1194,23 @@ impl GpuProcessor {
             count: None,
         });
 
+        bind_group_layout_entries.push(wgpu::BindGroupLayoutEntry {
+            binding: 12,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float {filterable:false},
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled:false,
+            },count:None,
+        });
+        bind_group_layout_entries.push(wgpu::BindGroupLayoutEntry {
+            binding:13,visibility:wgpu::ShaderStages::COMPUTE,
+            ty:wgpu::BindingType::Buffer {ty:wgpu::BufferBindingType::Uniform,has_dynamic_offset:false,min_binding_size:None},count:None,
+        });
+        bind_group_layout_entries.push(wgpu::BindGroupLayoutEntry {
+            binding:14,visibility:wgpu::ShaderStages::COMPUTE,
+            ty:wgpu::BindingType::Texture {sample_type:wgpu::TextureSampleType::Float {filterable:false},view_dimension:wgpu::TextureViewDimension::D2,multisampled:false},count:None,
+        });
         let main_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Main BGL"),
             entries: &bind_group_layout_entries,
@@ -1179,6 +1236,10 @@ impl GpuProcessor {
             size: std::mem::size_of::<AllAdjustments>() as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
+        });
+        let raw_tone_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label:Some("Raw ToneMap scene parameters"),size:64,
+            usage:wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,mapped_at_creation:false,
         });
 
         let dummy_texture_desc = wgpu::TextureDescriptor {
@@ -1347,7 +1408,77 @@ impl GpuProcessor {
             has_display: with_display,
             input_generation: std::sync::atomic::AtomicU64::new(0),
             blur_keys: std::sync::Mutex::new([None; 4]),
+            dehaze_data: std::sync::Mutex::new(None),
+            raw_tone_data: std::sync::Mutex::new(None),
+            raw_tone_params_buffer,
         })
+    }
+
+    pub(crate) fn prepare_raw_tone(&self, image: &DynamicImage, source_key: u64, need_mask: bool) {
+        let (width,height) = image.dimensions();
+        let generation = self.input_generation.load(std::sync::atomic::Ordering::Relaxed);
+        let mut cache = self.raw_tone_data.lock().unwrap();
+        if cache.as_ref().is_some_and(|d| d.source_key == source_key && d.generation == generation && d.width == width && d.height == height && (!need_mask || d.mask.is_some())) {
+            return;
+        }
+        let mask = if need_mask {
+            let ratio=(1600.0/width.max(height) as f32).min(1.0);
+            let (mw,mh)=((width as f32*ratio).round().max(1.0) as u32,(height as f32*ratio).round().max(1.0) as u32);
+            let proxy=if (mw,mh)==(width,height) {image.clone()} else {image.resize_exact(mw,mh,image::imageops::FilterType::Triangle)};
+            let rgb=proxy.to_rgb32f();
+            let logs:Vec<f32>=rgb.pixels().map(|p| crate::raw_tone::basic_log_luminance(p.0) as f32).collect();
+            let maps=crate::tonemap::prepare(&logs,mw,mh);
+            let a=&maps.source; let b=&maps.filtered_stats;
+            let shift=a.anchor-b.anchor;
+            let factor=(0.125+0.375*(a.skew.abs()-0.5)).clamp(0.125,0.5);
+            let pin=(5.0-(a.max-a.mean_filtered)).clamp(0.0,1.0);
+            let parameters=[a.anchor,a.low,a.high,1.0/4096.0,b.low+shift,b.high+shift,factor,pin,
+                0.0,-12.0,1.0/(4096.0*128.0),1.0,0.0,0.0,0.0,0.0];
+            let texture=self.context.device.create_texture_with_data(&self.context.queue,&wgpu::TextureDescriptor {
+                label:Some("Raw ToneMap delta mask"),size:wgpu::Extent3d {width:mw,height:mh,depth_or_array_layers:1},
+                mip_level_count:1,sample_count:1,dimension:wgpu::TextureDimension::D2,format:wgpu::TextureFormat::R32Float,
+                usage:wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,view_formats:&[],
+            },TextureDataOrder::MipMajor,bytemuck::cast_slice(&maps.mask));
+            let view=texture.create_view(&Default::default());
+            Some(RawToneMask {_texture:texture,view,parameters})
+        } else {None};
+        *cache = Some(RawToneData {source_key,generation,width,height,stats:crate::raw_tone::prepare(image),mask});
+    }
+
+    pub(crate) fn prepare_dehaze(&self, image: &DynamicImage, source_key: u64) {
+        let (width,height) = image.dimensions();
+        let generation = self.input_generation.load(std::sync::atomic::Ordering::Relaxed);
+        let mut cache = self.dehaze_data.lock().unwrap();
+        if let Some(data) = cache.as_mut() {
+            if data.source_key == source_key && data.width == width && data.height == height && data.generation == generation {
+                return;
+            }
+        }
+        let maps = crate::dehaze::prepare(image);
+        assert_eq!((maps.width,maps.height),(width,height));
+        let texture = self.context.device.create_texture_with_data(&self.context.queue,
+            &wgpu::TextureDescriptor {
+                label:Some("Guided dehaze transmission"),
+                size:wgpu::Extent3d {width,height,depth_or_array_layers:1},
+                mip_level_count:1,sample_count:1,dimension:wgpu::TextureDimension::D2,
+                format:wgpu::TextureFormat::R32Float,
+                usage:wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats:&[],
+            },TextureDataOrder::MipMajor,bytemuck::cast_slice(&maps.transmission));
+        let view = texture.create_view(&Default::default());
+        *cache = Some(DehazeGpuData {source_key,generation,width,height,
+            airlight:maps.airlight,_texture:texture,view});
+    }
+
+    #[cfg(test)]
+    pub(crate) fn read_display_pixels_for_test(&self, width: u32, height: u32) -> Result<Vec<u8>, String> {
+        read_texture_data_roi(&self.context.device, &self.context.queue, &self.working_texture,
+            wgpu::Origin3d::ZERO, wgpu::Extent3d {width, height, depth_or_array_layers: 1})
+    }
+
+    #[cfg(test)]
+    pub(crate) fn dehaze_airlight_for_test(&self) -> Option<[f32;3]> {
+        self.dehaze_data.lock().unwrap().as_ref().map(|d| d.airlight)
     }
 
     pub fn run(
@@ -1457,7 +1588,21 @@ impl GpuProcessor {
             (self.dummy_lut_view.clone(), self.dummy_lut_sampler.clone())
         };
 
-        let adjustments = request.adjustments;
+        let dehaze_guard = self.dehaze_data.lock().unwrap();
+        let generation = self.input_generation.load(std::sync::atomic::Ordering::Relaxed);
+        let dehaze = dehaze_guard.as_ref().filter(|d| d.width == width && d.height == height && d.generation == generation);
+        let mut adjustments = request.adjustments;
+        let raw_tone = self.raw_tone_data.lock().unwrap();
+        let key = raw_tone.as_ref().filter(|d| d.width == width && d.height == height && d.generation == generation)
+            .map(|d| d.stats.contrast_key).unwrap_or(0.18);
+        adjustments.global.set_raw_contrast_key(key);
+        let tone_mask=raw_tone.as_ref().filter(|d| d.width==width && d.height==height && d.generation==generation).and_then(|d| d.mask.as_ref());
+        let parameters=tone_mask.map(|m| m.parameters).unwrap_or([0.0;16]);
+        queue.write_buffer(&self.raw_tone_params_buffer,0,bytemuck::cast_slice(&parameters));
+        if requires_guided_dehaze(&adjustments) && dehaze.is_none() {
+            return Err("Positive RAW dehaze requires a prepared transmission map".to_string());
+        }
+        adjustments.global.set_dehaze_airlight(dehaze.map(|d| d.airlight));
 
         // Performance first: each blur pass is only run when an adjustment that reads it is
         // active (globally or in a mask). Default edits skip the expensive large-radius blurs.
@@ -1470,12 +1615,17 @@ impl GpuProcessor {
             || nz(g.centré)
             || g.halation_amount > 0.0
             || active_masks.iter().any(|m| nz(m.clarity) || m.halation_amount > 0.0);
+        let legacy_dehaze_blur = if g.is_raw_image == 1 {
+            g.dehaze < -1e-4 || active_masks.iter().any(|m| m.dehaze < -1e-4)
+        } else {
+            nz(g.dehaze) || active_masks.iter().any(|m| nz(m.dehaze))
+        };
         let need_structure_blur = nz(g.structure)
-            || nz(g.dehaze)
+            || legacy_dehaze_blur
             || g.glow_amount > 0.0
             || active_masks
                 .iter()
-                .any(|m| nz(m.structure) || nz(m.dehaze) || m.glow_amount > 0.0);
+                .any(|m| nz(m.structure) || m.glow_amount > 0.0);
         let need_tonal_blur = nz(g.contrast)
             || nz(g.shadows)
             || nz(g.whites)
@@ -1718,7 +1868,7 @@ impl GpuProcessor {
                     ok
                 };
                 let did_create_sharpness_blur =
-                    need_sharpness_blur && cached_blur(0, 1.0, &self.sharpness_blur_view);
+                    need_sharpness_blur && cached_blur(0, g.sharpen_radius(), &self.sharpness_blur_view);
                 let did_create_tonal_blur =
                     need_tonal_blur && cached_blur(1, 3.5, &self.tonal_blur_view);
                 let did_create_clarity_blur =
@@ -1813,6 +1963,12 @@ impl GpuProcessor {
                     binding: 10 + MAX_MASK_BINDINGS,
                     resource: wgpu::BindingResource::Sampler(&self.flare_sampler),
                 });
+                bind_group_entries.push(wgpu::BindGroupEntry {
+                    binding:12,
+                    resource:wgpu::BindingResource::TextureView(dehaze.map(|d| &d.view).unwrap_or(&self.dummy_blur_view)),
+                });
+                bind_group_entries.push(wgpu::BindGroupEntry {binding:13,resource:self.raw_tone_params_buffer.as_entire_binding()});
+                bind_group_entries.push(wgpu::BindGroupEntry {binding:14,resource:wgpu::BindingResource::TextureView(tone_mask.map(|m| &m.view).unwrap_or(&self.dummy_blur_view))});
 
                 let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("Tile Bind Group"),
@@ -2067,6 +2223,12 @@ fn process_and_get_dynamic_image_inner(
     }
 
     let cache = cache_lock.as_ref().unwrap();
+    if request.adjustments.global.is_raw_image == 1 && request.adjustments.global.tonemapper_mode == 0 {
+        processor.prepare_raw_tone(base_image,transform_hash,requires_raw_tone_mask(&request.adjustments));
+    }
+    if requires_guided_dehaze(&request.adjustments) {
+        processor.prepare_dehaze(base_image,transform_hash);
+    }
 
     let skip_readback = output_to_display;
 

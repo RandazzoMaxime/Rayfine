@@ -38,8 +38,8 @@ use crate::mask_generation::{MaskDefinition, generate_mask_bitmap};
 
 use crate::cache_utils::{calculate_full_job_hash, calculate_transform_hash};
 use crate::{
-    apply_all_transformations, generate_transformed_preview, get_cached_or_generate_mask,
-    hydrate_adjustments, load_settings, resolve_warped_image_for_masks,
+    apply_all_transformations, apply_anamorphic_unsqueeze, generate_transformed_preview,
+    get_cached_or_generate_mask, hydrate_adjustments, load_settings, resolve_warped_image_for_masks,
 };
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -896,6 +896,7 @@ fn process_image_for_export(
         "process_image_for_export",
         app_handle,
     )?;
+    let processed_image = apply_anamorphic_unsqueeze(processed_image, js_adjustments);
 
     apply_export_resize_and_watermark(processed_image, export_settings)
 }
@@ -1165,6 +1166,7 @@ fn export_masks_for_image(
             )?;
             ensure_export_not_cancelled(cancellation_token)?;
 
+            let processed = apply_anamorphic_unsqueeze(processed, js_adjustments);
             let with_options = apply_export_resize_and_watermark(processed, export_settings)?;
             let (out_w, out_h) = with_options.dimensions();
 

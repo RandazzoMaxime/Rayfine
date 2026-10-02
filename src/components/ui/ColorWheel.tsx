@@ -4,7 +4,6 @@ import Wheel from '@uiw/react-color-wheel';
 import { ColorResult, HsvaColor, hsvaToHex } from '@uiw/color-convert';
 import { Sun } from 'lucide-react';
 import { HueSatLum } from '../../utils/adjustments';
-import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import Text from './Text';
 import { TextColors, TextVariants } from '../../types/typography';
@@ -162,7 +161,7 @@ const ColorWheel = ({
   const hsva: HsvaColor = { h: hue, s: saturation, v: 100, a: 1 };
   const hexColor = hsvaToHex(hsva);
 
-  const pointerSize = isWheelDragging ? 14 : 12;
+  const pointerSize = 11;
   const pointerOffset = pointerSize / 2;
 
   const satWrapperStyle = { '--cg-hue': `var(--cg-hue-${instanceId})` } as React.CSSProperties;
@@ -172,7 +171,7 @@ const ColorWheel = ({
   } as React.CSSProperties;
 
   return (
-    <div className="relative flex flex-col items-center gap-2" ref={containerRef}>
+    <div className="relative flex flex-col items-center gap-1 w-full" ref={containerRef}>
       <div
         className="relative cursor-pointer h-5 w-full overflow-hidden"
         onClick={handleReset}
@@ -182,7 +181,7 @@ const ColorWheel = ({
       >
         <Text
           variant={TextVariants.label}
-          className={`absolute inset-0 flex items-center justify-center whitespace-nowrap select-none transition-opacity duration-200 ease-in-out ${
+          className={`absolute inset-0 flex items-center justify-center whitespace-nowrap select-none text-[10px] leading-5 ${
             !isDragging && !isLabelHovered ? 'opacity-100' : 'opacity-0'
           }`}
         >
@@ -192,7 +191,7 @@ const ColorWheel = ({
         <Text
           variant={TextVariants.label}
           color={TextColors.primary}
-          className={`absolute inset-0 flex items-center justify-center whitespace-nowrap select-none transition-opacity duration-200 ease-in-out ${
+          className={`absolute inset-0 flex items-center justify-center whitespace-nowrap select-none text-[10px] leading-5 ${
             !isDragging && isLabelHovered ? 'opacity-100' : 'opacity-0'
           }`}
         >
@@ -202,7 +201,7 @@ const ColorWheel = ({
         <Text
           as="div"
           variant={TextVariants.label}
-          className={`absolute inset-0 flex items-center justify-center gap-2 whitespace-nowrap select-none transition-opacity duration-200 ease-in-out ${
+          className={`absolute inset-0 flex items-center justify-center gap-1.5 whitespace-nowrap select-none text-[10px] leading-5 ${
             isDragging ? 'opacity-100' : 'opacity-0'
           }`}
         >
@@ -236,13 +235,12 @@ const ColorWheel = ({
                   <div
                     style={{
                       backgroundColor: saturation > 5 ? hexColor : 'transparent',
-                      border: '2px solid white',
+                      border: '2px solid #fff',
                       borderRadius: '50%',
-                      boxShadow: '0 0 2px rgba(0,0,0,0.5)',
+                      boxShadow: '0 0 0 1px #111, 0 1px 2px rgba(0,0,0,0.55)',
                       height: pointerSize,
                       width: pointerSize,
                       transform: `translate(-${pointerOffset}px, -${pointerOffset}px)`,
-                      transition: 'width 150ms ease-out, height 150ms ease-out, transform 150ms ease-out',
                     }}
                   />
                 </div>
@@ -253,54 +251,45 @@ const ColorWheel = ({
         )}
       </div>
 
-      <AnimatePresence initial={false}>
-        {isExpanded && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{
-              height: 'auto',
-              opacity: 1,
-              transitionEnd: { overflow: 'visible' },
-            }}
-            exit={{ height: 0, opacity: 0, overflow: 'hidden' }}
-            transition={{ duration: 0.2 }}
-            className="w-full flex flex-col gap-2"
-          >
-            <div className="w-full">
-              <Slider
-                defaultValue={defaultValue.hue}
-                label={t('ui.colorWheel.hue')}
-                max={360}
-                min={0}
-                onChange={handleHueChange}
-                onDragStateChange={setIsSliderDragging}
-                step={1}
-                value={hue}
-                trackClassName="cg-hue-gradient"
-              />
-            </div>
-
-            <div className="w-full" style={satWrapperStyle}>
-              <Slider
-                defaultValue={defaultValue.saturation}
-                label={t('ui.colorWheel.saturation')}
-                max={100}
-                min={0}
-                onChange={handleSaturationChange}
-                onDragStateChange={setIsSliderDragging}
-                step={1}
-                value={saturation}
-                trackClassName="cg-sat-gradient"
-              />
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {isExpanded && (
+        <div className="w-full flex flex-col gap-0.5">
+          <Slider
+            layout="stacked"
+            thick
+            defaultValue={defaultValue.hue}
+            label={t('ui.colorWheel.hue')}
+            max={360}
+            min={0}
+            onChange={handleHueChange}
+            onDragStateChange={setIsSliderDragging}
+            step={1}
+            value={hue}
+            trackClassName="cg-hue-gradient"
+          />
+          <div style={satWrapperStyle}>
+            <Slider
+              layout="stacked"
+              thick
+              defaultValue={defaultValue.saturation}
+              label={t('ui.colorWheel.saturation')}
+              max={100}
+              min={0}
+              onChange={handleSaturationChange}
+              onDragStateChange={setIsSliderDragging}
+              step={1}
+              value={saturation}
+              trackClassName="cg-sat-gradient"
+            />
+          </div>
+        </div>
+      )}
 
       <div className="w-full" style={lumWrapperStyle}>
         <Slider
+          layout="stacked"
+          thick
           defaultValue={defaultValue.luminance}
-          label={isExpanded ? t('ui.colorWheel.luminance') : <Sun size={16} className="text-text-secondary" />}
+          label={isExpanded ? t('ui.colorWheel.luminance') : <Sun size={14} className="text-text-secondary" />}
           max={100}
           min={-100}
           onChange={handleLumChange}

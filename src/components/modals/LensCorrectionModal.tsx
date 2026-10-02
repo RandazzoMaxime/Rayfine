@@ -49,6 +49,12 @@ interface GeometryParams {
   vig_k1: number;
   vig_k2: number;
   vig_k3: number;
+  defringe_purple_amount: number;
+  defringe_purple_hue_lo: number;
+  defringe_purple_hue_hi: number;
+  defringe_green_amount: number;
+  defringe_green_hue_lo: number;
+  defringe_green_hue_hi: number;
   lens_distortion_enabled: boolean;
   lens_tca_enabled: boolean;
   lens_vignette_enabled: boolean;
@@ -279,6 +285,12 @@ export default function LensCorrectionModal({
           vig_k1: currentParams.lensDistortionParams?.vig_k1 ?? 0,
           vig_k2: currentParams.lensDistortionParams?.vig_k2 ?? 0,
           vig_k3: currentParams.lensDistortionParams?.vig_k3 ?? 0,
+          defringe_purple_amount: currentAdjustments.defringePurpleAmount ?? 0,
+          defringe_purple_hue_lo: currentAdjustments.defringePurpleHueLo ?? 30,
+          defringe_purple_hue_hi: currentAdjustments.defringePurpleHueHi ?? 70,
+          defringe_green_amount: currentAdjustments.defringeGreenAmount ?? 0,
+          defringe_green_hue_lo: currentAdjustments.defringeGreenHueLo ?? 40,
+          defringe_green_hue_hi: currentAdjustments.defringeGreenHueHi ?? 60,
         };
 
         const result: string = await invoke('preview_geometry_transform', {
@@ -519,6 +531,12 @@ export default function LensCorrectionModal({
         vig_k1: currentAdjustments.lensDistortionParams?.vig_k1 ?? 0,
         vig_k2: currentAdjustments.lensDistortionParams?.vig_k2 ?? 0,
         vig_k3: currentAdjustments.lensDistortionParams?.vig_k3 ?? 0,
+        defringe_purple_amount: currentAdjustments.defringePurpleAmount ?? 0,
+        defringe_purple_hue_lo: currentAdjustments.defringePurpleHueLo ?? 30,
+        defringe_purple_hue_hi: currentAdjustments.defringePurpleHueHi ?? 70,
+        defringe_green_amount: currentAdjustments.defringeGreenAmount ?? 0,
+        defringe_green_hue_lo: currentAdjustments.defringeGreenHueLo ?? 40,
+        defringe_green_hue_hi: currentAdjustments.defringeGreenHueHi ?? 60,
       };
 
       invoke('preview_geometry_transform', {

@@ -84,6 +84,7 @@ pub struct Crop {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+#[serde(default)]
 pub struct GeometryParams {
     pub distortion: f32,
     pub vertical: f32,
@@ -108,6 +109,12 @@ pub struct GeometryParams {
     pub vig_k1: f32,
     pub vig_k2: f32,
     pub vig_k3: f32,
+    pub defringe_purple_amount: f32,
+    pub defringe_purple_hue_lo: f32,
+    pub defringe_purple_hue_hi: f32,
+    pub defringe_green_amount: f32,
+    pub defringe_green_hue_lo: f32,
+    pub defringe_green_hue_hi: f32,
 }
 
 impl Default for GeometryParams {
@@ -136,6 +143,12 @@ impl Default for GeometryParams {
             vig_k1: 0.0,
             vig_k2: 0.0,
             vig_k3: 0.0,
+            defringe_purple_amount: 0.0,
+            defringe_purple_hue_lo: 30.0,
+            defringe_purple_hue_hi: 70.0,
+            defringe_green_amount: 0.0,
+            defringe_green_hue_lo: 40.0,
+            defringe_green_hue_hi: 60.0,
         }
     }
 }
@@ -195,6 +208,12 @@ pub fn get_geometry_params_from_json(adjustments: &serde_json::Value) -> Geometr
         vig_k3: lens_params
             .and_then(|p| p.get("vig_k3").and_then(|k| k.as_f64()))
             .unwrap_or(0.0) as f32,
+        defringe_purple_amount: adjustments["defringePurpleAmount"].as_f64().unwrap_or(0.0) as f32,
+        defringe_purple_hue_lo: adjustments["defringePurpleHueLo"].as_f64().unwrap_or(30.0) as f32,
+        defringe_purple_hue_hi: adjustments["defringePurpleHueHi"].as_f64().unwrap_or(70.0) as f32,
+        defringe_green_amount: adjustments["defringeGreenAmount"].as_f64().unwrap_or(0.0) as f32,
+        defringe_green_hue_lo: adjustments["defringeGreenHueLo"].as_f64().unwrap_or(40.0) as f32,
+        defringe_green_hue_hi: adjustments["defringeGreenHueHi"].as_f64().unwrap_or(60.0) as f32,
     }
 }
 
@@ -569,7 +588,7 @@ fn compute_lens_auto_crop_scale(params: &GeometryParams, width: f32, height: f32
     let lk1 = params.lens_dist_k1 as f64;
     let lk2 = params.lens_dist_k2 as f64;
     let lk3 = params.lens_dist_k3 as f64;
-    let lens_dist_amt = (params.lens_distortion_amount as f64) * 2.5;
+    let lens_dist_amt = params.lens_distortion_amount as f64;
 
     let k_distortion = (params.distortion as f64 / 100.0) * 2.5;
 
@@ -670,7 +689,7 @@ pub fn warp_image_geometry(image: &DynamicImage, params: GeometryParams) -> Dyna
     let lk1 = params.lens_dist_k1 as f64;
     let lk2 = params.lens_dist_k2 as f64;
     let lk3 = params.lens_dist_k3 as f64;
-    let lens_dist_amt = (params.lens_distortion_amount as f64) * 2.5;
+    let lens_dist_amt = params.lens_distortion_amount as f64;
 
     let has_lens_correction = params.lens_distortion_enabled
         && (lk1.abs() > 1e-6 || lk2.abs() > 1e-6 || lk3.abs() > 1e-6);
@@ -697,7 +716,7 @@ pub fn warp_image_geometry(image: &DynamicImage, params: GeometryParams) -> Dyna
     let vk1 = params.vig_k1 as f64;
     let vk2 = params.vig_k2 as f64;
     let vk3 = params.vig_k3 as f64;
-    let lens_vig_amt = (params.lens_vignette_amount as f64) * 0.8;
+    let lens_vig_amt = params.lens_vignette_amount as f64;
     let has_vignetting = params.lens_vignette_enabled
         && (vk1.abs() > 1e-6 || vk2.abs() > 1e-6 || vk3.abs() > 1e-6)
         && lens_vig_amt > 0.01;
@@ -799,6 +818,21 @@ pub fn warp_image_geometry(image: &DynamicImage, params: GeometryParams) -> Dyna
                             pixel[2] *= final_gain as f32;
                         }
                     }
+
+                    if params.defringe_purple_amount > 0.0 || params.defringe_green_amount > 0.0 {
+                        let ix = src_x.round().clamp(1.0, width as f32 - 2.0) as usize;
+                        let iy = src_y.round().clamp(1.0, height as f32 - 2.0) as usize;
+                        let offset = (iy * width_usize + ix) * 3;
+                        let luma = |i: usize| src_raw[i] * 0.2126 + src_raw[i + 1] * 0.7152 + src_raw[i + 2] * 0.0722;
+                        let center_luma = luma(offset);
+                        let local_min = [offset - 3, offset + 3, offset - width_usize * 3, offset + width_usize * 3]
+                            .into_iter().map(luma).fold(center_luma, f32::min);
+                        let local_max = [offset - 3, offset + 3, offset - width_usize * 3, offset + width_usize * 3]
+                            .into_iter().map(luma).fold(center_luma, f32::max);
+                        let edge = ((local_max - local_min - 0.015) / 0.10).clamp(0.0, 1.0);
+                        let corrected = defringe_rgb([pixel[0], pixel[1], pixel[2]], edge, params);
+                        pixel.copy_from_slice(&corrected);
+                    }
                 }
                 current_vec += step_vec_x;
             }
@@ -806,6 +840,58 @@ pub fn warp_image_geometry(image: &DynamicImage, params: GeometryParams) -> Dyna
 
     let out_img = Rgb32FImage::from_vec(width, height, out_buffer).unwrap();
     DynamicImage::ImageRgb32F(out_img)
+}
+
+fn defringe_rgb(pixel: [f32; 3], edge: f32, params: GeometryParams) -> [f32; 3] {
+    if edge <= 0.0 { return pixel; }
+    let hi = pixel[0].max(pixel[1]).max(pixel[2]);
+    let lo = pixel[0].min(pixel[1]).min(pixel[2]);
+    let delta = hi - lo;
+    if delta <= 1.0e-6 { return pixel; }
+    let hue = if hi == pixel[0] {
+        60.0 * (((pixel[1] - pixel[2]) / delta) % 6.0)
+    } else if hi == pixel[1] {
+        60.0 * ((pixel[2] - pixel[0]) / delta + 2.0)
+    } else {
+        60.0 * ((pixel[0] - pixel[1]) / delta + 4.0)
+    }.rem_euclid(360.0);
+    let range_weight = |value: f32, lo: f32, hi: f32| {
+        if value >= lo && value <= hi { 1.0 } else { 0.0 }
+    };
+    // Lightroom's two hue ramps isolate the violet/red and green/cyan fringe bands.
+    let purple = range_weight(hue, params.defringe_purple_hue_lo * 1.2 + 210.0, params.defringe_purple_hue_hi * 1.2 + 210.0);
+    let green = range_weight(hue, params.defringe_green_hue_lo * 1.2 + 60.0, params.defringe_green_hue_hi * 1.2 + 60.0);
+    let purple_strength = (params.defringe_purple_amount / 20.0).clamp(0.0, 1.0) * purple;
+    let green_strength = (params.defringe_green_amount / 20.0).clamp(0.0, 1.0) * green;
+    let luma = pixel[0] * 0.2126 + pixel[1] * 0.7152 + pixel[2] * 0.0722;
+    let chroma = (pixel[0] - pixel[1]).abs().max((pixel[1] - pixel[2]).abs());
+    let strength = purple_strength.max(green_strength) * edge.clamp(0.0, 1.0)
+        * (chroma / (luma.abs() * 0.5 + 0.05)).clamp(0.0, 1.0);
+    if strength <= 1.0e-6 { return pixel; }
+    [
+        luma + (pixel[0] - luma) * (1.0 - strength),
+        luma + (pixel[1] - luma) * (1.0 - strength),
+        luma + (pixel[2] - luma) * (1.0 - strength),
+    ]
+}
+
+#[cfg(test)]
+mod defringe_tests {
+    use super::*;
+
+    #[test]
+    fn defringe_reduces_purple_edge_colour_but_leaves_flat_regions_and_other_hues_alone() {
+        let mut params = GeometryParams::default();
+        params.defringe_purple_amount = 20.0;
+        let purple_edge = [0.65, 0.12, 0.8];
+        let corrected = defringe_rgb(purple_edge, 1.0, params);
+        let unchanged_flat = defringe_rgb(purple_edge, 0.0, params);
+        let unchanged_red = defringe_rgb([0.8, 0.1, 0.05], 1.0, params);
+        let chroma = |rgb: [f32; 3]| (rgb[0] - rgb[1]).abs() + (rgb[1] - rgb[2]).abs();
+        assert!(chroma(corrected) < chroma(purple_edge), "purple fringe was not reduced");
+        assert_eq!(unchanged_flat, purple_edge, "flat areas should not be desaturated");
+        assert_eq!(unchanged_red, [0.8, 0.1, 0.05], "unselected hues should stay unchanged");
+    }
 }
 
 pub fn unwarp_image_geometry(warped_image: &DynamicImage, params: GeometryParams) -> DynamicImage {
@@ -822,7 +908,7 @@ pub fn unwarp_image_geometry(warped_image: &DynamicImage, params: GeometryParams
     let lk1 = params.lens_dist_k1 as f64;
     let lk2 = params.lens_dist_k2 as f64;
     let lk3 = params.lens_dist_k3 as f64;
-    let lens_dist_amt = (params.lens_distortion_amount as f64) * 2.5;
+    let lens_dist_amt = params.lens_distortion_amount as f64;
 
     let has_lens_correction = params.lens_distortion_enabled
         && (lk1.abs() > 1e-6 || lk2.abs() > 1e-6 || lk3.abs() > 1e-6);
@@ -1054,7 +1140,7 @@ pub fn inverse_transform_point(
         let lk1 = params.lens_dist_k1 as f64;
         let lk2 = params.lens_dist_k2 as f64;
         let lk3 = params.lens_dist_k3 as f64;
-        let lens_dist_amt = (params.lens_distortion_amount as f64) * 2.5;
+        let lens_dist_amt = params.lens_distortion_amount as f64;
 
         let has_lens_correction = params.lens_distortion_enabled
             && (lk1.abs() > 1e-6 || lk2.abs() > 1e-6 || lk3.abs() > 1e-6);
@@ -1515,6 +1601,23 @@ pub struct GlobalAdjustments {
     pub glow_warmth: f32,
     pub halation_threshold: f32,
     pub halation_hue: f32,
+    pub gray_mixer: [f32; 8],
+}
+
+impl GlobalAdjustments {
+    pub(crate) fn sharpen_radius(&self) -> f32 {
+        self._pad_cg1
+    }
+    pub(crate) fn set_raw_contrast_key(&mut self, key: f32) {
+        self._pad2 = if key.is_finite() {key.clamp(0.09,0.36)} else {0.18};
+    }
+    pub(crate) fn set_dehaze_airlight(&mut self, airlight: Option<[f32;3]>) {
+        let a = airlight.unwrap_or([0.0;3]);
+        self._pad_end1 = a[0];
+        self._pad_end2 = a[1];
+        self._pad_end3 = a[2];
+        self._pad_end4 = if airlight.is_some() {1.0} else {0.0};
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Pod, Zeroable, Default)]
@@ -1634,7 +1737,7 @@ struct AdjustmentScales {
 }
 
 const SCALES: AdjustmentScales = AdjustmentScales {
-    exposure: 0.8,
+    exposure: 1.0,
     brightness: 0.8,
     contrast: 100.0,
     highlights: 120.0,
@@ -2180,7 +2283,8 @@ fn get_global_adjustments_from_json(
         tint: get_val("color", "tint", SCALES.tint, None),
         vibrance: get_val("color", "vibrance", SCALES.vibrance, None),
         hue: get_val("color", "hue", 1.0, None),
-        _pad_color1: 0.0,
+        _pad_color1: if js_adjustments["convertToGrayscale"].as_bool().unwrap_or(false)
+            || matches!(js_adjustments["cameraProfile"].as_str().unwrap_or("").to_ascii_lowercase().as_str(), "monochrome" | "adobe monochrome") { 1.0 } else { 0.0 },
         _pad_color2: 0.0,
         _pad_color3: 0.0,
 
@@ -2278,9 +2382,9 @@ fn get_global_adjustments_from_json(
         agx_pipe_to_rendering_matrix: pipe_to_rendering,
         agx_rendering_to_pipe_matrix: rendering_to_pipe,
 
-        _pad_cg1: 0.0,
-        _pad_cg2: 0.0,
-        _pad_cg3: 0.0,
+        _pad_cg1: get_val("details", "sharpenRadius", 1.0, Some(1.0)).clamp(0.5,3.0),
+        _pad_cg2: get_val("details", "sharpenDetail", 100.0, Some(25.0)).clamp(0.0,1.0),
+        _pad_cg3: get_val("details", "sharpenMasking", 100.0, Some(0.0)).clamp(0.0,1.0),
         _pad_cg4: 0.0,
         color_grading_shadows: if is_visible("color") {
             parse_color_grade_settings(&cg_obj["shadows"])
@@ -2348,6 +2452,11 @@ fn get_global_adjustments_from_json(
             SCALES.sharpness_threshold,
             Some(15.0),
         ),
+        gray_mixer: {
+            let mixer = &js_adjustments["grayMixer"];
+            let keys = ["reds", "oranges", "yellows", "greens", "aquas", "blues", "purples", "magentas"];
+            std::array::from_fn(|i| mixer[keys[i]].as_f64().unwrap_or(0.0) as f32 / 100.0)
+        },
     }
 }
 

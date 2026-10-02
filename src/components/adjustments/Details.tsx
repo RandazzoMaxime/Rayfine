@@ -23,7 +23,7 @@ export default function DetailsPanel({
   const { t } = useTranslation();
 
   const handleAdjustmentChange = (key: string, value: string) => {
-    const numericValue = parseInt(value, 10);
+    const numericValue = parseFloat(value);
     setAdjustments((prev: Partial<Adjustments>) => ({ ...prev, [key]: numericValue }));
   };
 
@@ -51,9 +51,9 @@ export default function DetailsPanel({
                 label={t('adjustments.details.radius' as any)}
                 max={3}
                 min={0.5}
-                onChange={(e: any) => handleAdjustmentChange('sharpenRadius', e.target.value)}
+                onChange={(e: any) => handleAdjustmentChange(DetailsAdjustment.SharpenRadius, e.target.value)}
                 step={0.1}
-                value={(adjustments as any).sharpenRadius ?? 1.0}
+                value={adjustments.sharpenRadius ?? 1.0}
                 onDragStateChange={onDragStateChange}
                 defaultValue={1}
                 fillOrigin="min"
@@ -62,9 +62,9 @@ export default function DetailsPanel({
                 label={t('adjustments.details.sharpenDetail' as any)}
                 max={100}
                 min={0}
-                onChange={(e: any) => handleAdjustmentChange('sharpenDetail', e.target.value)}
+                onChange={(e: any) => handleAdjustmentChange(DetailsAdjustment.SharpenDetail, e.target.value)}
                 step={1}
-                value={(adjustments as any).sharpenDetail ?? 25}
+                value={adjustments.sharpenDetail ?? 25}
                 onDragStateChange={onDragStateChange}
                 defaultValue={25}
                 fillOrigin="min"
@@ -73,71 +73,14 @@ export default function DetailsPanel({
                 label={t('adjustments.details.masking' as any)}
                 max={100}
                 min={0}
-                onChange={(e: any) => handleAdjustmentChange('sharpenMasking', e.target.value)}
+                onChange={(e: any) => handleAdjustmentChange(DetailsAdjustment.SharpenMasking, e.target.value)}
                 step={1}
-                value={(adjustments as any).sharpenMasking ?? 0}
+                value={adjustments.sharpenMasking ?? 0}
                 onDragStateChange={onDragStateChange}
                 defaultValue={0}
                 fillOrigin="min"
               />
             </>
-          )}
-          <Slider
-            label={t('adjustments.details.threshold')}
-            max={80}
-            min={0}
-            onChange={(e: any) => handleAdjustmentChange(DetailsAdjustment.SharpnessThreshold, e.target.value)}
-            step={1}
-            value={adjustments.sharpnessThreshold ?? 15}
-            onDragStateChange={onDragStateChange}
-            defaultValue={15}
-            fillOrigin="min"
-          />
-        </div>
-      )}
-
-      {adjustmentVisibility.presence !== false && (
-        <div className="pt-1 mt-1 border-t border-white/15 first:mt-0 first:pt-0 first:border-t-0">
-          <Text variant={TextVariants.heading} className="mb-0.5 text-[11px] text-text-primary">
-            {t('adjustments.details.presence')}
-          </Text>
-          <Slider
-            label={t('adjustments.details.texture' as any, { defaultValue: 'Texture' })}
-            max={100}
-            min={-100}
-            onChange={(e: any) => handleAdjustmentChange(DetailsAdjustment.Structure, e.target.value)}
-            step={1}
-            value={adjustments.structure}
-            onDragStateChange={onDragStateChange}
-          />
-          <Slider
-            label={t('adjustments.details.clarity')}
-            max={100}
-            min={-100}
-            onChange={(e: any) => handleAdjustmentChange(DetailsAdjustment.Clarity, e.target.value)}
-            step={1}
-            value={adjustments.clarity}
-            onDragStateChange={onDragStateChange}
-          />
-          <Slider
-            label={t('adjustments.details.dehaze')}
-            max={100}
-            min={-100}
-            onChange={(e: any) => handleAdjustmentChange(DetailsAdjustment.Dehaze, e.target.value)}
-            step={1}
-            value={adjustments.dehaze}
-            onDragStateChange={onDragStateChange}
-          />
-          {!isForMask && (
-            <Slider
-              label={t('adjustments.details.centre')}
-              max={100}
-              min={-100}
-              onChange={(e: any) => handleAdjustmentChange(DetailsAdjustment.Centré, e.target.value)}
-              step={1}
-              value={adjustments.centré}
-              onDragStateChange={onDragStateChange}
-            />
           )}
         </div>
       )}
@@ -147,76 +90,80 @@ export default function DetailsPanel({
           <Text variant={TextVariants.heading} className="mb-0.5 text-[11px] text-text-primary">
             {t('adjustments.details.noiseReduction')}
           </Text>
-          <Slider
-            label={t('adjustments.details.luminance')}
-            max={100}
-            min={isForMask ? -100 : 0}
-            onChange={(e: any) => handleAdjustmentChange(DetailsAdjustment.LumaNoiseReduction, e.target.value)}
-            step={1}
-            value={adjustments.lumaNoiseReduction}
-            onDragStateChange={onDragStateChange}
-          />
-          {!isForMask && (
-            <>
-              <Slider
-                label={t('adjustments.details.luminanceDetail' as any)}
-                max={100}
-                min={0}
-                onChange={(e: any) => handleAdjustmentChange('lumaNoiseDetail', e.target.value)}
-                step={1}
-                value={(adjustments as any).lumaNoiseDetail ?? 50}
-                onDragStateChange={onDragStateChange}
-                defaultValue={50}
-                fillOrigin="min"
-              />
-              <Slider
-                label={t('adjustments.details.luminanceContrast' as any)}
-                max={100}
-                min={0}
-                onChange={(e: any) => handleAdjustmentChange('lumaNoiseContrast', e.target.value)}
-                step={1}
-                value={(adjustments as any).lumaNoiseContrast ?? 0}
-                onDragStateChange={onDragStateChange}
-                defaultValue={0}
-                fillOrigin="min"
-              />
-            </>
-          )}
-          <Slider
-            label={t('adjustments.details.color')}
-            max={100}
-            min={isForMask ? -100 : 0}
-            onChange={(e: any) => handleAdjustmentChange(DetailsAdjustment.ColorNoiseReduction, e.target.value)}
-            step={1}
-            value={adjustments.colorNoiseReduction}
-            onDragStateChange={onDragStateChange}
-          />
-          {!isForMask && (
-            <>
-              <Slider
-                label={t('adjustments.details.colorDetail' as any)}
-                max={100}
-                min={0}
-                onChange={(e: any) => handleAdjustmentChange('colorNoiseDetail', e.target.value)}
-                step={1}
-                value={(adjustments as any).colorNoiseDetail ?? 50}
-                onDragStateChange={onDragStateChange}
-                defaultValue={50}
-                fillOrigin="min"
-              />
-              <Slider
-                label={t('adjustments.details.colorSmoothness' as any)}
-                max={100}
-                min={0}
-                onChange={(e: any) => handleAdjustmentChange('colorNoiseSmoothness', e.target.value)}
-                step={1}
-                value={(adjustments as any).colorNoiseSmoothness ?? 50}
-                onDragStateChange={onDragStateChange}
-                defaultValue={50}
-                fillOrigin="min"
-              />
-            </>
-          )}
+          <div>
+            <Slider
+              label={t('adjustments.details.luminance')}
+              max={100}
+              min={isForMask ? -100 : 0}
+              onChange={(e: any) => handleAdjustmentChange(DetailsAdjustment.LumaNoiseReduction, e.target.value)}
+              step={1}
+              value={adjustments.lumaNoiseReduction}
+              onDragStateChange={onDragStateChange}
+            />
+            {!isForMask && (
+              <>
+                <Slider
+                  label={t('adjustments.details.luminanceDetail' as any)}
+                  max={100}
+                  min={0}
+                  onChange={(e: any) => handleAdjustmentChange('lumaNoiseDetail', e.target.value)}
+                  step={1}
+                  value={(adjustments as any).lumaNoiseDetail ?? 50}
+                  onDragStateChange={onDragStateChange}
+                  defaultValue={50}
+                  fillOrigin="min"
+                />
+                <Slider
+                  label={t('adjustments.details.luminanceContrast' as any)}
+                  max={100}
+                  min={0}
+                  onChange={(e: any) => handleAdjustmentChange('lumaNoiseContrast', e.target.value)}
+                  step={1}
+                  value={(adjustments as any).lumaNoiseContrast ?? 0}
+                  onDragStateChange={onDragStateChange}
+                  defaultValue={0}
+                  fillOrigin="min"
+                />
+              </>
+            )}
+          </div>
+          <div className="mt-1 pt-1 border-t border-white/10">
+            <Slider
+              label={t('adjustments.details.color')}
+              max={100}
+              min={isForMask ? -100 : 0}
+              onChange={(e: any) => handleAdjustmentChange(DetailsAdjustment.ColorNoiseReduction, e.target.value)}
+              step={1}
+              value={adjustments.colorNoiseReduction}
+              onDragStateChange={onDragStateChange}
+            />
+            {!isForMask && (
+              <>
+                <Slider
+                  label={t('adjustments.details.colorDetail' as any)}
+                  max={100}
+                  min={0}
+                  onChange={(e: any) => handleAdjustmentChange('colorNoiseDetail', e.target.value)}
+                  step={1}
+                  value={(adjustments as any).colorNoiseDetail ?? 50}
+                  onDragStateChange={onDragStateChange}
+                  defaultValue={50}
+                  fillOrigin="min"
+                />
+                <Slider
+                  label={t('adjustments.details.colorSmoothness' as any)}
+                  max={100}
+                  min={0}
+                  onChange={(e: any) => handleAdjustmentChange('colorNoiseSmoothness', e.target.value)}
+                  step={1}
+                  value={(adjustments as any).colorNoiseSmoothness ?? 50}
+                  onDragStateChange={onDragStateChange}
+                  defaultValue={50}
+                  fillOrigin="min"
+                />
+              </>
+            )}
+          </div>
         </div>
       )}
 

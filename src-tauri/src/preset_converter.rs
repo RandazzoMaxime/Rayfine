@@ -815,8 +815,7 @@ pub fn convert_xmp_to_preset(xmp_content: &str) -> Result<Preset, String> {
     }
 
     if let Some(shadows_val) = get_attr_as_f64(&attrs, "Shadows2012") {
-        let adjusted_shadows = (shadows_val * 1.5).min(100.0);
-        adjustments.insert("shadows".to_string(), json!(adjusted_shadows));
+        adjustments.insert("shadows".to_string(), json!(shadows_val));
     }
 
     if let Some(sharpness_val) = get_attr_as_f64(&attrs, "Sharpness") {
@@ -895,10 +894,7 @@ pub fn convert_xmp_to_preset(xmp_content: &str) -> Result<Preset, String> {
     }
     if is_bw {
         adjustments.insert("convertToGrayscale".to_string(), json!(true));
-        // RapidRAW has no dedicated B&W engine: collapse saturation for a usable mono base.
-        if !adjustments.contains_key("saturation") {
-            adjustments.insert("saturation".to_string(), json!(-100.0));
-        }
+        adjustments.insert("cameraProfile".to_string(), json!("Monochrome"));
     }
 
     // Relative WB (common in creative/B&W LR presets)
@@ -923,7 +919,17 @@ pub fn convert_xmp_to_preset(xmp_content: &str) -> Result<Preset, String> {
     }
     if let Some(profile) = attrs.get("CameraProfile") {
         if !profile.is_empty() {
-            adjustments.insert("cameraProfile".to_string(), json!(profile));
+            let normalized = if profile.eq_ignore_ascii_case("monochrome")
+                || profile.eq_ignore_ascii_case("adobe monochrome")
+                || profile.eq_ignore_ascii_case("camera monochrome") {
+                "Monochrome"
+            } else {
+                "Standard"
+            };
+            adjustments.insert("cameraProfile".to_string(), json!(normalized));
+            if normalized == "Monochrome" {
+                adjustments.insert("convertToGrayscale".to_string(), json!(true));
+            }
         }
     }
     if let Some(pt) = attrs.get("PresetType") {
@@ -1461,15 +1467,7 @@ pub fn convert_adjustments_to_xmp_with_group(
     lines.push(r#"  <rdf:Description rdf:about="""#.to_string());
     lines.push(r#"    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/""#.to_string());
     lines.push(r#"   crs:Version="15.0""#.to_string());
-    if let Some(pv) = adj.get("processVersion").and_then(|v| v.as_str()) {
-        if !pv.is_empty() {
-            lines.push(format!(r#"   crs:ProcessVersion="{}""#, pv.replace('"', "&quot;")));
-        } else {
-            lines.push(r#"   crs:ProcessVersion="11.0""#.to_string());
-        }
-    } else {
-        lines.push(r#"   crs:ProcessVersion="11.0""#.to_string());
-    }
+    lines.push(r#"   crs:ProcessVersion="15.4""#.to_string());
     lines.push(r#"   crs:HasSettings="True""#.to_string());
     // Orientation (best-effort reverse of EXIF-like codes)
     if let Some(raw) = adj.get("imageOrientation").and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64))) {
@@ -1548,8 +1546,7 @@ pub fn convert_adjustments_to_xmp_with_group(
         push_attr(&mut lines, "Highlights2012", v, true);
     }
     if let Some(v) = map_f("shadows") {
-        // import multiplies Shadows2012 by 1.5; reverse approximately
-        push_attr(&mut lines, "Shadows2012", (v / 1.5).clamp(-100.0, 100.0), true);
+        push_attr(&mut lines, "Shadows2012", v, true);
     }
     if let Some(v) = map_f("whites") {
         push_attr(&mut lines, "Whites2012", v, true);
@@ -2200,6 +2197,33 @@ mod tests {
     }
 
     #[test]
+    fn crs_tone_sliders_map_one_to_one() {
+        let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+   crs:Exposure2012="+0.41" crs:Highlights2012="-48" crs:Shadows2012="44"
+   crs:Whites2012="-25" crs:Blacks2012="-41">
+   <crs:Name><rdf:Alt><rdf:li xml:lang="x-default">Tone1to1</rdf:li></rdf:Alt></crs:Name>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+        let preset = convert_xmp_to_preset(xmp).expect("parse");
+        let adj = preset.adjustments.as_object().expect("obj");
+        assert!((adj["exposure"].as_f64().unwrap() - 0.41).abs() < 1e-9);
+        assert!((adj["highlights"].as_f64().unwrap() - -48.0).abs() < 1e-9);
+        assert!((adj["shadows"].as_f64().unwrap() - 44.0).abs() < 1e-9);
+        assert!((adj["whites"].as_f64().unwrap() - -25.0).abs() < 1e-9);
+        assert!((adj["blacks"].as_f64().unwrap() - -41.0).abs() < 1e-9);
+        let out = convert_adjustments_to_xmp("Tone1to1", &preset.adjustments);
+        assert!(
+            out.contains("Shadows2012=\"44\"")
+                || out.contains("crs:Shadows2012=\"44\"")
+                || out.contains("Shadows2012=\"+44\""),
+            "export shadows 1:1, got {out}"
+        );
+    }
+
+    #[test]
     fn parses_paris_preset() {
         let xmp = fixture("PARIS.xmp");
         let converted = convert_xmp_to_preset_with_group(&xmp).expect("parse PARIS");
@@ -2258,9 +2282,10 @@ mod tests {
         assert_eq!(converted.group.as_deref(), Some("Cinematic - Randazzo"));
         let adj = converted.preset.adjustments.as_object().unwrap();
         assert_eq!(adj.get("convertToGrayscale").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(adj.get("cameraProfile").and_then(|v| v.as_str()), Some("Monochrome"));
         assert!(adj.contains_key("grayMixer"), "GrayMixer* should map");
         let sat = adj.get("saturation").and_then(|v| v.as_f64()).unwrap_or(0.0);
-        assert!((sat - (-100.0)).abs() < 0.01, "B&W collapses saturation, got {}", sat);
+        assert!((sat - (-100.0)).abs() > 0.01, "B&W import must not simulate the profile with global saturation");
         assert!(adj.contains_key("temperature") || adj.contains_key("tint"));
     }
 
@@ -2866,15 +2891,15 @@ mod tests {
     #[test]
     fn camera_profile_roundtrip() {
         let adj = serde_json::json!({
-            "cameraProfile": "Adobe Standard",
+            "cameraProfile": "Standard",
             "exposure": 0.0
         });
         let xmp = convert_adjustments_to_xmp("CamProf", &adj);
         assert!(xmp.contains("CameraProfile"), "export camera profile");
-        assert!(xmp.contains("Adobe Standard"));
+        assert!(xmp.contains("Standard"));
         let parsed = convert_xmp_to_preset(&xmp).unwrap();
         let a = parsed.adjustments.as_object().unwrap();
-        assert_eq!(a.get("cameraProfile").and_then(|v| v.as_str()), Some("Adobe Standard"));
+        assert_eq!(a.get("cameraProfile").and_then(|v| v.as_str()), Some("Standard"));
     }
 
     #[test]

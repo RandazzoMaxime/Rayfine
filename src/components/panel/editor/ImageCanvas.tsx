@@ -1,6 +1,8 @@
 import clsx from 'clsx';
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, memo, useMemo } from 'react';
 import { useEditorStore } from '../../../store/useEditorStore';
+import { useLibraryStore } from '../../../store/useLibraryStore';
+import { loupeImageSrc } from '../../../utils/loupeDisplay';
 import { softProofCssFilter } from '../../../utils/softProofProfiles';
 import ReactCrop from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
@@ -100,6 +102,8 @@ interface MaskOverlayProps {
   onSelect(): void;
   onUpdate(id: string, subMask: Partial<SubMask>): void;
   scale: number;
+  scaleX?: number;
+  scaleY?: number;
   subMask: SubMask;
   offsetX: number;
   offsetY: number;
@@ -215,6 +219,8 @@ const MaskOverlay = memo(
     onSelect,
     onUpdate,
     scale,
+    scaleX,
+    scaleY,
     subMask,
     offsetX,
     offsetY,
@@ -224,6 +230,8 @@ const MaskOverlay = memo(
     const trRef = useRef<any>(null);
     const rotateStartRef = useRef<any>(null);
 
+    const sx = scaleX ?? scale;
+    const sy = scaleY ?? scale;
     const crop = adjustments.crop;
     const isPercent = crop?.unit === '%';
     const cropX = crop ? (isPercent ? (crop.x / 100) * imageWidth : crop.x) : 0;
@@ -303,8 +311,8 @@ const MaskOverlay = memo(
         const pointerPos = getPointer(e.target.getStage());
         if (!pointerPos || !dragStartPointer.current || !dragStartParams.current) return;
 
-        const dx = (pointerPos.x - dragStartPointer.current.x) / scale;
-        const dy = (pointerPos.y - dragStartPointer.current.y) / scale;
+        const dx = (pointerPos.x - dragStartPointer.current.x) / sx;
+        const dy = (pointerPos.y - dragStartPointer.current.y) / sy;
 
         const newP = {
           ...dragStartParams.current,
@@ -354,8 +362,8 @@ const MaskOverlay = memo(
 
       const newP = {
         ...pRef.current,
-        centerX: node.x() / scale + cropX,
-        centerY: node.y() / scale + cropY,
+        centerX: node.x() / sx + cropX,
+        centerY: node.y() / sy + cropY,
         radiusX: newRadiusX,
         radiusY: newRadiusY,
         rotation: node.rotation(),
@@ -383,8 +391,8 @@ const MaskOverlay = memo(
 
       const newP = {
         ...pRef.current,
-        centerX: node.x() / scale + cropX,
-        centerY: node.y() / scale + cropY,
+        centerX: node.x() / sx + cropX,
+        centerY: node.y() / sy + cropY,
         radiusX: newRadiusX,
         radiusY: newRadiusY,
         rotation: node.rotation(),
@@ -398,8 +406,8 @@ const MaskOverlay = memo(
 
     const setRotateCursor = useCallback(
       (stage: any, pointerPos: any) => {
-        const cx = (pRef.current.centerX - cropX) * scale;
-        const cy = (pRef.current.centerY - cropY) * scale;
+        const cx = (pRef.current.centerX - cropX) * sx;
+        const cy = (pRef.current.centerY - cropY) * sy;
         const angle = Math.atan2(pointerPos.y - cy, pointerPos.x - cx) * (180 / Math.PI);
 
         const svgStr = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="filter: drop-shadow(0px 1px 2px rgba(0,0,0,0.8));">
@@ -428,8 +436,8 @@ const MaskOverlay = memo(
         const pointer = getPointer(stage);
         if (!pointer) return;
 
-        const cx = (pRef.current.centerX - cropX) * scale;
-        const cy = (pRef.current.centerY - cropY) * scale;
+        const cx = (pRef.current.centerX - cropX) * sx;
+        const cy = (pRef.current.centerY - cropY) * sy;
 
         const startAngle = Math.atan2(pointer.y - cy, pointer.x - cx);
         rotateStartRef.current = {
@@ -449,8 +457,8 @@ const MaskOverlay = memo(
 
         setRotateCursor(stage, pointer);
 
-        const cx = (pRef.current.centerX - cropX) * scale;
-        const cy = (pRef.current.centerY - cropY) * scale;
+        const cx = (pRef.current.centerX - cropX) * sx;
+        const cy = (pRef.current.centerY - cropY) * sy;
 
         const currentAngle = Math.atan2(pointer.y - cy, pointer.x - cx);
         const angleDiff = currentAngle - rotateStartRef.current.angle;
@@ -534,8 +542,8 @@ const MaskOverlay = memo(
         const pointerPos = getPointer(e.target.getStage());
         if (!pointerPos || !dragStartPointer.current || !dragStartParams.current) return;
 
-        const dx = (pointerPos.x - dragStartPointer.current.x) / scale;
-        const dy = (pointerPos.y - dragStartPointer.current.y) / scale;
+        const dx = (pointerPos.x - dragStartPointer.current.x) / sx;
+        const dy = (pointerPos.y - dragStartPointer.current.y) / sy;
 
         const newP = {
           ...dragStartParams.current,
@@ -578,8 +586,8 @@ const MaskOverlay = memo(
         const pointerPos = getPointer(stage);
         if (!pointerPos) return;
 
-        const newX = pointerPos.x / scale + cropX;
-        const newY = pointerPos.y / scale + cropY;
+        const newX = pointerPos.x / sx + cropX;
+        const newY = pointerPos.y / sy + cropY;
 
         const newP = { ...pRef.current };
         if (pointType === 'start') {
@@ -615,7 +623,7 @@ const MaskOverlay = memo(
         let newRange = pRef.current.range;
         if (len > 0) {
           const dist = Math.abs(dx * (sY - pointerPos.y) - (sX - pointerPos.x) * dy) / len;
-          newRange = Math.max(0.1, dist / scale);
+          newRange = Math.max(0.1, dist / sy);
         }
 
         const newP = { ...pRef.current, range: newRange };
@@ -1236,12 +1244,25 @@ const ImageCanvas = memo(
     const guideImgRef = useRef<HTMLImageElement | null>(null);
     const guideLoupeSampleRef = useRef<{ x: number; y: number; stageW: number; stageH: number } | null>(null);
 
+    const libraryIsRaw = useLibraryStore(
+      (s) => s.imageList.find((i) => i.path === selectedImage.path)?.is_raw ?? false,
+    );
+    const libraryIsEdited = useLibraryStore(
+      (s) => s.imageList.find((i) => i.path === selectedImage.path)?.is_edited ?? false,
+    );
+    const previewSrc = loupeImageSrc({
+      previewUrl: finalPreviewUrl || undefined,
+      thumbUrl: selectedImage.thumbnailUrl,
+      isRaw: selectedImage.isRaw || libraryIsRaw,
+      isEdited: libraryIsEdited,
+    });
+
     const [displayState, setDisplayState] = useState({
-      base: finalPreviewUrl || selectedImage.thumbnailUrl,
+      base: previewSrc,
       fade: null as string | null,
     });
     const [isFadingIn, setIsFadingIn] = useState(false);
-    const prevImageIdentityRef = useRef(selectedImage.thumbnailUrl);
+    const prevImageIdentityRef = useRef(selectedImage.path);
 
     const [baseTool, setBaseTool] = useState<ToolType>(brushSettings?.tool ?? ToolType.Brush);
     const [isAltPressed, setIsAltPressed] = useState(false);
@@ -1333,11 +1354,11 @@ const ImageCanvas = memo(
     }, [interactivePatch]);
 
     useEffect(() => {
-      const newSrc = finalPreviewUrl || selectedImage.thumbnailUrl;
-      const isNewImage = prevImageIdentityRef.current !== selectedImage.thumbnailUrl;
+      const newSrc = previewSrc;
+      const isNewImage = prevImageIdentityRef.current !== selectedImage.path;
 
       if (isNewImage) {
-        prevImageIdentityRef.current = selectedImage.thumbnailUrl;
+        prevImageIdentityRef.current = selectedImage.path;
         setDisplayState({ base: newSrc, fade: null });
         setIsFadingIn(false);
         return;
@@ -1375,7 +1396,7 @@ const ImageCanvas = memo(
           setIsFadingIn(false);
         }
       }
-    }, [finalPreviewUrl, selectedImage.thumbnailUrl, isSliderDragging]);
+    }, [previewSrc, selectedImage.path, isSliderDragging]);
 
     useEffect(() => {
       setBaseTool(brushSettings?.tool ?? ToolType.Brush);
@@ -1477,9 +1498,11 @@ const ImageCanvas = memo(
         : activeCrop.y
       : 0;
 
+    const scaleX = imageRenderSize.scaleX || imageRenderSize.scale || 1;
+    const scaleY = imageRenderSize.scaleY || imageRenderSize.scale || 1;
     const effectiveZoomScale = transformState.scale > 0 ? transformState.scale : 1;
     const brushStageSize = (brushSettings?.size ?? 0) / effectiveZoomScale;
-    const brushImageSpaceSize = brushStageSize / (imageRenderSize.scale || 1);
+    const brushImageSpaceSize = brushStageSize / (scaleY || 1);
 
     const isBrushActive =
       (isMasking || isAiEditing) &&
@@ -1683,11 +1706,11 @@ const ImageCanvas = memo(
         const pointerPos = getCanvasPointer(stage);
         if (!pointerPos) return;
 
-        const x = pointerPos.x / imageRenderSize.scale;
-        const y = pointerPos.y / imageRenderSize.scale;
+        const x = pointerPos.x / scaleX;
+        const y = pointerPos.y / scaleY;
 
-        const imgLogicalWidth = imageRenderSize.width / imageRenderSize.scale;
-        const imgLogicalHeight = imageRenderSize.height / imageRenderSize.scale;
+        const imgLogicalWidth = imageRenderSize.width / scaleX;
+        const imgLogicalHeight = imageRenderSize.height / scaleY;
 
         if (x < 0 || x > imgLogicalWidth || y < 0 || y > imgLogicalHeight) return;
 
@@ -1773,11 +1796,11 @@ const ImageCanvas = memo(
         const pointerPos = getCanvasPointer(stage);
         if (!pointerPos) return;
 
-        const x = pointerPos.x / imageRenderSize.scale;
-        const y = pointerPos.y / imageRenderSize.scale;
+        const x = pointerPos.x / scaleX;
+        const y = pointerPos.y / scaleY;
 
-        const imgLogicalWidth = imageRenderSize.width / imageRenderSize.scale;
-        const imgLogicalHeight = imageRenderSize.height / imageRenderSize.scale;
+        const imgLogicalWidth = imageRenderSize.width / scaleX;
+        const imgLogicalHeight = imageRenderSize.height / scaleY;
 
         if (x < 0 || x > imgLogicalWidth || y < 0 || y > imgLogicalHeight) return;
 
@@ -1894,9 +1917,8 @@ const ImageCanvas = memo(
           const pos = getCanvasPointer(e.target.getStage());
           if (!pos) return;
 
-          const { scale } = imageRenderSize;
-          const x = pos.x / scale + cropX;
-          const y = pos.y / scale + cropY;
+          const x = pos.x / scaleX + cropX;
+          const y = pos.y / scaleY + cropY;
 
           let newParams = { ...activeSubMask.parameters };
           newParams.targetX = x;
@@ -1918,9 +1940,8 @@ const ImageCanvas = memo(
           const pos = getCanvasPointer(e.target.getStage());
           if (!pos) return;
 
-          const { scale } = imageRenderSize;
-          const x = pos.x / scale + cropX;
-          const y = pos.y / scale + cropY;
+          const x = pos.x / scaleX + cropX;
+          const y = pos.y / scaleY + cropY;
 
           dragStartPointer.current = { x, y };
 
@@ -1956,9 +1977,8 @@ const ImageCanvas = memo(
             const pos = getCanvasPointer(e.target.getStage());
             if (!pos) return;
 
-            const { scale } = imageRenderSize;
-            const x = pos.x / scale + cropX;
-            const y = pos.y / scale + cropY;
+            const x = pos.x / scaleX + cropX;
+            const y = pos.y / scaleY + cropY;
 
             const activeId = activeAiSubMaskId;
             if (activeId) {
@@ -2011,11 +2031,10 @@ const ImageCanvas = memo(
           const isShiftClick = isBrushActive && e.evt.shiftKey && lastBrushPoint.current;
 
           if (isShiftClick) {
-            const { scale } = imageRenderSize;
             const startImageSpace = lastBrushPoint.current!;
             const endImageSpace = {
-              x: pos.x / scale + cropX,
-              y: pos.y / scale + cropY,
+              x: pos.x / scaleX + cropX,
+              y: pos.y / scaleY + cropY,
             };
 
             const dx = endImageSpace.x - startImageSpace.x;
@@ -2157,14 +2176,13 @@ const ImageCanvas = memo(
           const pointerPos = getCanvasPointer(stage);
           if (!pointerPos) return;
 
-          const { scale } = imageRenderSize;
-          const x = pointerPos.x / scale + cropX;
-          const y = pointerPos.y / scale + cropY;
+          const x = pointerPos.x / scaleX + cropX;
+          const y = pointerPos.y / scaleY + cropY;
 
           const distX = x - dragStartPointer.current.x;
           const distY = y - dragStartPointer.current.y;
           const screenThreshold = 15;
-          if (Math.sqrt(distX * distX + distY * distY) < screenThreshold / scale) {
+          if (Math.sqrt(distX * distX + distY * distY) < screenThreshold / scaleX) {
             return;
           }
 
@@ -2238,15 +2256,13 @@ const ImageCanvas = memo(
           const activeId = isMasking ? activeMaskId : activeAiSubMaskId;
 
           if (isManualCleanupActive && activeId) {
-            const { scale } = imageRenderSize;
-
             const imageSpaceLine: DrawnLine = {
               brushSize: brushImageSpaceSize,
               feather: brushSettings?.feather ? brushSettings?.feather / 100 : 0,
               flow: activeLineFlow,
               points: updatedLine.points.map((p: Coord) => ({
-                x: p.x / scale + cropX,
-                y: p.y / scale + cropY,
+                x: p.x / scaleX + cropX,
+                y: p.y / scaleY + cropY,
               })),
               tool: updatedLine.tool,
             };
@@ -2273,15 +2289,13 @@ const ImageCanvas = memo(
               triggerManualCleanup(activeId, sourceX, sourceY);
             }
           } else if (onLiveMaskPreview && activeContainer && activeSubMask && isBrushActive) {
-            const { scale } = imageRenderSize;
-
             const imageSpaceLine: DrawnLine = {
               brushSize: brushImageSpaceSize,
               feather: brushSettings?.feather ? brushSettings?.feather / 100 : 0,
               flow: activeLineFlow,
               points: updatedLine.points.map((p: Coord) => ({
-                x: p.x / scale + cropX,
-                y: p.y / scale + cropY,
+                x: p.x / scaleX + cropX,
+                y: p.y / scaleY + cropY,
               })),
               tool: updatedLine.tool,
             };
@@ -2385,11 +2399,10 @@ const ImageCanvas = memo(
           return;
         }
 
-        const { scale } = imageRenderSize;
         const activeId = isMasking ? activeMaskId : activeAiSubMaskId;
 
-        let startPoint = { x: box.start.x / scale + cropX, y: box.start.y / scale + cropY };
-        let endPoint = { x: box.end.x / scale + cropX, y: box.end.y / scale + cropY };
+        let startPoint = { x: box.start.x / scaleX + cropX, y: box.start.y / scaleY + cropY };
+        let endPoint = { x: box.end.x / scaleX + cropX, y: box.end.y / scaleY + cropY };
 
         const dx = box.end.x - box.start.x;
         const dy = box.end.y - box.start.y;
@@ -2427,7 +2440,6 @@ const ImageCanvas = memo(
         return;
       }
 
-      const { scale } = imageRenderSize;
       const activeId = isMasking ? activeMaskId : activeAiSubMaskId;
 
       if (isBrushActive) {
@@ -2436,8 +2448,8 @@ const ImageCanvas = memo(
           feather: brushSettings?.feather ? brushSettings?.feather / 100 : 0,
           flow: activeLineFlow,
           points: line.points.map((p: Coord) => ({
-            x: p.x / scale + cropX,
-            y: p.y / scale + cropY,
+            x: p.x / scaleX + cropX,
+            y: p.y / scaleY + cropY,
           })),
           tool: line.tool,
         };
@@ -2462,8 +2474,8 @@ const ImageCanvas = memo(
         const lastPoint = line.points[line.points.length - 1];
         if (lastPoint) {
           lastBrushPoint.current = {
-            x: lastPoint.x / scale + cropX,
-            y: lastPoint.y / scale + cropY,
+            x: lastPoint.x / scaleX + cropX,
+            y: lastPoint.y / scaleY + cropY,
           };
         }
 
@@ -2821,7 +2833,7 @@ const ImageCanvas = memo(
       };
     }, [originalSrc]);
 
-    const currentTarget = finalPreviewUrl || selectedImage.thumbnailUrl;
+    const currentTarget = previewSrc;
     const baseIsReady = displayState.base === currentTarget && !displayState.fade;
 
     const visiblePatch = interactivePatch ?? (baseIsReady ? null : retainedPatchRef.current);
@@ -2851,13 +2863,26 @@ const ImageCanvas = memo(
         return null;
       }
 
-      const scale = Math.min(viewportWidth / uncroppedEffectiveWidth, viewportHeight / uncroppedEffectiveHeight);
+      const squeeze =
+        Number((adjustments as any).anamorphicSqueeze) > 1.01
+          ? Number((adjustments as any).anamorphicSqueeze)
+          : 1;
+      const scale = Math.min(
+        viewportWidth / (uncroppedEffectiveWidth * squeeze),
+        viewportHeight / uncroppedEffectiveHeight,
+      );
 
-      const renderWidth = uncroppedEffectiveWidth * scale;
+      const renderWidth = uncroppedEffectiveWidth * squeeze * scale;
       const renderHeight = uncroppedEffectiveHeight * scale;
 
       return { width: renderWidth, height: renderHeight };
-    }, [selectedImage?.width, selectedImage?.height, imageRenderSize, adjustments.orientationSteps]);
+    }, [
+      selectedImage?.width,
+      selectedImage?.height,
+      imageRenderSize,
+      adjustments.orientationSteps,
+      (adjustments as any).anamorphicSqueeze,
+    ]);
 
     const cropImageTransforms = useMemo(() => {
       const rotation = liveRotation !== null && liveRotation !== undefined ? liveRotation : adjustments.rotation || 0;
@@ -3305,8 +3330,8 @@ const ImageCanvas = memo(
             <div className="absolute inset-0 pointer-events-none z-50">
               {!isDrawing.current &&
                 cloneHealMarkers.map((m) => {
-                  const left = (m.cx - cropX) * imageRenderSize.scale + imageRenderSize.offsetX;
-                  const top = (m.cy - cropY) * imageRenderSize.scale + imageRenderSize.offsetY;
+                  const left = (m.cx - cropX) * scaleX + imageRenderSize.offsetX;
+                  const top = (m.cy - cropY) * scaleY + imageRenderSize.offsetY;
 
                   return (
                     <div
@@ -3356,8 +3381,8 @@ const ImageCanvas = memo(
                     className="absolute pointer-events-auto rounded-full"
                     style={{
                       left:
-                        (activeSubMask.parameters.sourceX - cropX) * imageRenderSize.scale + imageRenderSize.offsetX,
-                      top: (activeSubMask.parameters.sourceY - cropY) * imageRenderSize.scale + imageRenderSize.offsetY,
+                        (activeSubMask.parameters.sourceX - cropX) * scaleX + imageRenderSize.offsetX,
+                      top: (activeSubMask.parameters.sourceY - cropY) * scaleY + imageRenderSize.offsetY,
                       width: 32,
                       height: 32,
                       transform: `translate(-50%, -50%) scale(${1 / maxSafeScale})`,
@@ -3443,7 +3468,9 @@ const ImageCanvas = memo(
                                 isMasking ? onSelectMask(renderSubMask.id) : onSelectAiSubMask(renderSubMask.id)
                               }
                               onUpdate={updateSubMask}
-                              scale={imageRenderSize.scale}
+                              scale={scaleX}
+                              scaleX={scaleX}
+                              scaleY={scaleY}
                               subMask={renderSubMask}
                               offsetX={groupOffsetX}
                               offsetY={groupOffsetY}

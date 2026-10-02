@@ -7,8 +7,11 @@ import { save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { toast } from 'react-toastify';
 import { useShallow } from 'zustand/react/shallow';
 import ModuleShell from './ModuleShell';
+import MapCollectionsPanel from '../panel/MapCollectionsPanel';
 import { useLibraryStore } from '../../store/useLibraryStore';
 import { useProcessStore } from '../../store/useProcessStore';
+import { useUIStore } from '../../store/useUIStore';
+import { useModuleCollectionSource } from '../../hooks/useModuleCollectionSource';
 import { ImageFile, Invokes } from '../ui/AppProperties';
 import { isLightHex, normalizeHex } from '../../utils/appearance';
 import { zipStore } from '../../utils/zipStore';
@@ -196,23 +199,30 @@ export default function WebModuleView({ onBackToLibrary }: Props) {
     }
   };
 
-  const { imageList, multiSelectedPaths } = useLibraryStore(
+  const { albumId, setAlbumId, images: imageList, albumTree } = useModuleCollectionSource();
+  const { developLeftPanelWidth, isInstantTransition, setUI } = useUIStore(
     useShallow((s) => ({
-      imageList: s.imageList,
-      multiSelectedPaths: s.multiSelectedPaths,
+      developLeftPanelWidth: s.developLeftPanelWidth,
+      isInstantTransition: s.isInstantTransition,
+      setUI: s.setUI,
     })),
   );
+  const multiSelectedPaths = useLibraryStore((s) => s.multiSelectedPaths);
   const thumbs = useProcessStore((s) => s.thumbnails);
 
   const photos = useMemo(() => {
-    const paths =
-      multiSelectedPaths.length > 0
-        ? multiSelectedPaths
-        : imageList.slice(0, 24).map((i: ImageFile) => i.path);
+    const inCol = new Set(imageList.map((i: ImageFile) => i.path));
+    const checked = (multiSelectedPaths || []).filter((p) => inCol.has(p));
+    const paths = checked.length > 0 ? checked : imageList.map((i: ImageFile) => i.path);
     return paths
       .map((p) => imageList.find((i: ImageFile) => i.path === p))
       .filter(Boolean) as ImageFile[];
   }, [multiSelectedPaths, imageList]);
+
+  useEffect(() => {
+    setUI({ mapImageList: photos });
+    return () => setUI({ mapImageList: null });
+  }, [photos, setUI]);
 
   useEffect(() => {
     const paths = photos.map((p) => p.path);
@@ -381,32 +391,46 @@ export default function WebModuleView({ onBackToLibrary }: Props) {
       })}
       icon={Globe}
       onBackToLibrary={onBackToLibrary}
-      left={
-        <>
-          <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-text-secondary">
-            {t('ui.web.templates' as any, { defaultValue: 'Template browser' })}
+      leftPanel={
+        <div
+          className="h-full flex flex-col gap-2 shrink-0"
+          style={{ width: developLeftPanelWidth || 220 }}
+        >
+          <div className="flex-1 min-h-0">
+            <MapCollectionsPanel
+              width={developLeftPanelWidth || 220}
+              isInstantTransition={isInstantTransition}
+              albumTree={albumTree}
+              activeAlbumId={albumId}
+              onSelect={setAlbumId}
+            />
           </div>
-          {(
-            [
-              ['classic', 'Classic'],
-              ['grid', 'Grid'],
-              ['mosaic', 'Mosaic'],
-            ] as const
-          ).map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => setTemplate(id)}
-              className={`w-full text-left px-2 py-1.5 rounded text-[12px] ${
-                template === id
-                  ? 'bg-card-active text-text-primary'
-                  : 'text-text-secondary hover:bg-surface hover:text-text-primary'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </>
+          <div className="shrink-0 bg-bg-secondary rounded-lg border border-border-color/30 p-2 space-y-1">
+            <div className="px-1 py-1 text-[10px] uppercase tracking-wider text-text-secondary">
+              {t('ui.web.templates' as any, { defaultValue: 'Template browser' })}
+            </div>
+            {(
+              [
+                ['classic', 'Classic'],
+                ['grid', 'Grid'],
+                ['mosaic', 'Mosaic'],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setTemplate(id)}
+                className={`w-full text-left px-2 py-1.5 rounded text-[12px] ${
+                  template === id
+                    ? 'bg-card-active text-text-primary'
+                    : 'text-text-secondary hover:bg-surface hover:text-text-primary'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
       }
       right={
         <>

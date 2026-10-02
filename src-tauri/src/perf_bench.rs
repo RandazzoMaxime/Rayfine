@@ -44,6 +44,252 @@ use crate::image_processing::{
 
 const DEFAULT_DIR: &str = "/Volumes/Extreme SSD/PHOTOGRAPHIE_VIDEOS/2026_08_12_ECLIPSE_SOLAIRE/RAW";
 
+/// Pixel oracle: uses the shipped decoder, adjustment parser and GPU shader.
+/// RAYFINE_COMPARE_MANIFEST points to a JSON list of {name, raw, adjustments}.
+#[test]
+#[ignore]
+fn lightroom_render_cases() {
+    let manifest = PathBuf::from(std::env::var("RAYFINE_COMPARE_MANIFEST").expect("manifest"));
+    let cases: serde_json::Value = serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+    let out = manifest.parent().unwrap().join("rayfine");
+    fs::create_dir_all(&out).unwrap();
+    struct RestoreShader(Option<String>);
+    impl Drop for RestoreShader {
+        fn drop(&mut self) {
+            *crate::gpu_processing::MAIN_SHADER_OVERRIDE.lock().unwrap() = self.0.take();
+        }
+    }
+    let _restore = RestoreShader(crate::gpu_processing::MAIN_SHADER_OVERRIDE.lock().unwrap().take());
+    if let Ok(shader_path) = std::env::var("RAYFINE_COMPARE_SHADER") {
+        *crate::gpu_processing::MAIN_SHADER_OVERRIDE.lock().unwrap() = Some(fs::read_to_string(shader_path).unwrap());
+    }
+    let (ctx, gpu) = make_headless_gpu_context().expect("GPU required");
+    println!("Comparison GPU: {gpu}");
+    let raw_path = cases[0]["raw"].as_str().unwrap();
+    let bytes = fs::read(raw_path).unwrap();
+    let settings = std::env::var("RAYFINE_COMPARE_SETTINGS").ok()
+        .map(|p| serde_json::from_slice::<AppSettings>(&fs::read(p).unwrap()).unwrap())
+        .unwrap_or_else(|| {
+            let mut settings = AppSettings::default();
+            settings.raw_highlight_compression = Some(4.0);
+            settings.raw_preprocessing_color_nr = Some(0.0);
+            settings.raw_preprocessing_sharpening = Some(0.0);
+            settings
+        });
+    let mut base = crate::raw_processing::develop_raw_image(&bytes, false,
+        settings.raw_highlight_compression.unwrap_or(2.5), settings.linear_raw_mode.clone(), None).unwrap();
+    assert_ne!(resolve_tonemapper_override(&settings, true), Some(1),
+        "Lightroom fixture measures Basic RAW, disable the AGX override for this comparison");
+    let (nr, sharpening) = crate::image_loader::raw_enhance_params(&settings);
+    if nr > 0.0 || sharpening > 0.0 {
+        remove_raw_artifacts_and_enhance(&mut base, nr, sharpening);
+    }
+    base.save(out.join("linear.tif")).unwrap();
+    let (bw, bh) = base.dimensions();
+    let ratio = 1600.0 / bw.max(bh) as f32;
+    let base = downscale_f32_image(&base, (bw as f32 * ratio).round() as u32, (bh as f32 * ratio).round() as u32);
+    let (w, h) = base.dimensions();
+    let data = to_rgba_f16(&base);
+    let (_texture, view) = create_input_texture(&ctx, &data, w, h);
+    let processor = GpuProcessor::new(ctx.clone(), padded(w), padded(h), true).unwrap();
+    processor.prepare_dehaze(&base,0);
+    processor.prepare_raw_tone(&base,0,true);
+    for case in cases.as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        assert_eq!(case["raw"].as_str().unwrap(), raw_path, "This fixture renders one RAW per manifest");
+        let _override_texture;
+        let override_view;
+        let case_view = if let Some(input_path) = case["input_override"].as_str() {
+            let input = image::open(input_path).unwrap();
+            assert_eq!(input.dimensions(), (w,h));
+            (_override_texture,override_view) = create_input_texture(&ctx,&to_rgba_f16(&input),w,h);
+            &override_view
+        } else {&view};
+        let image = render_readback(&processor, case_view, w, h, &case["adjustments"], Some(0), None);
+        image.save(out.join(format!("{name}.png"))).unwrap();
+        if matches!(name, "curve_asymmetric" | "vibrance_100" | "blacks_plus" | "blacks_100" | "blacks_minus" | "blacks_-100" | "contrast_minus" | "clarity_100" | "shadows_100" | "mixed") {
+            let reference_path = manifest.parent().unwrap().join("lightroom").join(name)
+                .join(format!("{}.tif",Path::new(raw_path).file_stem().unwrap().to_str().unwrap()));
+            let reference = image::open(reference_path).unwrap().to_rgb32f();
+            let rendered = image.to_rgb32f();
+            assert_eq!(reference.dimensions(), rendered.dimensions());
+            let linear = |c: f32| if c <= 0.04045 {c / 12.92} else {((c + 0.055) / 1.055).powf(2.4)};
+            let mut chroma_sum = 0.0f64;
+            let mut lightness_sum = 0.0f64;
+            let mut count = 0;
+            for (a,b) in rendered.pixels().zip(reference.pixels()).step_by(4) {
+                let la = lab_from_linear_rgb(linear(a[0]),linear(a[1]),linear(a[2]));
+                let lb = lab_from_linear_rgb(linear(b[0]),linear(b[1]),linear(b[2]));
+                chroma_sum += ((la[1]-lb[1]).powi(2)+(la[2]-lb[2]).powi(2)).sqrt() as f64;
+                lightness_sum += (la[0]-lb[0]).abs() as f64;
+                count += 1;
+            }
+            let chroma_error = chroma_sum / count as f64;
+            let lightness_error = lightness_sum / count as f64;
+            println!("{name}: lightness {lightness_error:.3}, chroma delta-ab {chroma_error:.3}");
+            let broad_tone_case = matches!(name,"blacks_minus" | "blacks_-100" | "contrast_minus" | "clarity_100" | "shadows_100" | "mixed");
+            let chroma_limit = if name == "vibrance_100" || broad_tone_case {5.0} else {3.0};
+            let lightness_limit = if broad_tone_case {5.0} else {3.0};
+            assert!(chroma_error <= chroma_limit, "RAW colour differs from Lightroom for {name}: {chroma_error:.3} Lab units");
+            assert!(lightness_error <= lightness_limit, "RAW lightness differs from Lightroom for {name}: {lightness_error:.3}%");
+        }
+        // The native preview renders to working_texture; export reads tiles.
+        processor.run(case_view, w, h, RenderRequest {
+            adjustments: get_all_adjustments_from_json(&case["adjustments"], true, Some(0)),
+            mask_bitmaps: &[], lut: None, roi: None,
+        }, true, true).unwrap();
+        let preview = processor.read_display_pixels_for_test(w, h).unwrap();
+        let export = image.to_rgba8().into_raw();
+        assert_eq!(preview.len(), export.len(), "Preview/export pixel count for {name}");
+        let max_error = preview.iter().zip(&export).map(|(a,b)| a.abs_diff(*b)).max().unwrap();
+        assert!(max_error <= 1, "Preview/export mismatch for {name}: {max_error}/255");
+        println!("Rendered {name}: {w}x{h}");
+    }
+}
+
+#[test]
+#[ignore] // Requires a real GPU, like the pixel oracle above.
+fn jpeg_rgb_curve_does_not_renormalize_other_channels() {
+    let (ctx, _) = make_headless_gpu_context().expect("GPU required");
+    let img = DynamicImage::ImageRgb32F(ImageBuffer::from_pixel(32, 32, image::Rgb([0.2, 0.2, 0.2])));
+    let (_texture, view) = create_input_texture(&ctx, &to_rgba_f16(&img), 32, 32);
+    let processor = GpuProcessor::new(ctx, padded(32), padded(32), false).unwrap();
+    let render = |json| {
+        let (pixels,w,h,_,_) = processor.run(&view,32,32,RenderRequest {
+            adjustments: get_all_adjustments_from_json(&json,false,Some(0)),
+            mask_bitmaps:&[],lut:None,roi:None,
+        },false,false).unwrap();
+        DynamicImage::ImageRgba8(ImageBuffer::<Rgba<u8>,_>::from_raw(w,h,pixels).unwrap()).to_rgb8()
+    };
+    let neutral = render(serde_json::json!({}));
+    let red = render(serde_json::json!({"curves":{"red":[{"x":0,"y":25.5},{"x":255,"y":255}]}}));
+    let a = neutral.get_pixel(16,16).0;
+    let b = red.get_pixel(16,16).0;
+    assert!(b[0] > a[0] + 5, "Red curve must increase red: {a:?} -> {b:?}");
+    assert!(a[1].abs_diff(b[1]) <= 1 && a[2].abs_diff(b[2]) <= 1,
+        "Red curve must preserve green/blue: {a:?} -> {b:?}");
+}
+
+#[test]
+#[ignore] // Requires a GPU; checks continuity of the real HDR renderer.
+fn raw_hdr_vibrance_is_continuous_at_zero() {
+    let (ctx,_) = make_headless_gpu_context().unwrap();
+    let image = DynamicImage::ImageRgb32F(ImageBuffer::from_pixel(32,32,image::Rgb([2.0,1.3,1.5])));
+    let (_texture,view) = create_input_texture(&ctx,&to_rgba_f16(&image),32,32);
+    let processor = GpuProcessor::new(ctx,padded(32),padded(32),false).unwrap();
+    let render = |v| processor.run(&view,32,32,RenderRequest {
+        adjustments:get_all_adjustments_from_json(&serde_json::json!({"toneMapper":"agx","vibrance":v}),true,Some(1)),
+        mask_bitmaps:&[],lut:None,roi:None,
+    },false,false).unwrap().0;
+    let neutral = render(0.0);
+    let tiny = render(0.01);
+    let error = neutral.iter().zip(tiny).map(|(a,b)| a.abs_diff(b)).max().unwrap();
+    assert!(error <= 2,"HDR vibrance clips abruptly near zero: {error}/255");
+}
+
+#[test]
+#[ignore] // Real GPU: masking must protect flat texture while retaining strong edges.
+fn sharpening_masking_protects_flat_texture() {
+    let (ctx,_) = make_headless_gpu_context().unwrap();
+    let (w,h) = (256,96);
+    let image = DynamicImage::ImageRgb32F(ImageBuffer::from_fn(w,h,|x,y| {
+        let base = if x < 128 {0.1} else {0.7};
+        let noise = if ((x*17+y*13)%7)<3 {0.005} else {-0.005};
+        image::Rgb([base+noise;3])
+    }));
+    let (_texture,view) = create_input_texture(&ctx,&to_rgba_f16(&image),w,h);
+    let processor = GpuProcessor::new(ctx,padded(w),padded(h),false).unwrap();
+    let render = |amount,masking| processor.run(&view,w,h,RenderRequest {
+        adjustments:get_all_adjustments_from_json(&serde_json::json!({"sharpness":amount,"sharpenMasking":masking}),true,Some(0)),
+        mask_bitmaps:&[],lut:None,roi:None,
+    },false,false).unwrap().0;
+    let neutral = render(0,0);
+    let unmasked = render(100,0);
+    let masked = render(100,100);
+    let delta = |pixels:&[u8],lo:u32,hi:u32| {
+        let mut sum = 0.0; let mut n = 0;
+        for y in 8..h-8 {for x in lo..hi {
+            let i=((y*w+x)*4) as usize;
+            sum+=pixels[i].abs_diff(neutral[i]) as f64; n+=1;
+        }}
+        sum/n as f64
+    };
+    let flat0=delta(&unmasked,20,100);
+    let flat100=delta(&masked,20,100);
+    assert!(flat0 > 0.1 && flat100 < flat0*0.3,
+        "Masking must protect flat texture: unmasked={flat0}, masked={flat100}");
+    assert!(delta(&masked,126,130)>0.2,"Masking must retain sharpening at strong edges");
+}
+
+#[test]
+#[ignore]
+fn monochrome_camera_profile_converts_colour_and_uses_gray_mixer_independently() {
+    let (ctx,_) = make_headless_gpu_context().unwrap();
+    let (w,h)=(32,32);
+    let image=DynamicImage::ImageRgb32F(ImageBuffer::from_fn(w,h,|x,_| match x {
+        0..=9=>image::Rgb([0.8,0.1,0.05]),
+        10..=20=>image::Rgb([0.05,0.6,0.07]),
+        _=>image::Rgb([0.04,0.1,0.8]),
+    }));
+    let (_texture,view)=create_input_texture(&ctx,&to_rgba_f16(&image),w,h);
+    let processor=GpuProcessor::new(ctx,padded(w),padded(h),false).unwrap();
+    let render=|settings|processor.run(&view,w,h,RenderRequest {
+        adjustments:get_all_adjustments_from_json(&settings,false,Some(0)),
+        mask_bitmaps:&[],lut:None,roi:None,
+    },false,false).unwrap().0;
+    let standard=render(serde_json::json!({"cameraProfile":"Standard","saturation":0}));
+    let mono=render(serde_json::json!({"cameraProfile":"Monochrome","saturation":100}));
+    let blue_bright=render(serde_json::json!({"cameraProfile":"Monochrome","saturation":0,"grayMixer":{"blues":80}}));
+    let blue_dark=render(serde_json::json!({"cameraProfile":"Monochrome","grayMixer":{"blues":-80}}));
+    fn pixel(data:&[u8],w:u32,x:u32)->[u8;3] {
+        let i=((16*w+x)*4) as usize;
+        [data[i],data[i+1],data[i+2]]
+    }
+    let red_standard=pixel(&standard,w,5);
+    let red_mono=pixel(&mono,w,5);
+    assert!(red_standard[0].abs_diff(red_standard[1])>20,"Standard must retain colour: {red_standard:?}");
+    assert!(red_mono[0].abs_diff(red_mono[1])<=1 && red_mono[1].abs_diff(red_mono[2])<=1,
+        "Monochrome must convert via its profile even at saturation +100: {red_mono:?}");
+    let base_blue=pixel(&mono,w,26)[0];
+    assert!(pixel(&blue_bright,w,26)[0]>base_blue.saturating_add(12),"Blue Gray Mixer +80 must lighten blue tones");
+    assert!(pixel(&blue_dark,w,26)[0]<base_blue.saturating_sub(8),"Blue Gray Mixer -80 must darken blue tones");
+}
+
+#[test]
+#[ignore]
+fn dehaze_cache_refreshes_when_uploaded_source_changes() {
+    let (ctx,_) = make_headless_gpu_context().unwrap();
+    let processor = GpuProcessor::new(ctx,padded(32),padded(32),false).unwrap();
+    let image = |v| DynamicImage::ImageRgb32F(ImageBuffer::from_pixel(32,32,image::Rgb([v,v,v])));
+    processor.prepare_dehaze(&image(0.2),7);
+    processor.input_generation.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
+    processor.prepare_dehaze(&image(0.7),7); // Same geometry, different uploaded photo.
+    let a = processor.dehaze_airlight_for_test().unwrap();
+    assert!(a.iter().all(|v| (*v-0.7).abs()<0.001),"Stale airlight after source swap: {a:?}");
+}
+
+#[test]
+#[ignore]
+fn guided_dehaze_zoom_roi_matches_full_render() {
+    let (ctx,_) = make_headless_gpu_context().unwrap();
+    let image = DynamicImage::ImageRgb32F(ImageBuffer::from_fn(512,512,|x,y|
+        image::Rgb([0.1+0.7*x as f32/511.0,0.12+0.5*y as f32/511.0,0.9-0.6*x as f32/511.0])));
+    let (_texture,view) = create_input_texture(&ctx,&to_rgba_f16(&image),512,512);
+    let processor = GpuProcessor::new(ctx,512,512,false).unwrap();
+    processor.prepare_dehaze(&image,7);
+    let adj = serde_json::json!({"dehaze":50});
+    let full = render_readback(&processor,&view,512,512,&adj,Some(0),None).to_rgba8();
+    let roi = Roi{x:233,y:211,width:75,height:50};
+    let patch = render_readback(&processor,&view,512,512,&adj,Some(0),Some(roi)).to_rgba8();
+    let mut max_error=0;
+    for y in 0..roi.height {for x in 0..roi.width {
+        for channel in 0..4 {
+            max_error=max_error.max(full.get_pixel(x+roi.x,y+roi.y)[channel].abs_diff(patch.get_pixel(x,y)[channel]));
+        }
+    }}
+    assert!(max_error<=1,"Zoom patch transmission coordinates differ: {max_error}/255");
+}
+
 // ---------------------------------------------------------------------------
 // Timing / reporting helpers
 // ---------------------------------------------------------------------------

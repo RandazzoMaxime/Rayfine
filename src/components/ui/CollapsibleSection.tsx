@@ -1,5 +1,5 @@
 import { useRef, useEffect } from 'react';
-import { ChevronDown, Eye, EyeOff } from 'lucide-react';
+import { ChevronDown, ChevronLeft, Eye, EyeOff } from 'lucide-react';
 import clsx from 'clsx';
 import { useTranslation } from 'react-i18next';
 
@@ -38,7 +38,7 @@ export default function CollapsibleSection({
     const updateMaxHeight = () => {
       if (isOpen) {
         const contentHeight = content.scrollHeight;
-        wrapper.style.maxHeight = `${contentHeight}px`;
+        wrapper.style.maxHeight = `${contentHeight + 8}px`;
       } else {
         wrapper.style.maxHeight = '0px';
       }
@@ -60,7 +60,7 @@ export default function CollapsibleSection({
   return (
     <div className="shrink-0 border-t border-border-color/40" onContextMenu={onContextMenu}>
       <div
-        className="w-full px-2 py-1.5 min-h-[28px] flex items-center justify-between text-left hover:bg-card-active/50 cursor-pointer select-none"
+        className="w-full px-2 py-2.5 min-h-[36px] flex items-center justify-between gap-1 text-left hover:bg-card-active/50 cursor-pointer select-none"
         onClick={(e) => onToggle(e)}
       >
         {canToggleVisibility && (
@@ -82,18 +82,19 @@ export default function CollapsibleSection({
             {isContentVisible ? <Eye size={14} /> : <EyeOff size={14} />}
           </button>
         )}
-        <div className="flex items-center gap-0.5 min-w-0 ml-auto">
-          <span className="truncate text-[13px] font-medium text-text-primary leading-none">{title}</span>
-          <ChevronDown
-            className={clsx('text-text-secondary transition-transform duration-200 shrink-0', { 'rotate-180': isOpen })}
-            size={14}
-          />
+        <div className="flex items-center gap-1 min-w-0 ml-auto">
+          <span className="truncate text-[13px] font-medium text-text-primary leading-5 py-px">{title}</span>
+          {isOpen ? (
+            <ChevronDown className="text-text-secondary shrink-0" size={14} />
+          ) : (
+            <ChevronLeft className="text-text-secondary shrink-0" size={14} />
+          )}
         </div>
       </div>
       <div ref={wrapperRef} className="overflow-hidden transition-all duration-200 ease-in-out">
         <div
           className={clsx(
-            'px-2 pb-2 pt-1.5 transition-opacity duration-200',
+            'px-2 pb-4 pt-2 transition-opacity duration-200',
             !isContentVisible && 'opacity-30 pointer-events-none',
           )}
           ref={contentRef}

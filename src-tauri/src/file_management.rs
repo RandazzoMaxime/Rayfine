@@ -58,7 +58,15 @@ pub fn ensure_thumbnail_store(user_data_dir: &Path) -> std::result::Result<PathB
 
 fn resolve_thumbnail_cache_dir(app_handle: &AppHandle) -> std::result::Result<PathBuf, String> {
     let user_data = crate::catalog::albums_dir(app_handle)?;
-    ensure_thumbnail_store(&user_data)
+    let dir = ensure_thumbnail_store(&user_data)?;
+    // convertFileSrc serves these JPEGs via the asset protocol. The static
+    // `$APPDATA/albums/thumbnails/**` scope covers the default catalog; a
+    // relocated data_dir must be allowed at runtime or the library gets 403s.
+    app_handle
+        .asset_protocol_scope()
+        .allow_directory(&dir, true)
+        .map_err(|e| e.to_string())?;
+    Ok(dir)
 }
 
 /// Merge incoming paths into the worker queue and return immediately.
@@ -2274,10 +2282,15 @@ pub fn resolve_lens_params_in_adjustments(
                         {
                             focal_length = fl;
                         }
-                        if let Some(ap_str) = exif.get("ApertureValue").or(exif.get("FNumber"))
-                            && let Ok(ap) = ap_str.replace("f/", "").trim().parse::<f32>()
+                        if let Some(ap_str) = exif.get("FNumber") {
+                            if let Ok(ap) = ap_str.replace("f/", "").trim().parse::<f32>() {
+                                aperture = Some(ap);
+                            }
+                        } else if let Some(av_str) = exif.get("ApertureValue")
+                            && let Ok(av) = av_str.trim().parse::<f32>()
                         {
-                            aperture = Some(ap);
+                            // EXIF ApertureValue is APEX Av, while Lensfun expects f-number.
+                            aperture = Some(2.0_f32.powf(av / 2.0));
                         }
                         if let Some(dist_str) = exif.get("SubjectDistance")
                             && let Ok(dist) = dist_str.replace(" m", "").trim().parse::<f32>()
@@ -7733,6 +7746,25 @@ mod thumbnail_store_tests {
             t0.elapsed().as_micros()
         );
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn asset_protocol_scope_covers_catalog_thumbnail_store() {
+        // convertFileSrc serves JPEGs via the asset protocol. A path outside
+        // assetProtocol.scope is 403 (library grid stays empty). Catalog thumbs
+        // live at `{app_data_dir}/albums/thumbnails`, not `$APPCACHE/thumbnails`.
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json");
+        let scope = conf["app"]["security"]["assetProtocol"]["scope"]
+            .as_array()
+            .expect("assetProtocol.scope");
+        let patterns: Vec<&str> = scope.iter().filter_map(|v| v.as_str()).collect();
+        assert!(
+            patterns.iter().any(|p| {
+                p.contains("$APPDATA") && p.contains("albums") && p.contains("thumbnails")
+            }),
+            "assetProtocol.scope must allow $APPDATA/albums/thumbnails, got {patterns:?}"
+        );
     }
 
     #[test]

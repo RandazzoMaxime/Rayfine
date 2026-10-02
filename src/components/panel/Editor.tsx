@@ -98,7 +98,6 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
   const interactivePatch = useEditorStore((s) => s.interactivePatch);
   const showOriginal = useEditorStore((s) => s.showOriginal);
   const beforeAfterSplit = useEditorStore((s) => s.beforeAfterSplit);
-  const softProofing = useEditorStore((s) => s.softProofing);
   const isSliderDragging = useEditorStore((s) => s.isSliderDragging);
   const targetZoom = useEditorStore((s) => s.zoom);
   const originalSize = useEditorStore((s) => s.originalSize);
@@ -229,11 +228,6 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
     [setEditor],
   );
 
-  const toggleSoftProofing = useCallback(
-    () => setEditor((state) => ({ softProofing: !state.softProofing })),
-    [setEditor],
-  );
-
   const handleToggleFullScreen = useCallback(() => {
     const currentlyZoomed = targetZoom > 1.01;
     setUI({ isInstantTransition: currentlyZoomed });
@@ -253,8 +247,10 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
     (size: RenderSize) => {
       setEditor({ displaySize: { width: size.width, height: size.height } });
       if (size.scale) {
-        const baseWidth = size.width / size.scale;
-        const baseHeight = size.height / size.scale;
+        const sx = size.scaleX || size.scale;
+        const sy = size.scaleY || size.scale;
+        const baseWidth = size.width / sx;
+        const baseHeight = size.height / sy;
         const newSize = {
           width: baseWidth,
           height: baseHeight,
@@ -344,7 +340,11 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
     return null;
   }, [selectedImage, adjustments.crop, adjustments.orientationSteps]);
 
-  const imageRenderSize = useImageRenderSize(imageContainerRef, croppedDimensions);
+  const imageRenderSize = useImageRenderSize(
+    imageContainerRef,
+    croppedDimensions,
+    Number((adjustments as any).anamorphicSqueeze) || 1,
+  );
   const imageRenderSizeRef = useRef(imageRenderSize);
   imageRenderSizeRef.current = imageRenderSize;
 
@@ -453,6 +453,12 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
     },
     [handleZoomed],
   );
+
+  useEffect(() => {
+    applyTransform(0, 0, 1);
+    // Fit each newly opened photo; do not retrigger when applyTransform identity changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedImage?.path]);
 
   const animateTransform = useCallback(
     (targetX: number, targetY: number, targetScale: number, duration: number) => {
@@ -2023,8 +2029,7 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
           onToggleShowOriginal={toggleShowOriginal}
           onToggleBeforeAfterSplit={toggleBeforeAfterSplit}
           beforeAfterSplit={beforeAfterSplit}
-          softProofing={softProofing}
-          onToggleSoftProofing={toggleSoftProofing}
+
           onUndo={undo}
           selectedImage={selectedImage}
           showOriginal={showOriginal}

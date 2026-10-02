@@ -17,7 +17,7 @@ interface BorderTemplatesPanelProps {
   aspect: BorderAspect;
   active: TemplateRef;
   onSelect(ref: TemplateRef): void;
-  onHide(): void;
+  onHide?: () => void;
   isInstantTransition?: boolean;
 }
 
@@ -64,14 +64,16 @@ export default function BorderTemplatesPanel({
         <Text variant={TextVariants.small} weight={TextWeights.semibold} className="uppercase tracking-wider text-[10px]">
           {t('ui.moduleBar.border' as any, { defaultValue: 'Border' })}
         </Text>
-        <button
-          type="button"
-          className="p-1 rounded hover:bg-card-active text-text-secondary"
-          data-tooltip={t('ui.developLeft.hide' as any)}
-          onClick={onHide}
-        >
-          <ChevronLeft size={14} />
-        </button>
+        {onHide && (
+          <button
+            type="button"
+            className="p-1 rounded hover:bg-card-active text-text-secondary"
+            data-tooltip={t('ui.developLeft.hide' as any)}
+            onClick={onHide}
+          >
+            <ChevronLeft size={14} />
+          </button>
+        )}
       </div>
 
       <div className="flex flex-col flex-1 min-h-0">

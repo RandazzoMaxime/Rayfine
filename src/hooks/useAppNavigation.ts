@@ -297,7 +297,7 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
           exif: null,
           group_id: imageFile?.group_id ?? null,
           height: 0,
-          isRaw: false,
+          isRaw: !!imageFile?.is_raw,
           isReady: false,
           metadata: null,
           originalUrl: null,

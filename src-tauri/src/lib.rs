@@ -18,6 +18,7 @@ mod watermarks;
 mod culling;
 mod lrcat;
 mod demosaic;
+mod dehaze;
 mod denoising;
 mod exif_processing;
 mod export_processing;
@@ -39,6 +40,9 @@ mod panorama_stitching;
 mod panorama_utils;
 mod preset_converter;
 mod raw_processing;
+mod raw_tone;
+mod tonemap;
+pub use raw_processing::develop_raw_image;
 mod tagging;
 mod tagging_utils;
 mod window_customizer;
@@ -1711,6 +1715,12 @@ async fn render_detail_patch(
             }
             let input_lock = state.detail_input.lock().unwrap();
             let input = input_lock.as_ref().ok_or("detail input missing")?;
+            if all_adjustments.global.is_raw_image == 1 && all_adjustments.global.tonemapper_mode == 0 {
+                processor.prepare_raw_tone(&full,key,crate::gpu_processing::requires_raw_tone_mask(&all_adjustments));
+            }
+            if crate::gpu_processing::requires_guided_dehaze(&all_adjustments) {
+                processor.prepare_dehaze(&full,key);
+            }
             processor.run(
                 &input.texture_view,
                 width,
@@ -1926,6 +1936,7 @@ async fn generate_preview_for_path(
             },
             "generate_preview_for_path",
         )?;
+        let final_image = apply_anamorphic_unsqueeze(final_image, &js_adjustments);
 
         let (width, height) = final_image.dimensions();
         let rgb_pixels = final_image.to_rgb8().into_vec();

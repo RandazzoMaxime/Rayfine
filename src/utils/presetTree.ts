@@ -241,6 +241,7 @@ const EXPLICIT_SECTION: Record<string, string> = {
   perspectiveUpright: 'transform',
   guidedUprightLines: 'transform',
   cropConstrainToWarp: 'transform',
+  anamorphicSqueeze: 'transform',
   crop: 'crop',
   aspectRatio: 'crop',
   cropConstrainToUnitSquare: 'crop',

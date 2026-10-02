@@ -182,6 +182,29 @@
   .tint-gradient-track {
     background: linear-gradient(to right, #458d43, #57ce57, #8a8a8a, #9c548a, #be409f) !important;
   }
+  .calibration-tint-gradient-track {
+    background: linear-gradient(to right, #26a641 0%, #858585 50%, #c23db2 100%) !important;
+  }
+
+  /* Calibration primaries are independent of the HSL mixer channel state. */
+  .calibration-hue-red {
+    background: linear-gradient(to right, hsl(300, 75%, 50%) 0%, hsl(0, 100%, 50%) 50%, hsl(60, 100%, 50%) 100%) !important;
+  }
+  .calibration-hue-green {
+    background: linear-gradient(to right, hsl(60, 100%, 50%) 0%, hsl(120, 75%, 45%) 50%, hsl(180, 100%, 45%) 100%) !important;
+  }
+  .calibration-hue-blue {
+    background: linear-gradient(to right, hsl(180, 100%, 42%) 0%, hsl(240, 85%, 50%) 50%, hsl(300, 75%, 50%) 100%) !important;
+  }
+  .calibration-saturation-red {
+    background: linear-gradient(to right, hsl(0, 0%, 50%) 0%, hsl(0, 60%, 50%) 50%, hsl(0, 100%, 50%) 100%) !important;
+  }
+  .calibration-saturation-green {
+    background: linear-gradient(to right, hsl(120, 0%, 50%) 0%, hsl(120, 60%, 45%) 50%, hsl(120, 100%, 40%) 100%) !important;
+  }
+  .calibration-saturation-blue {
+    background: linear-gradient(to right, hsl(240, 0%, 50%) 0%, hsl(240, 60%, 50%) 50%, hsl(240, 100%, 50%) 100%) !important;
+  }
   .hue-range-track {
     background: linear-gradient(
       to right,
@@ -422,16 +445,44 @@
 }
 
 .cg-sat-gradient {
-  background: linear-gradient(to right, hsl(var(--cg-hue), 0%, 50%) 0%, hsl(var(--cg-hue), 100%, 50%) 100%) !important;
+  background: linear-gradient(to right, hsl(var(--cg-hue), 0%, 42%) 0%, hsl(var(--cg-hue), 100%, 50%) 100%) !important;
 }
 
 .cg-lum-gradient {
   background: linear-gradient(
     to right,
-    hsl(var(--cg-hue), var(--cg-sat), 0%) 0%,
+    hsl(var(--cg-hue), var(--cg-sat), 10%) 0%,
     hsl(var(--cg-hue), var(--cg-sat), 50%) 50%,
-    hsl(var(--cg-hue), var(--cg-sat), 100%) 100%
+    hsl(var(--cg-hue), var(--cg-sat), 88%) 100%
   ) !important;
+}
+
+.slider-input.slider-on-gradient::-webkit-slider-thumb {
+  height: 14px;
+  width: 14px;
+  margin-top: -2px;
+  background: #fff;
+  border: 1px solid #111;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.55),
+    0 1px 2px rgba(0, 0, 0, 0.45);
+  transition: none;
+}
+
+.slider-input.slider-on-gradient::-moz-range-thumb {
+  height: 14px;
+  width: 14px;
+  background: #fff;
+  border: 1px solid #111;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.55),
+    0 1px 2px rgba(0, 0, 0, 0.45);
+  transition: none;
+}
+
+.slider-input.slider-on-gradient.slider-thumb-active::-webkit-slider-thumb,
+.slider-input.slider-on-gradient.slider-thumb-active::-moz-range-thumb {
+  transform: none;
 }
 
 @layer utilities {

@@ -137,7 +137,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   histogram: null,
   waveform: null,
   isWaveformVisible: false,
-  activeWaveformChannel: 'luma',
+  activeWaveformChannel: 'histogram',
   waveformHeight: 150,
   imageRevision: 0,
 

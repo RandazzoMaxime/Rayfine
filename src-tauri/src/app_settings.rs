@@ -140,6 +140,7 @@ pub fn all_available_adjustments() -> HashSet<String> {
         "transformScale",
         "transformXOffset",
         "transformYOffset",
+        "anamorphicSqueeze",
         "masks",
         "lensCorrectionMode",
         "lensMaker",
@@ -174,6 +175,7 @@ pub fn default_included_adjustments() -> HashSet<String> {
         "transformScale",
         "transformXOffset",
         "transformYOffset",
+        "anamorphicSqueeze",
         "masks",
         "lensCorrectionMode",
         "lensMaker",
@@ -520,7 +522,7 @@ impl Default for AppSettings {
             create_xmp_if_missing: Some(false),
             is_waveform_visible: Some(false),
             waveform_height: Some(220),
-            active_waveform_channel: Some("luma".to_string()),
+            active_waveform_channel: Some("histogram".to_string()),
             #[cfg(any(target_os = "linux", target_os = "android"))]
             use_wgpu_renderer: Some(false),
             #[cfg(not(any(target_os = "linux", target_os = "android")))]

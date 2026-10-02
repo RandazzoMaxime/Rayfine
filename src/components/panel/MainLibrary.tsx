@@ -1146,6 +1146,7 @@ export default function MainLibrary(props: MainLibraryProps) {
             onRate={props.onRate}
             onSetColorLabel={props.onSetColorLabel}
             onSetFlag={props.onSetFlag}
+            onExitToGrid={() => setLibraryDisplayMode(LibraryDisplayMode.Grid)}
           />
         ) : (
           <LibraryGrid

@@ -14,13 +14,10 @@ function countImages(item: AlbumItem): number {
 interface MapCollectionsPanelProps {
   width: number;
   albumTree: AlbumItem[];
-  /** null = current folder (Library image list) */
+  /** Selected collection. Folder is never a source. */
   activeAlbumId: string | null;
-  currentFolderLabel: string;
-  currentFolderTitle?: string;
-  currentFolderCount: number;
-  onSelect(albumId: string | null): void;
-  onHide(): void;
+  onSelect(albumId: string): void;
+  onHide?: () => void;
   isInstantTransition?: boolean;
 }
 
@@ -32,9 +29,6 @@ export default function MapCollectionsPanel({
   width,
   albumTree,
   activeAlbumId,
-  currentFolderLabel,
-  currentFolderTitle,
-  currentFolderCount,
   onSelect,
   onHide,
   isInstantTransition,
@@ -110,16 +104,18 @@ export default function MapCollectionsPanel({
     >
       <div className="flex items-center justify-between px-2 py-1 border-b border-border-color/40 shrink-0">
         <Text variant={TextVariants.small} weight={TextWeights.semibold} className="uppercase tracking-wider text-[10px]">
-          {t('ui.moduleBar.map' as any)}
+          {t('ui.developLeft.collections' as any, { defaultValue: 'Collections' })}
         </Text>
-        <button
-          type="button"
-          className="p-1 rounded hover:bg-card-active text-text-secondary"
-          data-tooltip={t('ui.developLeft.hide' as any)}
-          onClick={onHide}
-        >
-          <ChevronLeft size={14} />
-        </button>
+        {onHide && (
+          <button
+            type="button"
+            className="p-1 rounded hover:bg-card-active text-text-secondary"
+            data-tooltip={t('ui.developLeft.hide' as any)}
+            onClick={onHide}
+          >
+            <ChevronLeft size={14} />
+          </button>
+        )}
       </div>
 
       <div className="flex flex-col flex-1 border-b border-border-color/50 min-h-0">
@@ -137,18 +133,6 @@ export default function MapCollectionsPanel({
         {open && (
           <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar px-2 pb-2">
             <ul className="space-y-0.5">
-              <li>
-                <button
-                  type="button"
-                  onClick={() => onSelect(null)}
-                  className={rowClass(activeAlbumId === null)}
-                  title={currentFolderTitle}
-                >
-                  <Folder size={12} className="shrink-0 opacity-70" />
-                  <span className="truncate flex-1">{currentFolderLabel}</span>
-                  <span className="text-[10px] tabular-nums text-text-secondary">{currentFolderCount}</span>
-                </button>
-              </li>
               {albumTree.length === 0 ? (
                 <li className="px-1.5 py-1 text-[10px] text-text-secondary">
                   {t('ui.developLeft.noAlbums' as any, { defaultValue: 'No albums yet' })}

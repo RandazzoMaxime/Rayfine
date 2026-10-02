@@ -9,6 +9,7 @@ import DetailsPanel from '../../adjustments/Details';
 import EffectsPanel from '../../adjustments/Effects';
 import LensPanel from '../../adjustments/Lens';
 import TransformPanel from '../../adjustments/Transform';
+import AnamorphicPanel from '../../adjustments/Anamorphic';
 import CollapsibleSection from '../../ui/CollapsibleSection';
 import ProfileExplorer from './ProfileExplorer';
 import { Adjustments, SectionVisibility, INITIAL_ADJUSTMENTS, ADJUSTMENT_SECTIONS } from '../../../utils/adjustments';
@@ -138,6 +139,7 @@ export default function Controls() {
     'lensBlur',
     'effects',
     'calibration',
+    'anamorphic',
   ] as const;
 
   const handleExpandAllSections = () => {
@@ -290,12 +292,21 @@ export default function Controls() {
             geometry: TransformPanel,
             lensBlur: EffectsPanel,
             calibration: ColorCalibrationPanel,
+            anamorphic: AnamorphicPanel,
           }[sectionName];
 
           const title = t(`editor.adjustments.sections.${sectionName}`);
           const sectionVisibility = adjustments.sectionVisibility || INITIAL_ADJUSTMENTS.sectionVisibility;
           const extraProps =
-            sectionName === 'color'
+            sectionName === 'basic'
+              ? (() => {
+                  const exif = (selectedImage?.exif || {}) as Record<string, string>;
+                  const make = (exif.Make || exif.make || '').trim();
+                  const model = (exif.Model || exif.model || '').trim();
+                  const camera = [make, model].filter(Boolean).join(' ');
+                  return selectedImage?.isRaw && camera ? { detectedCameraProfile: `Appareil — ${camera}` } : {};
+                })()
+              : sectionName === 'color'
               ? { panel: 'mixer' as const }
               : sectionName === 'colorGrading'
                 ? { panel: 'grading' as const }

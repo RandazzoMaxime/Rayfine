@@ -12,6 +12,7 @@ import {
   findCameraProfile,
   loadProfileFavorites,
   saveProfileFavorites,
+  normalizeCameraProfile,
   type CameraProfile,
   type ProfileFilter,
 } from '../../../utils/cameraProfiles';
@@ -26,11 +27,11 @@ export default function ProfileExplorer() {
   const [favorites, setFavorites] = useState<string[]>(() =>
     typeof window !== 'undefined' ? loadProfileFavorites() : [],
   );
-  const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set(['adobe-raw']));
+  const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set(['defaults']));
 
-  const current = findCameraProfile((adjustments as any).cameraProfile) || ALL_CAMERA_PROFILES[1];
+  const current = findCameraProfile(normalizeCameraProfile((adjustments as any).cameraProfile)) || ALL_CAMERA_PROFILES[0];
   const amount = Number((adjustments as any).profileAmount ?? 100);
-  const amountEnabled = current?.kind === 'creative';
+  const amountEnabled = false;
 
   const matches = (p: CameraProfile) => {
     if (filter === 'bw') return !!p.bw;
@@ -48,8 +49,8 @@ export default function ProfileExplorer() {
       ...prev,
       cameraProfile: p.name,
       convertToGrayscale: !!p.bw,
-      saturation: p.bw ? -100 : prev.saturation === -100 ? 0 : prev.saturation,
-      profileAmount: p.kind === 'creative' ? (prev.profileAmount ?? 100) : 100,
+      saturation: prev.saturation,
+      profileAmount: 100,
     }));
   };
 
@@ -82,7 +83,7 @@ export default function ProfileExplorer() {
 
       <div className="px-2.5 py-2 shrink-0 border-b border-border-color/30 space-y-2">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[12px] text-text-primary truncate">{current?.name || 'Adobe Standard'}</span>
+          <span className="text-[12px] text-text-primary truncate">{current?.name || 'Standard'}</span>
           <button
             type="button"
             className="h-6 px-2 rounded text-[11px] bg-surface border border-border-color/40 hover:bg-card-active"

@@ -1,5 +1,4 @@
 use crate::AppState;
-use fuzzy_matcher::FuzzyMatcher;
 #[cfg(target_os = "android")]
 use include_dir::{Dir, include_dir};
 use serde::{Deserialize, Serialize};
@@ -645,81 +644,50 @@ pub fn find_best_lens_match(
     maker: &str,
     model: &str,
 ) -> Option<(String, String)> {
-    let clean_maker = maker.trim().trim_matches('"').to_string();
-    let clean_model = model.trim().trim_matches('"').to_string();
-    let matcher = fuzzy_matcher::skim::SkimMatcherV2::default().ignore_case();
-
-    let lenses_from_maker: Vec<&Lens> = db
-        .lenses
-        .iter()
-        .filter(|lens| lens.get_maker().eq_ignore_ascii_case(&clean_maker))
-        .collect();
-
-    if !lenses_from_maker.is_empty() {
-        let best_match = lenses_from_maker
-            .iter()
-            .filter_map(|lens| {
-                let english_name = lens.get_full_model_name();
-                let canonical_name = lens.get_canonical_model_name();
-
-                let score_english = matcher
-                    .fuzzy_match(&english_name, &clean_model)
-                    .unwrap_or(0);
-                let score_canonical = matcher
-                    .fuzzy_match(&canonical_name, &clean_model)
-                    .unwrap_or(0);
-                let score = score_english.max(score_canonical);
-
-                if score > 0 {
-                    let best_name = if score_canonical > score_english {
-                        &canonical_name
-                    } else {
-                        &english_name
-                    };
-                    let length_penalty =
-                        (best_name.len() as i64 - clean_model.len() as i64).max(0) / 2;
-                    let adjusted_score = score - length_penalty;
-                    Some((adjusted_score, *lens))
-                } else {
-                    None
-                }
-            })
-            .max_by_key(|(score, _)| *score);
-
-        if let Some((_, best_lens)) = best_match {
-            return Some((
-                best_lens.get_maker(),
-                best_lens.get_display_name(&lenses_from_maker),
-            ));
+    let clean_maker = maker.trim().trim_matches('"');
+    let clean_model = model.trim().trim_matches('"');
+    if clean_model.chars().filter(|c| c.is_ascii_alphanumeric()).count() < 8 {
+        return None;
+    }
+    let normalize = |s: &str| -> String {
+        s.chars().filter(|c| c.is_ascii_alphanumeric()).flat_map(char::to_lowercase).collect()
+    };
+    let model_key = normalize(clean_model);
+    let mut candidates: Vec<(usize, &Lens)> = db.lenses.iter().filter_map(|lens| {
+        let lens_maker = lens.get_maker();
+        let full = lens.get_full_model_name();
+        let canonical = lens.get_canonical_model_name();
+        let maker_in_exif = normalize(clean_model).contains(&normalize(&lens_maker));
+        if !lens_maker.eq_ignore_ascii_case(clean_maker) && !maker_in_exif {
+            return None;
         }
+        let full_key = normalize(&full);
+        let canonical_key = normalize(&canonical);
+        let name_key = normalize(&lens.get_name());
+        let confidence_length = model_key.len().min(name_key.len());
+        let keys = [full_key, canonical_key, name_key];
+        let exact = keys.iter().any(|candidate| candidate == &model_key);
+        let containment = keys.iter().any(|candidate| {
+            let shorter = candidate.len().min(model_key.len());
+            let longer = candidate.len().max(model_key.len());
+            shorter >= 8 && (candidate.contains(&model_key) || model_key.contains(candidate)) && shorter * 4 >= longer * 3
+        });
+        if exact || containment {
+            Some((if exact { usize::MAX } else { confidence_length }, lens))
+        } else {
+            None
+        }
+    }).collect();
+    candidates.sort_by_key(|(score, _)| *score);
+    let best_lens = candidates.last()?.1;
+    // If the top two candidates have the same confidence, the EXIF string is
+    // ambiguous; leave correction off and let the user choose a lens.
+    if candidates.len() > 1 && candidates[candidates.len() - 1].0 == candidates[candidates.len() - 2].0 {
+        return None;
     }
-
-    let best_match_fallback = db
-        .lenses
-        .iter()
-        .filter_map(|lens| {
-            let english_name = lens.get_full_model_name();
-            let canonical_name = lens.get_canonical_model_name();
-
-            let score_english = matcher
-                .fuzzy_match(&english_name, &clean_model)
-                .unwrap_or(0);
-            let score_canonical = matcher
-                .fuzzy_match(&canonical_name, &clean_model)
-                .unwrap_or(0);
-            let score = score_english.max(score_canonical);
-
-            if score > 0 { Some((score, lens)) } else { None }
-        })
-        .max_by_key(|(score, _): &(i64, _)| *score);
-
-    if let Some((_, best_lens)) = best_match_fallback {
-        let lens_maker = best_lens.get_maker();
-        let maker_lenses = lenses_for_maker(db, &lens_maker);
-        return Some((lens_maker, best_lens.get_display_name(&maker_lenses)));
-    }
-
-    None
+    let lens_maker = best_lens.get_maker();
+    let maker_lenses = lenses_for_maker(db, &lens_maker);
+    Some((lens_maker, best_lens.get_display_name(&maker_lenses)))
 }
 
 #[tauri::command]
@@ -781,5 +749,37 @@ pub fn resolve_lens_params(
         lens.get_distortion_params(focal_length, aperture, distance)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod lensfun_catalogue_tests {
+    use super::*;
+
+    #[test]
+    fn every_bundled_lensfun_xml_loads_and_contains_supported_profiles() {
+        let root=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("lensfun_db");
+        let mut files:Vec<_>=std::fs::read_dir(&root).unwrap().map(Result::unwrap)
+            .map(|entry|entry.path()).filter(|path|path.extension().is_some_and(|ext|ext=="xml"))
+            .collect();
+        files.sort();
+        let mut database=LensDatabase {cameras:Vec::new(),lenses:Vec::new()};
+        let mut failed=Vec::new();
+        for path in &files {
+            match std::fs::read_to_string(path).map_err(|err|err.to_string())
+                .and_then(|xml|quick_xml::de::from_str::<LensDatabase>(&xml).map_err(|err|err.to_string())) {
+                Ok(mut parsed)=>{database.cameras.append(&mut parsed.cameras);database.lenses.append(&mut parsed.lenses);}
+                Err(error)=>failed.push(format!("{}: {error}",path.display())),
+            }
+        }
+        assert!(failed.is_empty(),"lens profile XML files failed to load: {failed:#?}");
+        assert_eq!(files.len(),56,"unexpected bundled XML coverage; refresh catalogue assertion");
+        assert!(database.lenses.len()>1500,"lens models were silently lost during parsing: {}",database.lenses.len());
+        assert!(database.cameras.len()>1000,"camera models were silently lost during parsing: {}",database.cameras.len());
+        assert!(database.lenses.iter().any(|lens|lens.get_full_model_name().contains("FE 24-70mm f/2.8 GM")));
+        assert!(find_best_lens_match(&database, "Sony", "Sony FE 24-70mm F2.8 GM").is_some(),
+            "a full EXIF lens model should find its calibrated profile");
+        assert!(find_best_lens_match(&database, "Sony", "24").is_none(),
+            "short/ambiguous EXIF text must never enable a random optical profile");
     }
 }

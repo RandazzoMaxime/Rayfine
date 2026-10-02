@@ -195,7 +195,7 @@ export const useAppInitialization = ({
           setUI((state) => ({ uiVisibility: { ...state.uiVisibility, ...settings.uiVisibility } }));
 
         if (settings?.isWaveformVisible !== undefined) setEditor({ isWaveformVisible: settings.isWaveformVisible });
-        if (settings?.activeWaveformChannel) setEditor({ activeWaveformChannel: settings.activeWaveformChannel });
+        setEditor({ activeWaveformChannel: 'histogram' });
         if (typeof settings?.waveformHeight === 'number') setEditor({ waveformHeight: settings.waveformHeight });
 
         setLibraryViewMode(settings?.libraryViewMode ?? defaultLibraryViewMode);

@@ -1,6 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Pipette, Sliders } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import Slider from '../ui/Slider';
 import ColorWheel from '../ui/ColorWheel';
@@ -159,14 +158,15 @@ export const ColorGradingPanel = ({ adjustments, setAdjustments, onDragStateChan
 
   return (
     <div>
-      <div className="flex items-center justify-start gap-2 mb-4 mt-2">
+      <div className="flex items-center justify-start gap-2 mb-2 mt-1">
         {tabs.map((tab) => {
           const isActive = activeTab === tab.id;
           return (
             <button
               key={tab.id}
+              type="button"
               onClick={() => setActiveTab(tab.id as '3way' | 'global')}
-              className={`w-7 h-7 rounded-full flex items-center justify-center transition-all focus:outline-none
+              className={`w-7 h-7 rounded-full flex items-center justify-center focus:outline-none
                 ${
                   isActive
                     ? 'ring-2 ring-offset-2 ring-offset-surface ring-accent text-text-primary'
@@ -181,8 +181,9 @@ export const ColorGradingPanel = ({ adjustments, setAdjustments, onDragStateChan
         <div className="w-px h-5 bg-text-secondary/20 mx-1" />
 
         <button
+          type="button"
           onClick={() => setIsExpanded(!isExpanded)}
-          className={`w-7 h-7 rounded-full flex items-center justify-center transition-all focus:outline-none
+          className={`w-7 h-7 rounded-full flex items-center justify-center focus:outline-none
             ${
               isExpanded
                 ? 'bg-accent text-button-text'
@@ -194,74 +195,58 @@ export const ColorGradingPanel = ({ adjustments, setAdjustments, onDragStateChan
         </button>
       </div>
 
-      <div className="relative w-full mb-4">
-        <AnimatePresence mode="wait">
-          {activeTab === '3way' ? (
-            <motion.div
-              key="3way"
-              initial={{ opacity: 0, x: -15 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -15 }}
-              transition={{ duration: 0.2 }}
-              className="w-full"
-            >
-              <div className="flex justify-center mb-4">
-                <div className="w-[calc(50%-0.5rem)]">
-                  <ColorWheel
-                    defaultValue={INITIAL_ADJUSTMENTS.colorGrading.midtones}
-                    label={t('adjustments.color.grading.midtones')}
-                    onChange={(val: HueSatLum) => handleChange(ColorGrading.Midtones, val)}
-                    value={colorGrading.midtones}
-                    onDragStateChange={onDragStateChange}
-                    isExpanded={isExpanded}
-                  />
-                </div>
-              </div>
-              <div className="flex justify-between mb-2 gap-4">
-                <div className="w-full flex-1 min-w-0">
-                  <ColorWheel
-                    defaultValue={INITIAL_ADJUSTMENTS.colorGrading.shadows}
-                    label={t('adjustments.color.grading.shadows')}
-                    onChange={(val: HueSatLum) => handleChange(ColorGrading.Shadows, val)}
-                    value={colorGrading.shadows}
-                    onDragStateChange={onDragStateChange}
-                    isExpanded={isExpanded}
-                  />
-                </div>
-                <div className="w-full flex-1 min-w-0">
-                  <ColorWheel
-                    defaultValue={INITIAL_ADJUSTMENTS.colorGrading.highlights}
-                    label={t('adjustments.color.grading.highlights')}
-                    onChange={(val: HueSatLum) => handleChange(ColorGrading.Highlights, val)}
-                    value={colorGrading.highlights}
-                    onDragStateChange={onDragStateChange}
-                    isExpanded={isExpanded}
-                  />
-                </div>
-              </div>
-            </motion.div>
-          ) : (
-            <motion.div
-              key="global"
-              initial={{ opacity: 0, x: 15 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: 15 }}
-              transition={{ duration: 0.2 }}
-              className="w-full flex justify-center pb-2"
-            >
-              <div className="w-full max-w-70">
+      <div className="relative w-full mb-2">
+        {activeTab === '3way' ? (
+          <div className="w-full">
+            <div className="flex justify-center mb-2">
+              <div className="w-24">
                 <ColorWheel
-                  defaultValue={INITIAL_ADJUSTMENTS.colorGrading.global}
-                  label={t('adjustments.color.grading.global')}
-                  onChange={(val: HueSatLum) => handleChange(ColorGrading.Global, val)}
-                  value={colorGrading.global || INITIAL_ADJUSTMENTS.colorGrading.global}
+                  defaultValue={INITIAL_ADJUSTMENTS.colorGrading.midtones}
+                  label={t('adjustments.color.grading.midtones')}
+                  onChange={(val: HueSatLum) => handleChange(ColorGrading.Midtones, val)}
+                  value={colorGrading.midtones}
                   onDragStateChange={onDragStateChange}
                   isExpanded={isExpanded}
                 />
               </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+            </div>
+            <div className="flex justify-center mb-1 gap-6">
+              <div className="w-24">
+                <ColorWheel
+                  defaultValue={INITIAL_ADJUSTMENTS.colorGrading.shadows}
+                  label={t('adjustments.color.grading.shadows')}
+                  onChange={(val: HueSatLum) => handleChange(ColorGrading.Shadows, val)}
+                  value={colorGrading.shadows}
+                  onDragStateChange={onDragStateChange}
+                  isExpanded={isExpanded}
+                />
+              </div>
+              <div className="w-24">
+                <ColorWheel
+                  defaultValue={INITIAL_ADJUSTMENTS.colorGrading.highlights}
+                  label={t('adjustments.color.grading.highlights')}
+                  onChange={(val: HueSatLum) => handleChange(ColorGrading.Highlights, val)}
+                  value={colorGrading.highlights}
+                  onDragStateChange={onDragStateChange}
+                  isExpanded={isExpanded}
+                />
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="w-full flex justify-center pb-1">
+            <div className="w-28">
+              <ColorWheel
+                defaultValue={INITIAL_ADJUSTMENTS.colorGrading.global}
+                label={t('adjustments.color.grading.global')}
+                onChange={(val: HueSatLum) => handleChange(ColorGrading.Global, val)}
+                value={colorGrading.global || INITIAL_ADJUSTMENTS.colorGrading.global}
+                onDragStateChange={onDragStateChange}
+                isExpanded={isExpanded}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       <div>
@@ -330,8 +315,6 @@ export const ColorCalibrationPanel = ({ adjustments, setAdjustments, onDragState
     saturation: colorCalibration[`${activePrimary}Saturation` as keyof ColorCalibration] || 0,
   };
 
-  const trackSuffix = `${activePrimary}s`;
-
   return (
     <div className="pt-1 mt-1 border-t border-white/15">
       <Text variant={TextVariants.heading} className="mb-0.5 text-[11px] text-text-primary">
@@ -350,7 +333,7 @@ export const ColorCalibrationPanel = ({ adjustments, setAdjustments, onDragState
           value={colorCalibration.shadowsTint}
           onChange={(e: any) => handleShadowsChange(e.target.value)}
           onDragStateChange={onDragStateChange}
-          trackClassName="tint-gradient-track"
+          trackClassName="calibration-tint-gradient-track"
         />
       </div>
       <div className="mt-3">
@@ -378,7 +361,7 @@ export const ColorCalibrationPanel = ({ adjustments, setAdjustments, onDragState
           value={currentValues.hue}
           onChange={(e: any) => handlePrimaryChange('Hue', e.target.value)}
           onDragStateChange={onDragStateChange}
-          trackClassName={`hue-slider-${trackSuffix}`}
+          trackClassName={`calibration-hue-${activePrimary}`}
         />
         <Slider
           label={t('adjustments.color.calibration.saturation')}
@@ -389,7 +372,7 @@ export const ColorCalibrationPanel = ({ adjustments, setAdjustments, onDragState
           value={currentValues.saturation}
           onChange={(e: any) => handlePrimaryChange('Saturation', e.target.value)}
           onDragStateChange={onDragStateChange}
-          trackClassName={`sat-slider-${trackSuffix}`}
+          trackClassName={`calibration-saturation-${activePrimary}`}
         />
       </div>
     </div>
@@ -408,39 +391,51 @@ const GRAY_MIXER_CHANNELS: { key: string; labelKey: string; color: string }[] = 
   { key: 'magentas', labelKey: 'adjustments.color.magentas', color: '#ec4899' },
 ];
 
-/** B&W mix (maps to crs:GrayMixer*) — shown when convertToGrayscale is on. */
+/** Lightroom-style TSL controls for the monochrome mix. */
 const GrayMixerPanel = ({ adjustments, setAdjustments, onDragStateChange }: ColorPanelProps) => {
   const { t } = useTranslation();
+  const [activeTab, setActiveTab] = useState<'hue' | 'saturation' | 'luminance' | 'all'>('saturation');
   const gm = (adjustments as any).grayMixer || {};
-  const setChannel = (key: string, value: number) => {
+  const hsl = (adjustments as any).hsl || {};
+  const setChannel = (key: string, field: 'hue' | 'saturation' | 'luminance', value: number) => {
     const prevGm = ((adjustments as any).grayMixer || {}) as Record<string, number>;
+    if (field !== 'saturation') {
+      setAdjustments((prev: any) => ({
+        ...prev,
+        hsl: { ...(prev.hsl || {}), [key]: { ...(prev.hsl?.[key] || {}), [field]: value } },
+      }));
+      return;
+    }
     setAdjustments({
       convertToGrayscale: true,
+      cameraProfile: 'Monochrome',
       grayMixer: { ...prevGm, [key]: value },
     } as any);
   };
+  const tabs = [
+    ['hue', t('adjustments.color.hue', { defaultValue: 'Teinte' })],
+    ['saturation', t('adjustments.color.saturation', { defaultValue: 'Saturation' })],
+    ['luminance', t('adjustments.color.luminance', { defaultValue: 'Luminance' })],
+    ['all', t('adjustments.color.all', { defaultValue: 'Tout' })],
+  ] as const;
   return (
     <div className="pt-1 mt-1 border-t border-white/15 space-y-0.5">
-      <Text variant={TextVariants.heading} className="mb-0.5 text-[11px] text-text-primary">
-        {t('adjustments.color.bwMix' as any)}
-      </Text>
-      {GRAY_MIXER_CHANNELS.map(({ key, labelKey, color }) => (
-        <Slider
-          key={key}
-          label={
-            <span className="flex items-center gap-1.5">
-              <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: color }} />
-              {t(labelKey as any)}
-            </span>
-          }
-          max={100}
-          min={-100}
-          step={1}
-          value={gm[key] ?? 0}
-          onChange={(e: any) => setChannel(key, parseFloat(e.target.value))}
-          onDragStateChange={onDragStateChange}
-        />
-      ))}
+      <div className="flex items-center justify-center gap-3 border-b border-white/15 pb-1 mb-1 text-[10px]">
+        {tabs.map(([id, label]) => <button key={id} type="button" onClick={() => setActiveTab(id)} className={activeTab === id ? 'text-text-primary font-semibold' : 'text-text-secondary hover:text-text-primary'}>{label}</button>)}
+      </div>
+      {GRAY_MIXER_CHANNELS.map(({ key, labelKey, color }) => {
+        const values = activeTab === 'all' ? (['hue', 'saturation', 'luminance'] as const) : [activeTab];
+        return values.map((field) => (
+          <Slider
+            key={`${key}-${field}`}
+            label={<span className="flex items-center gap-1.5"><span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: color }} />{t(labelKey as any)}</span>}
+            max={100} min={-100} step={1}
+            value={field === 'saturation' ? (gm[key] ?? 0) : (hsl[key]?.[field] ?? 0)}
+            onChange={(e: any) => setChannel(key, field, parseFloat(e.target.value))}
+            onDragStateChange={onDragStateChange}
+          />
+        ));
+      })}
     </div>
   );
 };
@@ -545,7 +540,7 @@ export default function ColorPanel({
       {/* Global WB + Presence live in Basic (Lightroom Classic layout); masks keep them here. */}
       {isForMask && (
         <>
-      <div className="pt-1 mt-1 border-t border-white/15 first:mt-0 first:pt-0 first:border-t-0">
+      {!(adjustments as any).convertToGrayscale && <div className="pt-1 mt-1 border-t border-white/15 first:mt-0 first:pt-0 first:border-t-0">
         <div className="flex justify-between items-center mb-2">
           <Text variant={TextVariants.heading} className="text-[11px] text-text-primary">{t('adjustments.color.whiteBalance')}</Text>
           {!isForMask && toggleWbPicker && (
@@ -601,7 +596,7 @@ export default function ColorPanel({
           trackClassName="tint-gradient-track"
           onDragStateChange={onDragStateChange}
         />
-      </div>
+      </div>}
 
       <div className="pt-1 mt-1 border-t border-white/15 first:mt-0 first:pt-0 first:border-t-0">
         <Text variant={TextVariants.heading} className="mb-0.5 text-[11px] text-text-primary">
@@ -915,8 +910,7 @@ export default function ColorPanel({
         </div>
       )}
 
-      {!isForMask &&
-        (!!(adjustments as any).convertToGrayscale || (adjustments.saturation ?? 0) <= -99) && (
+      {!isForMask && !!(adjustments as any).convertToGrayscale && (
           <GrayMixerPanel
             adjustments={adjustments}
             setAdjustments={setAdjustments}
