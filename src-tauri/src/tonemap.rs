@@ -22,6 +22,8 @@ pub(crate) struct ToneMask {
 }
 
 const FLARE: f64 = 1.0 / 4096.0;
+use rayon::prelude::*;
+
 const MAX_LEVELS: usize = 16;
 
 /// Input is already prepared GrayLogImage, row-major with no padding.
@@ -76,7 +78,7 @@ fn prepare_with_options(
             source_stats.low + reference_index as f64 * range / (reference_count - 1) as f64
         };
         let remapped: Vec<f32> = logs
-            .iter()
+            .par_iter()
             .map(|&x| (x as f64).clamp(reference - remap_width, reference + remap_width) as f32)
             .collect();
         // One reference pyramid at a time: memory does not scale with bin count.
@@ -87,9 +89,11 @@ fn prepare_with_options(
         for level in 0..accumulated.len() {
             let current = &remap_pyramid[level];
             let expanded = resize(&remap_pyramid[level + 1], current.width, current.height);
-            for (index, output) in accumulated[level].data.iter_mut().enumerate() {
+            // Per pixel in parallel; references stay sequential, so each pixel sums in order.
+            let source_level = &original[level];
+            accumulated[level].data.par_iter_mut().enumerate().for_each(|(index, output)| {
                 let coordinate = if range > 0.0 {
-                    (((original[level].data[index] - source_stats.low as f32) / range as f32)
+                    (((source_level.data[index] - source_stats.low as f32) / range as f32)
                         * (reference_count - 1) as f32)
                         .clamp(0.0, (reference_count - 1) as f32)
                 } else {
@@ -98,7 +102,7 @@ fn prepare_with_options(
                 // Interpolation is between reference values, not between pixels.
                 let weight = (1.0 - (coordinate - reference_index as f32).abs()).max(0.0);
                 *output += (current.data[index] - expanded.data[index]) * weight;
-            }
+            });
         }
     }
     // Native collapse starts by copying the original source Gaussian coarsest.
@@ -113,7 +117,7 @@ fn prepare_with_options(
     let anchor_shift = (source_stats.anchor - filtered_stats.anchor) as f32;
     let mask = filtered
         .data
-        .iter()
+        .par_iter()
         .zip(logs)
         .map(|(&filtered, &source)| (filtered + anchor_shift - source).min(4.0))
         .collect();
@@ -212,11 +216,12 @@ fn axis_plan(source_size: usize, destination_size: usize) -> Vec<AxisSample> {
 
 /// Same recovered separable Gaussian for both downsampling and expansion.
 /// Vertical stage always precedes horizontal; boundaries replicate source edges.
+/// Rows run in parallel; each output value keeps its serial tap order (bit-identical).
 fn resize(source: &Image, width: usize, height: usize) -> Image {
+    use rayon::prelude::*;
     let vertical_plan = axis_plan(source.height, height);
     let mut vertical = vec![0.0f32; source.width * height];
-    for (y, sample) in vertical_plan.iter().enumerate() {
-        let output = &mut vertical[y * source.width..(y + 1) * source.width];
+    vertical.par_chunks_exact_mut(source.width.max(1)).zip(&vertical_plan).for_each(|(output, sample)| {
         for tap in 0..sample.count {
             let row = sample.indices[tap] * source.width;
             let input = &source.data[row..row + source.width];
@@ -225,17 +230,17 @@ fn resize(source: &Image, width: usize, height: usize) -> Image {
                 *value += input * weight;
             }
         }
-    }
+    });
     let horizontal_plan = axis_plan(source.width, width);
     let mut data = vec![0.0f32; width * height];
-    for (y, output) in data.chunks_exact_mut(width).enumerate() {
+    data.par_chunks_exact_mut(width.max(1)).enumerate().for_each(|(y, output)| {
         let input = &vertical[y * source.width..(y + 1) * source.width];
         for (value, sample) in output.iter_mut().zip(&horizontal_plan) {
             for tap in 0..sample.count {
                 *value += input[sample.indices[tap]] * sample.weights[tap];
             }
         }
-    }
+    });
     Image::new(width, height, data)
 }
 
@@ -303,7 +308,8 @@ fn statistics(logs: &[f32]) -> Stats64 {
     if kept.is_empty() {
         kept.extend(logs.iter().map(|&x| x as f64));
     }
-    kept.sort_unstable_by(f64::total_cmp);
+    // total_cmp is a total order: the sorted result is unique, parallel or not.
+    kept.par_sort_unstable_by(f64::total_cmp);
     let n = kept.len();
     let lower = ((n as f64 * 0.0001) as usize).min(n - 1);
     let upper = ((n as f64 * 0.9999) as usize).min(n - 1);
@@ -328,13 +334,15 @@ fn statistics(logs: &[f32]) -> Stats64 {
     let anchor_linear = if ymax == ymin {
         ymin
     } else {
-        let sum: f64 = kept[lower..=upper]
-            .iter()
+        // Transcendentals in parallel, then summed serially in order (bit-identical).
+        let encoded: Vec<f64> = kept[lower..=upper]
+            .par_iter()
             .map(|&x| {
                 let linear = (x.clamp(-120.0, 120.0).exp2() - FLARE).max(0.0);
                 srgb_encode(((linear - ymin) / (ymax - ymin)).clamp(0.0, 1.0))
             })
-            .sum();
+            .collect();
+        let sum: f64 = encoded.iter().sum();
         ymin + (ymax - ymin) * srgb_decode(sum / (upper - lower + 1) as f64)
     };
     Stats64 {
@@ -415,6 +423,29 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn parallel_result_is_bit_identical_to_single_thread() {
+        let (w, h) = (301u32, 197u32);
+        let mut x: u32 = 0x9e37_79b9;
+        let logs: Vec<f32> = (0..w * h)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 17;
+                x ^= x << 5;
+                -12.0 + (x % 10_000) as f32 / 10_000.0 * 14.0
+            })
+            .collect();
+        let serial = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap()
+            .install(|| prepare(&logs, w, h));
+        let parallel = prepare(&logs, w, h);
+        let bits = |v: &[f32]| v.iter().map(|f| f.to_bits()).collect::<Vec<_>>();
+        assert_eq!(bits(&serial.mask), bits(&parallel.mask));
+        assert_eq!(bits(&serial.filtered), bits(&parallel.filtered));
+    }
+
     #[test]
     fn constant_image_preserves_source_and_zero_mask() {
         let actual = prepare(&vec![-3.0; 35], 7, 5);

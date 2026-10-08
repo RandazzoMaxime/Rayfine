@@ -1,5 +1,12 @@
 import { create } from 'zustand';
-import { Adjustments, INITIAL_ADJUSTMENTS, MaskContainer, AiPatch } from '../utils/adjustments';
+import {
+  Adjustments,
+  INITIAL_ADJUSTMENTS,
+  MaskContainer,
+  AiPatch,
+  detectedCameraProfileFor,
+  needsDetectedCameraProfile,
+} from '../utils/adjustments';
 import { SelectedImage, WaveformData, BrushSettings } from '../components/ui/AppProperties';
 import { ChannelConfig } from '../components/adjustments/Curves';
 import { ImageDimensions } from '../hooks/useImageRenderSize';
@@ -97,6 +104,10 @@ interface EditorState {
   isGeneratingAi: boolean;
   isAIConnectorConnected: boolean;
   hasRenderedFirstFrame: boolean;
+  /** Switching photos: the previous photo stays on the native surface until the new first frame. */
+  holdPreviousFrame: boolean;
+  /** The adjustments the photo was opened with: equal to `adjustments` means nothing to save. */
+  loadedAdjustments: { path: string; adjustments: Adjustments } | null;
   patchesSentToBackend: Set<string>;
 
   // Clipboard
@@ -113,7 +124,30 @@ interface EditorState {
   undo: () => void;
   redo: () => void;
   resetHistory: (initialState: Adjustments) => void;
+  /** Opens `adjustments` for `path`: load-time defaults applied, recorded as the opened state
+   *  (see openedAdjustmentsPatch) and history reset to that same object, in one update. */
+  openAdjustments: (path: string, adjustments: Adjustments) => void;
   goToHistoryIndex: (index: number) => void;
+}
+
+/**
+ * State patch for adjustments produced while opening `path` (sidecar, cache, load-time
+ * defaults such as the camera-matching profile). They are recorded as the opened state,
+ * so they are not saved as an edit, unless the user already changed the opened state
+ * (then it is a plain update).
+ */
+export function openedAdjustmentsPatch(state: EditorState, path: string, adjustments: Adjustments) {
+  const image = state.selectedImage;
+  const profile = image?.path === path ? detectedCameraProfileFor(image.exif as any, !!image.isRaw) : undefined;
+  const withDefaults =
+    profile && needsDetectedCameraProfile((adjustments as any).cameraProfile)
+      ? ({ ...adjustments, cameraProfile: profile } as Adjustments)
+      : adjustments;
+  const opened = state.loadedAdjustments;
+  const untouched = !opened || opened.path !== path || opened.adjustments === state.adjustments;
+  return untouched
+    ? { adjustments: withDefaults, loadedAdjustments: { path, adjustments: withDefaults } }
+    : { adjustments: withDefaults };
 }
 
 export const useEditorStore = create<EditorState>((set) => ({
@@ -178,6 +212,8 @@ export const useEditorStore = create<EditorState>((set) => ({
   isMaskControlHovered: false,
   showMaskOverlay: true,
   hasRenderedFirstFrame: false,
+  holdPreviousFrame: false,
+  loadedAdjustments: null,
   patchesSentToBackend: new Set<string>(),
 
   setEditor: (updater) => set((state) => (typeof updater === 'function' ? updater(state) : updater)),
@@ -213,6 +249,12 @@ export const useEditorStore = create<EditorState>((set) => ({
       history: [initialState],
       historyIndex: 0,
       adjustments: initialState,
+    }),
+
+  openAdjustments: (path, adjustments) =>
+    set((state) => {
+      const patch = openedAdjustmentsPatch(state, path, adjustments);
+      return { ...patch, history: [patch.adjustments], historyIndex: 0 };
     }),
 
   goToHistoryIndex: (index) =>

@@ -688,8 +688,9 @@ fn update_rotational_disk_flag(path: &str, app_handle: &AppHandle) {
     }
 }
 
+// async: ~50 ms of per-file I/O must not run on (and block) the main thread.
 #[tauri::command]
-pub fn list_images_in_dir(path: String, app_handle: AppHandle) -> Result<Vec<ImageFile>, String> {
+pub async fn list_images_in_dir(path: String, app_handle: AppHandle) -> Result<Vec<ImageFile>, String> {
     let settings = load_settings(app_handle.clone()).unwrap_or_default();
     let enable_xmp_sync = settings.enable_xmp_sync.unwrap_or(false);
 
@@ -1552,8 +1553,67 @@ fn apply_exif_orientation(img: DynamicImage, orientation: u32) -> DynamicImage {
     }
 }
 
+/// Embedded JPEG preview (IFD0, else IFD1) and orientation of a TIFF-based RAW, read
+/// straight from the mapped file. Only the IFDs and the preview bytes are touched,
+/// where the EXIF reader copies the whole file (14+ MB per RAW, slow on card readers).
+fn tiff_embedded_jpeg(buf: &[u8]) -> Option<(&[u8], u32)> {
+    let le = match buf.get(0..4)? {
+        [b'I', b'I', 42, 0] => true,
+        [b'M', b'M', 0, 42] => false,
+        _ => return None,
+    };
+    let u16_at = |o: usize| {
+        let b: [u8; 2] = buf.get(o..o + 2)?.try_into().ok()?;
+        Some(if le { u16::from_le_bytes(b) } else { u16::from_be_bytes(b) })
+    };
+    let u32_at = |o: usize| {
+        let b: [u8; 4] = buf.get(o..o + 4)?.try_into().ok()?;
+        Some(if le { u32::from_le_bytes(b) } else { u32::from_be_bytes(b) })
+    };
+    // SHORT or LONG scalar stored inline in the 4-byte value field.
+    let value_at = |entry: usize| match u16_at(entry + 2)? {
+        3 => u16_at(entry + 8).map(u32::from),
+        4 => u32_at(entry + 8),
+        _ => None,
+    };
+
+    let mut ifd = u32_at(4)? as usize;
+    let mut orientation = 1;
+    for _ in 0..2 {
+        if ifd == 0 {
+            break;
+        }
+        let count = u16_at(ifd)? as usize;
+        let (mut offset, mut len) = (None, None);
+        for i in 0..count {
+            let entry = ifd + 2 + i * 12;
+            match u16_at(entry)? {
+                0x0112 => orientation = value_at(entry).unwrap_or(1),
+                0x0201 => offset = value_at(entry),
+                0x0202 => len = value_at(entry),
+                _ => {}
+            }
+        }
+        if let (Some(o), Some(l)) = (offset, len) {
+            let jpeg = buf.get(o as usize..(o as usize).checked_add(l as usize)?)?;
+            return Some((jpeg, orientation));
+        }
+        ifd = u32_at(ifd + 2 + count * 12)? as usize;
+    }
+    None
+}
+
 fn try_load_embedded_raw_preview(source_path: &Path, target_res: u32) -> Option<DynamicImage> {
     let mmap = read_file_mapped(source_path).ok()?;
+
+    if let Some((jpeg_bytes, orientation)) = tiff_embedded_jpeg(&mmap) {
+        let img = image::load_from_memory_with_format(jpeg_bytes, image::ImageFormat::Jpeg).ok()?;
+        if img.width().max(img.height()) < (target_res as f32 * 0.95) as u32 {
+            return None;
+        }
+        return Some(apply_exif_orientation(img, orientation));
+    }
+
     let exif = exif_processing::read_exif(&mmap)?;
 
     let (jpeg_bytes, ifd) = find_embedded_jpeg(&exif, exif::In::PRIMARY)
@@ -1963,7 +2023,17 @@ pub fn generate_thumbnail_data(
 }
 
 fn encode_thumbnail(image: &DynamicImage, target_width: u32) -> Result<Vec<u8>> {
-    let thumbnail = crate::image_processing::downscale_f32_image(image, target_width, target_width);
+    // 8-bit sources (embedded RAW previews, unedited JPEGs) resize in integer space;
+    // the f32 path would first copy the whole frame to f32 just to throw it away.
+    let thumbnail = if image.as_rgb8().is_some() {
+        if image.width().max(image.height()) <= target_width {
+            image.clone()
+        } else {
+            image.thumbnail(target_width, target_width)
+        }
+    } else {
+        crate::image_processing::downscale_f32_image(image, target_width, target_width)
+    };
     let mut buf = Cursor::new(Vec::new());
     let mut encoder = JpegEncoder::new_with_quality(&mut buf, 75);
     encoder.encode_image(&thumbnail.to_rgb8())?;
@@ -7914,5 +7984,99 @@ mod thumbnail_store_tests {
         );
         let _ = fs::remove_dir_all(&root);
         println!("GPU_GATE sidecar_developed_without_gpu=err worker_skip=true");
+    }
+}
+
+#[cfg(test)]
+mod tiff_embedded_jpeg_tests {
+    use super::tiff_embedded_jpeg;
+
+    /// TIFF with IFD0 (orientation [+ preview]) chained to IFD1 [+ preview].
+    fn tiff(le: bool, preview_in_ifd0: bool) -> Vec<u8> {
+        let w16 = |v: u16| if le { v.to_le_bytes() } else { v.to_be_bytes() };
+        let w32 = |v: u32| if le { v.to_le_bytes() } else { v.to_be_bytes() };
+        let jpeg = b"\xFF\xD8fakejpeg\xFF\xD9";
+        let entry = |tag: u16, typ: u16, val: u32| {
+            let mut e = Vec::new();
+            e.extend(w16(tag));
+            e.extend(w16(typ));
+            e.extend(w32(1));
+            if typ == 3 {
+                e.extend(w16(val as u16));
+                e.extend([0, 0]);
+            } else {
+                e.extend(w32(val));
+            }
+            e
+        };
+        let ifd = |entries: Vec<Vec<u8>>, next: u32| {
+            let mut b = w16(entries.len() as u16).to_vec();
+            entries.into_iter().for_each(|e| b.extend(e));
+            b.extend(w32(next));
+            b
+        };
+        let ifd0_at = 8u32;
+        let ifd0_len = 2 + 12 * if preview_in_ifd0 { 3 } else { 1 } + 4;
+        let ifd1_at = ifd0_at + ifd0_len;
+        let ifd1_len = 2 + 12 * if preview_in_ifd0 { 0 } else { 2 } + 4;
+        let jpeg_at = ifd1_at + ifd1_len;
+        let preview = |at| vec![entry(0x0201, 4, at), entry(0x0202, 4, jpeg.len() as u32)];
+
+        let mut ifd0_entries = vec![entry(0x0112, 3, 6)];
+        if preview_in_ifd0 {
+            ifd0_entries.extend(preview(jpeg_at));
+        }
+        let mut b = if le { b"II".to_vec() } else { b"MM".to_vec() };
+        b.extend(w16(42));
+        b.extend(w32(ifd0_at));
+        b.extend(ifd(ifd0_entries, ifd1_at));
+        b.extend(ifd(if preview_in_ifd0 { vec![] } else { preview(jpeg_at) }, 0));
+        b.extend(jpeg);
+        b
+    }
+
+    #[test]
+    fn finds_preview_and_orientation_in_both_byte_orders_and_ifds() {
+        for le in [true, false] {
+            for in_ifd0 in [true, false] {
+                let buf = tiff(le, in_ifd0);
+                let (jpeg, orientation) = tiff_embedded_jpeg(&buf).expect("preview found");
+                assert_eq!(jpeg, b"\xFF\xD8fakejpeg\xFF\xD9", "le={le} ifd0={in_ifd0}");
+                assert_eq!(orientation, 6);
+            }
+        }
+    }
+
+    /// Oracle check on real RAWs: `RAYFINE_RAW_DIR=<dir> cargo test --lib -- --ignored tiff_embedded`.
+    #[test]
+    #[ignore]
+    fn matches_exif_reader_on_real_raws() {
+        let dir = std::env::var("RAYFINE_RAW_DIR").expect("RAYFINE_RAW_DIR");
+        let mut checked = 0;
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if !crate::formats::is_raw_file(&path) {
+                continue;
+            }
+            let bytes = std::fs::read(&path).unwrap();
+            let Some(exif) = crate::exif_processing::read_exif(&bytes) else { continue };
+            let Some(expected) = super::find_embedded_jpeg(&exif, exif::In::PRIMARY) else { continue };
+            let orientation = exif
+                .get_field(exif::Tag::Orientation, exif::In::PRIMARY)
+                .and_then(|f| f.value.get_uint(0))
+                .unwrap_or(1);
+            assert_eq!(tiff_embedded_jpeg(&bytes), Some((expected, orientation)), "{path:?}");
+            checked += 1;
+        }
+        assert!(checked > 0, "no TIFF RAW with an IFD0 preview found");
+        println!("checked {checked} RAWs");
+    }
+
+    #[test]
+    fn rejects_non_tiff_and_out_of_bounds_previews() {
+        assert!(tiff_embedded_jpeg(b"\xFF\xD8\xFF\xE0 not a tiff").is_none());
+        let mut buf = tiff(true, true);
+        buf.truncate(buf.len() - 4);
+        assert!(tiff_embedded_jpeg(&buf).is_none());
     }
 }

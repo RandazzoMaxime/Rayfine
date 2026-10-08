@@ -782,6 +782,10 @@
         "feather": "Contour progressif",
         "globalFeather": "Contour progressif global",
         "grow": "Agrandir",
+        "rangeLow": "Borne basse",
+        "rangeHigh": "Borne haute",
+        "refine": "Affiner",
+        "smoothness": "Lissage",
         "tolerance": "Tolérance"
       },
       "patches": {
@@ -798,7 +802,6 @@
         "applyPreset": "Appliquer le paramètre prédéfini",
         "componentPropertiesTitle": "Propriétés de {{name}}",
         "copySectionSettings": "Copier les paramètres de la section {{section}}",
-        "invertComponent": "Inverser le composant",
         "invertMask": "Inverser le masque",
         "maskPropertiesTitle": "Propriétés du masque",
         "noPresetsFound": "Aucun paramètre prédéfini trouvé",
@@ -1417,7 +1420,6 @@
       "create": "Créer",
       "addToCollection": "Ajouter à une collection",
       "applyDuringImport": "Appliquer pendant l’importation",
-      "developParams": "Param. développement",
       "applyNone": "Aucun",
       "metadataNew": "Nouveau…",
       "metadataEditPresets": "Modifier les paramètres prédéfinis…",
@@ -2712,5 +2714,11 @@
       "exporting": "Export…",
       "exportDone": "Galerie HTML enregistrée ({{count}} photos)"
     }
+  },
+  "updater": {
+    "available": "Rayfine {{version}} est disponible.",
+    "install": "Mettre à jour et redémarrer",
+    "installing": "Téléchargement de la mise à jour…",
+    "failed": "Échec de la mise à jour"
   }
 }

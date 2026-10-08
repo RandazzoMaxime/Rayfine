@@ -1,14 +1,16 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'react-toastify';
-import { useEditorStore } from '../store/useEditorStore';
+import { openedAdjustmentsPatch, useEditorStore } from '../store/useEditorStore';
 import { useLibraryStore } from '../store/useLibraryStore';
 import { useSettingsStore } from '../store/useSettingsStore';
-import { Invokes } from '../components/ui/AppProperties';
+import { ImageFile, Invokes } from '../components/ui/AppProperties';
 import { INITIAL_ADJUSTMENTS, normalizeLoadedAdjustments } from '../utils/adjustments';
 import { denormalizeMaskCoordinates } from '../utils/maskUtils';
 
-export function useImageLoader(cachedEditStateRef: React.RefObject<any>) {
+export function useImageLoader(cachedEditStateRef: React.RefObject<any>, sortedImageList?: ImageFile[]) {
+  const sortedListRef = useRef(sortedImageList);
+  sortedListRef.current = sortedImageList;
   const selectedImage = useEditorStore((s) => s.selectedImage);
   const adjustments = useEditorStore((s) => s.adjustments);
   const histogram = useEditorStore((s) => s.histogram);
@@ -20,7 +22,6 @@ export function useImageLoader(cachedEditStateRef: React.RefObject<any>) {
   const hasRenderedFirstFrame = useEditorStore((s) => s.hasRenderedFirstFrame);
 
   const setEditor = useEditorStore((s) => s.setEditor);
-  const resetHistory = useEditorStore((s) => s.resetHistory);
   const setLibrary = useLibraryStore((s) => s.setLibrary);
   const appSettings = useSettingsStore((s) => s.appSettings);
 
@@ -45,8 +46,7 @@ export function useImageLoader(cachedEditStateRef: React.RefObject<any>) {
             initialAdjusts = { ...INITIAL_ADJUSTMENTS };
           }
 
-          setEditor({ adjustments: initialAdjusts });
-          resetHistory(initialAdjusts);
+          useEditorStore.getState().openAdjustments(selectedImage.path, initialAdjusts);
         } catch (err) {
           console.error('Failed to load metadata early:', err);
         }
@@ -54,13 +54,21 @@ export function useImageLoader(cachedEditStateRef: React.RefObject<any>) {
 
       const loadFullImageData = async () => {
         try {
-          const loadImageResult: any = await invoke(Invokes.LoadImage, { path: selectedImage.path });
+          // Neighbours (next first) are decoded in the background once this photo is final.
+          const list = sortedListRef.current ?? [];
+          const index = list.findIndex((img) => img.path === selectedImage.path);
+          const prefetch = index < 0 ? [] : [list[index + 1], list[index - 1]].filter(Boolean).map((img) => img.path);
+          const loadImageResult: any = await invoke(Invokes.LoadImage, { path: selectedImage.path, prefetch });
           if (!isEffectActive) return;
 
           const { width, height } = loadImageResult;
           setEditor((state) => ({
             originalSize: { width, height },
-            adjustments: denormalizeMaskCoordinates(state.adjustments as any, width, height),
+            ...openedAdjustmentsPatch(
+              state,
+              selectedImage.path,
+              denormalizeMaskCoordinates(state.adjustments as any, width, height),
+            ),
           }));
 
           if (appSettings?.editorPreviewResolution) {
@@ -98,14 +106,17 @@ export function useImageLoader(cachedEditStateRef: React.RefObject<any>) {
             return state;
           });
 
-          setEditor((state) => {
-            if (!state.adjustments.aspectRatio && !state.adjustments.crop) {
-              return {
-                adjustments: { ...state.adjustments, aspectRatio: loadImageResult.width / loadImageResult.height },
-              };
-            }
-            return state;
-          });
+          // Load-time defaults (aspect ratio here, camera profile in the helper) are part of
+          // the opened state, not an edit to save. selectedImage now carries the EXIF.
+          setEditor((state) =>
+            openedAdjustmentsPatch(
+              state,
+              selectedImage.path,
+              !state.adjustments.aspectRatio && !state.adjustments.crop
+                ? { ...state.adjustments, aspectRatio: loadImageResult.width / loadImageResult.height }
+                : state.adjustments,
+            ),
+          );
         } catch (err) {
           if (isEffectActive) {
             console.error('Failed to load image:', err);
@@ -136,7 +147,6 @@ export function useImageLoader(cachedEditStateRef: React.RefObject<any>) {
     selectedImage?.path,
     selectedImage?.isReady,
     appSettings?.editorPreviewResolution,
-    resetHistory,
     setEditor,
     setLibrary,
   ]);

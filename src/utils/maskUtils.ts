@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { Mask, SubMaskMode, formatMaskTypeName } from '../components/panel/right/Masks';
 import { ImageDimensions } from '../hooks/useImageRenderSize';
+import { denormalizeColorRangeSamples } from './maskRange';
 
 export const createSubMask = (
   type: Mask,
@@ -78,6 +79,8 @@ export function denormalizeMaskCoordinates<T extends { masks?: any[] }>(
         if (typeof next.startY === 'number' && next.startY <= 1.5) next.startY = next.startY * height;
         if (typeof next.endX === 'number' && next.endX <= 1.5) next.endX = next.endX * width;
         if (typeof next.endY === 'number' && next.endY <= 1.5) next.endY = next.endY * height;
+      } else if (sub.type === 'color' || sub.type === 'Color') {
+        next.samples = denormalizeColorRangeSamples(next.samples, width, height);
       }
       delete next.normalized;
       return { ...sub, parameters: next };

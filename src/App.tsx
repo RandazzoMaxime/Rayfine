@@ -38,6 +38,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useThumbnails } from './hooks/useThumbnails';
 import { ImageDimensions } from './hooks/useImageRenderSize';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
+import { useAppUpdater } from './hooks/useAppUpdater';
 import { useTauriListeners } from './hooks/useTauriListeners';
 import { useFileOperations } from './hooks/useFileOperations';
 import { useAppContextMenus } from './hooks/useAppContextMenus';
@@ -158,13 +159,21 @@ function App() {
     })),
   );
 
-  const { selectedImage, activeMaskContainerId, activeAiPatchContainerId, hasRenderedFirstFrame, setEditor } =
+  const {
+    selectedImage,
+    activeMaskContainerId,
+    activeAiPatchContainerId,
+    hasRenderedFirstFrame,
+    holdPreviousFrame,
+    setEditor,
+  } =
     useEditorStore(
       useShallow((state) => ({
         selectedImage: state.selectedImage,
         activeMaskContainerId: state.activeMaskContainerId,
         activeAiPatchContainerId: state.activeAiPatchContainerId,
         hasRenderedFirstFrame: state.hasRenderedFirstFrame,
+        holdPreviousFrame: state.holdPreviousFrame,
         setEditor: state.setEditor,
       })),
     );
@@ -402,6 +411,8 @@ function App() {
     handleSelectSubfolder,
     handleSelectAlbum,
   });
+
+  useAppUpdater();
 
   useTauriListeners({
     refreshAllFolderTrees,
@@ -765,8 +776,7 @@ function App() {
   const isWgpuActive =
     !dualDisplayActive &&
     appSettings?.useWgpuRenderer !== false &&
-    selectedImage?.isReady &&
-    hasRenderedFirstFrame;
+    ((selectedImage?.isReady && hasRenderedFirstFrame) || holdPreviousFrame);
   const useMacWindowShell = osPlatform === 'macos' && !appSettings?.decorations && !isWindowFullScreen && !isFullScreen;
 
   return (
@@ -778,7 +788,7 @@ function App() {
         latestRenderedJobIdRef={latestRenderedJobIdRef}
         currentResRef={currentResRef}
       />
-      <ImageLoaderManager cachedEditStateRef={cachedEditStateRef} />
+      <ImageLoaderManager cachedEditStateRef={cachedEditStateRef} sortedImageList={sortedImageList} />
       <div
         className={clsx(
           'flex flex-col h-screen font-sans text-text-primary overflow-hidden select-none',

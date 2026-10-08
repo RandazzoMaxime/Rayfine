@@ -7,6 +7,7 @@ import { Theme, OPTION_SEPARATOR } from '../ui/AppProperties';
 import { useContextMenu } from '../../context/ContextMenuContext';
 import Text from '../ui/Text';
 import Slider from '../ui/Slider';
+import { useEditorStore } from '../../store/useEditorStore';
 import { TextColors, TextVariants, TextWeights } from '../../types/typography';
 
 let curveClipboard: Array<Coord> | null = null;
@@ -27,7 +28,7 @@ interface ColorData {
 
 interface CurveGraphProps {
   adjustments: Adjustments | any;
-  histogram: ChannelConfig | null;
+  histogram?: ChannelConfig | null;
   isForMask?: boolean;
   setAdjustments(updater: (prev: any) => any): void;
   theme: string;
@@ -265,10 +266,14 @@ function convertParametricToPoints(settings: ParametricCurveSettings): Array<Coo
 export default function CurveGraph({
   adjustments,
   setAdjustments,
-  histogram,
+  histogram: histogramProp,
   theme,
   onDragStateChange,
 }: CurveGraphProps) {
+  // Subscribed here rather than in ControlsPanel: the histogram updates every live frame
+  // and must not re-render every adjustment section with it.
+  const storeHistogram = useEditorStore((s) => s.histogram);
+  const histogram = histogramProp ?? storeHistogram;
   const { t } = useTranslation();
   const { showContextMenu } = useContextMenu();
   const [activeChannel, setActiveChannel] = useState<ActiveChannel>(ActiveChannel.Luma);

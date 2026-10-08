@@ -14,6 +14,8 @@ interface TauriListenerProps {
   markGenerated: (path: string) => void;
 }
 
+const ANALYTICS_DRAG_INTERVAL_MS = 100;
+
 export function useTauriListeners({
   refreshAllFolderTrees,
   handleSelectSubfolder,
@@ -29,7 +31,10 @@ export function useTauriListeners({
   const thumbnailBuffer = useRef<Record<string, string>>({});
   const ratingBuffer = useRef<Record<string, number>>({});
   const editStatusBuffer = useRef<Record<string, boolean>>({});
+  const progressBuffer = useRef<{ current: number; total: number } | null>(null);
   const flushHandle = useRef<number | null>(null);
+  const pendingAnalytics = useRef<{ histogram?: any; waveform?: any } | null>(null);
+  const analyticsTimer = useRef<number | null>(null);
 
   useEffect(() => {
     let isEffectActive = true;
@@ -52,17 +57,38 @@ export function useTauriListeners({
         }));
       }
 
-      if (Object.keys(pendingRatings).length > 0 || Object.keys(pendingEdits).length > 0) {
-        useLibraryStore.getState().setLibrary((state) => ({
-          imageRatings: { ...state.imageRatings, ...pendingRatings },
-          imageList:
-            Object.keys(pendingEdits).length > 0
-              ? state.imageList.map((img) =>
-                  pendingEdits[img.path] !== undefined ? { ...img, is_edited: pendingEdits[img.path] } : img,
-                )
-              : state.imageList,
+      const pendingProgress = progressBuffer.current;
+      progressBuffer.current = null;
+      if (pendingProgress) useProcessStore.getState().setProcess({ thumbnailProgress: pendingProgress });
+
+      // Every thumbnail event carries rating/is_edited; only touch the library (which
+      // re-sorts and re-packs the whole grid) when one of them actually changed.
+      const library = useLibraryStore.getState();
+      const changedRatings = Object.entries(pendingRatings).filter(([p, r]) => library.imageRatings[p] !== r);
+      const editedPaths = Object.keys(pendingEdits);
+      const editsChanged =
+        editedPaths.length > 0 &&
+        library.imageList.some((img) => pendingEdits[img.path] !== undefined && img.is_edited !== pendingEdits[img.path]);
+
+      if (changedRatings.length > 0 || editsChanged) {
+        library.setLibrary((state) => ({
+          imageRatings:
+            changedRatings.length > 0 ? { ...state.imageRatings, ...Object.fromEntries(changedRatings) } : state.imageRatings,
+          imageList: editsChanged
+            ? state.imageList.map((img) =>
+                pendingEdits[img.path] !== undefined && img.is_edited !== pendingEdits[img.path]
+                  ? { ...img, is_edited: pendingEdits[img.path] }
+                  : img,
+              )
+            : state.imageList,
         }));
       }
+    };
+
+    const flushAnalytics = () => {
+      const update = pendingAnalytics.current;
+      pendingAnalytics.current = null;
+      if (isEffectActive && update) useEditorStore.getState().setEditor(update);
     };
 
     const scheduleFlush = () => {
@@ -75,11 +101,23 @@ export function useTauriListeners({
         if (isEffectActive) useEditorStore.getState().setEditor({ uncroppedAdjustedPreviewUrl: event.payload });
       }),
       listen('analytics-update', (event: any) => {
-        if (isEffectActive && event.payload.path === useEditorStore.getState().selectedImage?.path) {
-          const update: { histogram?: any; waveform?: any } = {};
-          if (event.payload.histogram != null) update.histogram = event.payload.histogram;
-          if (event.payload.waveform != null) update.waveform = event.payload.waveform;
-          useEditorStore.getState().setEditor(update);
+        const editor = useEditorStore.getState();
+        if (!isEffectActive || event.payload.path !== editor.selectedImage?.path) return;
+        const update: { histogram?: any; waveform?: any } = {};
+        if (event.payload.histogram != null) update.histogram = event.payload.histogram;
+        if (event.payload.waveform != null) update.waveform = event.payload.waveform;
+        // Scopes arrive with every live frame; redrawing them at that rate steals the
+        // main thread from the slider. Throttle while dragging, apply at once otherwise.
+        pendingAnalytics.current = { ...pendingAnalytics.current, ...update };
+        if (!editor.isSliderDragging) {
+          if (analyticsTimer.current !== null) clearTimeout(analyticsTimer.current);
+          analyticsTimer.current = null;
+          flushAnalytics();
+        } else if (analyticsTimer.current === null) {
+          analyticsTimer.current = window.setTimeout(() => {
+            analyticsTimer.current = null;
+            flushAnalytics();
+          }, ANALYTICS_DRAG_INTERVAL_MS);
         }
       }),
       listen('image-enhanced', (event: any) => {
@@ -95,10 +133,9 @@ export function useTauriListeners({
         if (isEffectActive) useProcessStore.getState().setProcess({ externalEditSession: event.payload });
       }),
       listen('thumbnail-progress', (event: any) => {
-        if (isEffectActive)
-          useProcessStore
-            .getState()
-            .setProcess({ thumbnailProgress: { current: event.payload.current, total: event.payload.total } });
+        if (!isEffectActive) return;
+        progressBuffer.current = { current: event.payload.current, total: event.payload.total };
+        scheduleFlush();
       }),
       listen('thumbnail-generation-complete', () => {
         if (isEffectActive) useProcessStore.getState().setProcess({ thumbnailProgress: { current: 0, total: 0 } });
@@ -388,7 +425,7 @@ export function useTauriListeners({
       }),
       listen('wgpu-frame-ready', (event: any) => {
         if (isEffectActive && event.payload?.path === useEditorStore.getState().selectedImage?.path) {
-          useEditorStore.getState().setEditor({ hasRenderedFirstFrame: true });
+          useEditorStore.getState().setEditor({ hasRenderedFirstFrame: true, holdPreviousFrame: false });
         }
       }),
       listen('panorama-progress', (event: any) => {
@@ -506,6 +543,11 @@ export function useTauriListeners({
         cancelAnimationFrame(flushHandle.current);
         flushHandle.current = null;
       }
+      if (analyticsTimer.current !== null) {
+        clearTimeout(analyticsTimer.current);
+        analyticsTimer.current = null;
+      }
+      pendingAnalytics.current = null;
       thumbnailBuffer.current = {};
       ratingBuffer.current = {};
       listeners.forEach((p) => p.then((unlisten) => unlisten()));

@@ -228,6 +228,61 @@ pub(crate) fn load_base_image_inner(
     }
 }
 
+/// Decodes the Develop neighbours (fully enhanced) into the decoded-image cache once
+/// the current photo is final, so stepping to one skips the RAW decode and the enhance
+/// swap. Abandoned (mid-decode too) as soon as another photo starts loading.
+/// Prefetch decodes run here, on a third of the cores, so they never starve the
+/// resize/convert/stats work of the photo being opened (global rayon pool).
+static PREFETCH_POOL: std::sync::LazyLock<rayon::ThreadPool> = std::sync::LazyLock::new(|| {
+    let cores = std::thread::available_parallelism().map_or(4, |n| n.get());
+    rayon::ThreadPoolBuilder::new()
+        .num_threads((cores / 3).max(2))
+        .thread_name(|i| format!("prefetch-{i}"))
+        .build()
+        .expect("prefetch thread pool")
+});
+
+fn prefetch_decoded(
+    app: &tauri::AppHandle,
+    paths: Vec<String>,
+    generation: &Arc<AtomicUsize>,
+    my_generation: usize,
+) {
+    PREFETCH_POOL.install(|| prefetch_decoded_inner(app, paths, generation, my_generation));
+}
+
+fn prefetch_decoded_inner(
+    app: &tauri::AppHandle,
+    paths: Vec<String>,
+    generation: &Arc<AtomicUsize>,
+    my_generation: usize,
+) {
+    let state = app.state::<AppState>();
+    let settings = load_settings(app.clone()).unwrap_or_default();
+    for path in paths {
+        if generation.load(Ordering::SeqCst) != my_generation {
+            return;
+        }
+        let (source_path, _) = parse_virtual_path(&path);
+        let key = source_path.to_string_lossy().to_string();
+        if state.decoded_image_cache.lock().unwrap().contains(&key)
+            || crate::file_management::is_cloud_placeholder(&source_path)
+        {
+            continue;
+        }
+        let Ok(mmap) = read_file_mapped(&source_path) else { continue };
+        let cancel = Some((generation.clone(), my_generation));
+        let Ok((image, _)) = load_base_image_inner(&mmap, &key, false, &settings, cancel, false) else {
+            continue;
+        };
+        let exif = exif_processing::read_exif_data(&key, &mmap);
+        if generation.load(Ordering::SeqCst) != my_generation {
+            return;
+        }
+        state.decoded_image_cache.lock().unwrap().insert(key, Arc::new(image), exif);
+    }
+}
+
 fn classify_raw_develop_error(path: &str, err: anyhow::Error) -> anyhow::Error {
     let error_text = err.to_string();
     let lowered = error_text.to_ascii_lowercase();
@@ -783,9 +838,11 @@ pub fn is_image_cached(path: String, state: tauri::State<'_, AppState>) -> bool 
 #[tauri::command]
 pub async fn load_image(
     path: String,
+    prefetch: Option<Vec<String>>,
     state: tauri::State<'_, AppState>,
     app_handle: tauri::AppHandle,
 ) -> Result<LoadImageResult, String> {
+    let prefetch = prefetch.unwrap_or_default();
     let my_generation = state.load_image_generation.fetch_add(1, Ordering::SeqCst) + 1;
     let generation_tracker = state.load_image_generation.clone();
     let cancel_token = Some((generation_tracker.clone(), my_generation));
@@ -804,6 +861,9 @@ pub async fn load_image(
             && let Some(display) = display_lock.as_mut()
         {
             display.clear_detail(&context.device, &context.queue);
+            // Keep the previous photo on screen until the frontend sends the new rect
+            // (dual display gets no rect updates from the editor, so it never holds).
+            display.hold_present = !state.dual_display_enabled.load(Ordering::Relaxed);
         }
 
         state.mask_cache.lock().unwrap().clear();
@@ -967,6 +1027,13 @@ pub async fn load_image(
             *state.full_transformed_cache.lock().unwrap() = None;
             log::info!("Background RAW enhance for '{}' took {:?}", path, start.elapsed());
             let _ = app.emit("image-enhanced", serde_json::json!({ "path": path }));
+            prefetch_decoded(&app, prefetch, &generation, my_generation);
+        });
+    } else if !prefetch.is_empty() {
+        let app = app_handle.clone();
+        let generation = state.load_image_generation.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            prefetch_decoded(&app, prefetch, &generation, my_generation);
         });
     }
 

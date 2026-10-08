@@ -4,7 +4,7 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { homeDir } from '@tauri-apps/api/path';
 import { toast } from 'react-toastify';
 import { useLibraryStore } from '../store/useLibraryStore';
-import { useEditorStore } from '../store/useEditorStore';
+import { openedAdjustmentsPatch, useEditorStore } from '../store/useEditorStore';
 import { useUIStore } from '../store/useUIStore';
 import { useProcessStore } from '../store/useProcessStore';
 import { useSettingsStore } from '../store/useSettingsStore';
@@ -17,6 +17,9 @@ import i18n from '../i18n';
 import { isPathImported, filterRemovedFromCatalog } from '../utils/catalogMembership';
 import { dedupeLibraryRoots, isLibraryPathInside, libraryRootCoveredBy, sameLibraryPath } from '../utils/libraryRoots';
 
+
+/** Longest the previous photo stays up while the next one loads (failed load fallback). */
+const HOLD_PREVIOUS_FRAME_MAX_MS = 3000;
 export interface AppNavigationProps {
   clearThumbnailQueue: () => void;
   refs: {
@@ -91,6 +94,7 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
 
     setEditor({
       hasRenderedFirstFrame: false,
+      holdPreviousFrame: false,
       selectedImage: null,
       finalPreviewUrl: null,
       uncroppedAdjustedPreviewUrl: null,
@@ -187,7 +191,19 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
       const cached = globalImageCache.get(path);
       const isFrontendCached = Boolean(cached && cached.selectedImage?.isReady);
 
-      setEditor({ hasRenderedFirstFrame: false });
+      // A photo is on the native surface: keep it there until the new one's first frame
+      // (the backend holds presenting), instead of hiding it and showing an empty stage.
+      const holdPreviousFrame =
+        useEditorStore.getState().hasRenderedFirstFrame &&
+        useSettingsStore.getState().appSettings?.useWgpuRenderer !== false &&
+        !useUIStore.getState().dualDisplayActive;
+      setEditor({ hasRenderedFirstFrame: false, holdPreviousFrame });
+      if (holdPreviousFrame) {
+        // Safety net if the load fails and no frame ever comes.
+        setTimeout(() => {
+          if (selectedImagePathRef.current === path) setEditor({ holdPreviousFrame: false });
+        }, HOLD_PREVIOUS_FRAME_MAX_MS);
+      }
 
       selectedImagePathRef.current = path;
 
@@ -232,8 +248,7 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
           uncroppedAdjustedPreviewUrl: cached.uncroppedPreviewUrl,
         });
 
-        setEditor({ adjustments: cached.adjustments });
-        resetHistory(cached.adjustments);
+        useEditorStore.getState().openAdjustments(path, cached.adjustments);
         prevAdjustmentsRef.current = { path, adjustments: cached.adjustments };
 
         setLibrary({ isViewLoading: false });
@@ -253,7 +268,7 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
               const adj = denormalizeMaskCoordinates(state.adjustments as any, w, h);
               return {
                 originalSize: { width: w, height: h },
-                adjustments: adj,
+                ...openedAdjustmentsPatch(state, path, adj),
               };
             });
           })
@@ -278,8 +293,7 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
               freshAdjustments = { ...INITIAL_ADJUSTMENTS };
             }
             if (!isSliderDragging && JSON.stringify(cached.adjustments) !== JSON.stringify(freshAdjustments)) {
-              setEditor({ adjustments: freshAdjustments });
-              resetHistory(freshAdjustments);
+              useEditorStore.getState().openAdjustments(path, freshAdjustments);
               prevAdjustmentsRef.current = { path, adjustments: freshAdjustments };
               globalImageCache.set(path, { ...cached, adjustments: freshAdjustments });
             }
@@ -351,7 +365,6 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
       const libraryViewMode = appSettings?.libraryViewMode;
 
       if (!preserveEditor) {
-        await invoke('cancel_thumbnail_generation');
         clearThumbnailQueue();
         setLibrary({ isViewLoading: true, activeAlbumId: null, libraryScrollTop: 0 });
         useLibraryStore.getState().setSearchCriteria({ tags: [], text: '', mode: 'OR' });
@@ -505,7 +518,6 @@ export function useAppNavigation({ clearThumbnailQueue, refs }: AppNavigationPro
       const { setUI } = useUIStore.getState();
 
       if (!preserveEditor) {
-        await invoke('cancel_thumbnail_generation');
         clearThumbnailQueue();
         useLibraryStore.getState().setSearchCriteria({ tags: [], text: '', mode: 'OR' });
         setLibrary({ libraryScrollTop: 0 });

@@ -3,7 +3,13 @@ import { useEffect } from 'react';
 import { LayoutGrid, Pipette } from 'lucide-react';
 import Slider from '../ui/Slider';
 import PanelSelect from '../ui/PanelSelect';
-import { Adjustments, BasicAdjustment, ColorAdjustment, DetailsAdjustment } from '../../utils/adjustments';
+import {
+  Adjustments,
+  BasicAdjustment,
+  ColorAdjustment,
+  DetailsAdjustment,
+  needsDetectedCameraProfile,
+} from '../../utils/adjustments';
 import { useTranslation } from 'react-i18next';
 import { useEditorActions } from '../../hooks/useEditorActions';
 import { useUIStore } from '../../store/useUIStore';
@@ -95,7 +101,7 @@ export default function BasicAdjustments({
     : ((adjustments as any).cameraProfile === detectedCameraProfile && detectedCameraProfile ? detectedCameraProfile : 'Standard');
 
   useEffect(() => {
-    if (detectedCameraProfile && (!rawProfile || rawProfile.toLowerCase() === 'adobe standard')) {
+    if (detectedCameraProfile && needsDetectedCameraProfile(rawProfile)) {
       setAdjustments((prev: Partial<Adjustments>) => ({ ...prev, cameraProfile: detectedCameraProfile }));
     }
   }, [detectedCameraProfile, rawProfile, setAdjustments]);

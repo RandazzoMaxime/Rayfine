@@ -465,12 +465,9 @@ function CullingPreview({
           )}
 
           {highResSrc && (
-            <motion.img
+            <img
               ref={imageRef}
               onLoad={updateFitScale}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ duration: 0.3 }}
               src={highResSrc}
               className="absolute w-full h-full object-contain drop-shadow-lg"
               alt={t('library.culling.altCullingPreviewHighRes')}

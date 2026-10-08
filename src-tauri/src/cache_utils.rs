@@ -248,6 +248,10 @@ impl DecodedImageCache {
         }
     }
 
+    pub fn contains(&self, path: &str) -> bool {
+        self.items.iter().any(|(p, _, _)| p == path)
+    }
+
     pub fn get(&mut self, path: &str) -> Option<(Arc<DynamicImage>, HashMap<String, String>)> {
         if let Some(pos) = self.items.iter().position(|(p, _, _)| p == path) {
             let item = self.items.remove(pos);

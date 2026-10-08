@@ -762,6 +762,10 @@
         "feather": "Feather",
         "globalFeather": "Global Feather",
         "grow": "Grow",
+        "rangeLow": "Range low",
+        "rangeHigh": "Range high",
+        "refine": "Refine",
+        "smoothness": "Smoothness",
         "tolerance": "Tolerance"
       },
       "patches": {
@@ -777,7 +781,6 @@
         "applyPreset": "Apply Preset",
         "componentPropertiesTitle": "{{name}} Properties",
         "copySectionSettings": "Copy {{section}} Settings",
-        "invertComponent": "Invert Component",
         "invertMask": "Invert Mask",
         "maskPropertiesTitle": "Mask Properties",
         "noPresetsFound": "No presets found",
@@ -1393,7 +1396,6 @@
       "create": "Create",
       "addToCollection": "Add to collection",
       "applyDuringImport": "Apply during import",
-      "developParams": "Develop settings",
       "applyNone": "None",
       "metadataNew": "New…",
       "metadataEditPresets": "Edit presets…",
@@ -2678,5 +2680,11 @@
       "exporting": "Exporting…",
       "exportDone": "Gallery HTML saved ({{count}} photos)"
     }
+  },
+  "updater": {
+    "available": "Rayfine {{version}} is available.",
+    "install": "Update and restart",
+    "installing": "Downloading the update…",
+    "failed": "Update failed"
   }
 }

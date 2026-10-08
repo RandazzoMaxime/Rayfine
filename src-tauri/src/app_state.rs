@@ -166,7 +166,6 @@ pub struct AppState {
     pub lut_cache: Mutex<HashMap<String, Arc<Lut>>>,
     pub initial_file_path: Mutex<Option<String>>,
     pub pending_edit_session: Mutex<Option<ExternalEditSession>>,
-    pub thumbnail_cancellation_token: Arc<AtomicBool>,
     pub thumbnail_progress: Mutex<ThumbnailProgressTracker>,
     pub preview_worker_tx: Mutex<Option<Sender<PreviewJob>>>,
     pub analytics_worker_tx: Mutex<Option<Sender<AnalyticsJob>>>,

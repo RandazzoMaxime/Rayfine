@@ -12,7 +12,13 @@ import TransformPanel from '../../adjustments/Transform';
 import AnamorphicPanel from '../../adjustments/Anamorphic';
 import CollapsibleSection from '../../ui/CollapsibleSection';
 import ProfileExplorer from './ProfileExplorer';
-import { Adjustments, SectionVisibility, INITIAL_ADJUSTMENTS, ADJUSTMENT_SECTIONS } from '../../../utils/adjustments';
+import {
+  Adjustments,
+  SectionVisibility,
+  INITIAL_ADJUSTMENTS,
+  ADJUSTMENT_SECTIONS,
+  detectedCameraProfileFor,
+} from '../../../utils/adjustments';
 import { useContextMenu } from '../../../context/ContextMenuContext';
 import { OPTION_SEPARATOR } from '../../ui/AppProperties';
 import { useShallow } from 'zustand/react/shallow';
@@ -21,6 +27,13 @@ import { useSettingsStore } from '../../../store/useSettingsStore';
 import { useUIStore } from '../../../store/useUIStore';
 import { useEditorActions } from '../../../hooks/useEditorActions';
 
+
+// Collapsed sections stay mounted (for the height transition) but are invisible:
+// skip their re-render on every adjustment frame until they are opened again.
+const FrozenWhenClosed = React.memo(
+  ({ children }: { open: boolean; children: React.ReactNode }) => <>{children}</>,
+  (prev, next) => !prev.open && !next.open,
+);
 
 export default function Controls() {
   const { t } = useTranslation();
@@ -45,7 +58,6 @@ export default function Controls() {
   const {
     adjustments,
     copiedSectionAdjustments,
-    histogram,
     selectedImage,
     isWbPickerActive,
     setEditor,
@@ -53,7 +65,6 @@ export default function Controls() {
     useShallow((state) => ({
       adjustments: state.adjustments,
       copiedSectionAdjustments: state.copiedSectionAdjustments,
-      histogram: state.histogram,
       selectedImage: state.selectedImage,
       isWbPickerActive: state.isWbPickerActive,
       setEditor: state.setEditor,
@@ -300,11 +311,8 @@ export default function Controls() {
           const extraProps =
             sectionName === 'basic'
               ? (() => {
-                  const exif = (selectedImage?.exif || {}) as Record<string, string>;
-                  const make = (exif.Make || exif.make || '').trim();
-                  const model = (exif.Model || exif.model || '').trim();
-                  const camera = [make, model].filter(Boolean).join(' ');
-                  return selectedImage?.isRaw && camera ? { detectedCameraProfile: `Appareil — ${camera}` } : {};
+                  const profile = detectedCameraProfileFor(selectedImage?.exif as any, !!selectedImage?.isRaw);
+                  return profile ? { detectedCameraProfile: profile } : {};
                 })()
               : sectionName === 'color'
               ? { panel: 'mixer' as const }
@@ -316,20 +324,22 @@ export default function Controls() {
                     ? { variant: 'effects' as const }
                     : {};
 
+          const isOpen = !!collapsibleSectionsState[sectionName as keyof typeof collapsibleSectionsState];
+
           return (
             <div className="shrink-0 group" key={sectionName}>
               <CollapsibleSection
                 isContentVisible={sectionVisibility[sectionName as keyof SectionVisibility] !== false}
-                isOpen={!!collapsibleSectionsState[sectionName as keyof typeof collapsibleSectionsState]}
+                isOpen={isOpen}
                 onContextMenu={(e: any) => handleSectionContextMenu(e, sectionName)}
                 onToggle={(e?: any) => handleToggleSection(sectionName, e)}
                 onToggleVisibility={() => handleToggleVisibility(sectionName)}
                 title={title}
               >
+                <FrozenWhenClosed open={isOpen}>
                 <SectionComponent
                   adjustments={adjustments}
                   setAdjustments={setAdjustments}
-                  histogram={histogram}
                   theme={theme}
                   handleLutSelect={handleLutSelect}
                   onLutHover={setLutPreviewOverride}
@@ -339,6 +349,7 @@ export default function Controls() {
                   onDragStateChange={onDragStateChange}
                   {...extraProps}
                 />
+                </FrozenWhenClosed>
               </CollapsibleSection>
             </div>
           );

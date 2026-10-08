@@ -53,7 +53,7 @@ interface ImageCanvasProps {
   /** Interactive Guided Upright guide drawing (PerspectiveUpright=5) */
   isGuidedUprightActive?: boolean;
   isRotationActive?: boolean;
-  maskOverlayUrl: string | null;
+  maskOverlay: MaskOverlayBitmap | null;
   onGenerateAiMask(id: string | null, start: Coord, end: Coord): void;
   onLiveMaskPreview?: (previewMaskDef: any) => void;
   onManualCleanup?(subMaskId: string, sourceX: number, sourceY: number): Promise<void> | void;
@@ -202,6 +202,41 @@ const SourcePreviewLine = memo(
     );
   },
 );
+
+/** Live mask overlay from `generate_mask_overlay`: one intensity byte per pixel. */
+export interface MaskOverlayBitmap {
+  width: number;
+  height: number;
+  data: Uint8Array;
+}
+
+/** Tints the overlay red (alpha = intensity / 2) straight into a canvas: no image decode. */
+const MaskOverlayCanvas = memo(({ overlay, style }: { overlay: MaskOverlayBitmap; style: React.CSSProperties }) => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const imageDataRef = useRef<ImageData | null>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+    const { width, height, data } = overlay;
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+    let image = imageDataRef.current;
+    if (!image || image.width !== width || image.height !== height) {
+      image = ctx.createImageData(width, height);
+      for (let i = 0; i < image.data.length; i += 4) image.data[i] = 255;
+      imageDataRef.current = image;
+    }
+    const pixels = image.data;
+    for (let i = 0, a = 3; i < data.length; i++, a += 4) pixels[a] = data[i] >> 1;
+    ctx.putImageData(image, 0, 0);
+  }, [overlay]);
+
+  return <canvas ref={canvasRef} className="absolute pointer-events-none" style={style} aria-hidden />;
+});
 
 const MaskOverlay = memo(
   ({
@@ -1127,25 +1162,32 @@ const MaskOverlay = memo(
     }
 
     if (subMask.type === Mask.Color || subMask.type === Mask.Luminance) {
-      const { targetX, targetY } = p;
-      if (targetX !== undefined && targetX >= 0 && targetY !== undefined && targetY >= 0) {
-        return (
-          <Circle
-            x={(targetX - cropX) * scale}
-            y={(targetY - cropY) * scale}
-            radius={5}
-            stroke={isSelected ? '#0ea5e9' : 'white'}
-            strokeWidth={2}
-            listening={false}
-            onTouchEnd={handleMaskTouchEnd}
-            onTouchStart={handleMaskTouchStart}
-            shadowColor="black"
-            shadowBlur={2}
-            shadowOpacity={0.8}
-          />
-        );
-      }
-      return null;
+      const samples: Array<{ x: number; y: number }> = Array.isArray(p.samples) && p.samples.length > 0
+        ? p.samples
+        : (p.targetX !== undefined && p.targetX >= 0 && p.targetY !== undefined && p.targetY >= 0
+            ? [{ x: p.targetX, y: p.targetY }]
+            : []);
+      if (samples.length === 0) return null;
+      return (
+        <Group listening={false}>
+          {samples.map((sample, index) => (
+            <Circle
+              key={`${subMask.id}-sample-${index}`}
+              x={(sample.x - cropX) * scale}
+              y={(sample.y - cropY) * scale}
+              radius={5}
+              stroke={isSelected ? '#0ea5e9' : 'white'}
+              strokeWidth={2}
+              listening={false}
+              onTouchEnd={handleMaskTouchEnd}
+              onTouchStart={handleMaskTouchStart}
+              shadowColor="black"
+              shadowBlur={2}
+              shadowOpacity={0.8}
+            />
+          ))}
+        </Group>
+      );
     }
     return null;
   },
@@ -1173,7 +1215,7 @@ const ImageCanvas = memo(
     isStraightenActive,
     isGuidedUprightActive = false,
     isRotationActive,
-    maskOverlayUrl,
+    maskOverlay,
     onGenerateAiMask,
     onLiveMaskPreview,
     onManualCleanup,
@@ -1218,12 +1260,35 @@ const ImageCanvas = memo(
 
     const [isCropViewVisible, setIsCropViewVisible] = useState(false);
     const cropImageRef = useRef<HTMLImageElement>(null);
-    const [displayedMaskUrl, setDisplayedMaskUrl] = useState<string | null>(null);
+    const [displayedMask, setDisplayedMask] = useState<MaskOverlayBitmap | null>(null);
     const [originalLoaded, setOriginalLoaded] = useState<boolean>(false);
     const [baSplitRatio, setBaSplitRatio] = useState(0.5); // 0–1, left = before
     const baDragRef = useRef(false);
     const [localInitialDrawParams, setLocalInitialDrawParams] = useState<any>(null);
-    const [isMaskInteractionActive, setIsMaskInteractionActive] = useState(false);
+    // A mask drag renders like a slider drag (interactive preview, save on release). The
+    // window pointerup is a safety net: a press that never becomes a Konva drag must not
+    // leave the editor stuck in drag mode (it would hold back saving).
+    const maskDragReleaseRef = useRef<(() => void) | null>(null);
+    const setIsMaskInteractionActive = useCallback((active: boolean) => {
+      const { isSliderDragging: dragging, setEditor } = useEditorStore.getState();
+      if (active) {
+        if (!dragging) setEditor({ isSliderDragging: true });
+        if (!maskDragReleaseRef.current) {
+          const release = () => {
+            window.removeEventListener('pointerup', release);
+            window.removeEventListener('pointercancel', release);
+            maskDragReleaseRef.current = null;
+            useEditorStore.getState().setEditor({ isSliderDragging: false });
+          };
+          maskDragReleaseRef.current = release;
+          window.addEventListener('pointerup', release);
+          window.addEventListener('pointercancel', release);
+        }
+      } else if (maskDragReleaseRef.current) {
+        maskDragReleaseRef.current();
+      }
+    }, []);
+    useEffect(() => () => maskDragReleaseRef.current?.(), []);
     const [hoveredMarkerId, setHoveredMarkerId] = useState<string | null>(null);
     const isDrawing = useRef(false);
     const drawingStageRef = useRef<any>(null);
@@ -1261,7 +1326,6 @@ const ImageCanvas = memo(
       base: previewSrc,
       fade: null as string | null,
     });
-    const [isFadingIn, setIsFadingIn] = useState(false);
     const prevImageIdentityRef = useRef(selectedImage.path);
 
     const [baseTool, setBaseTool] = useState<ToolType>(brushSettings?.tool ?? ToolType.Brush);
@@ -1269,7 +1333,9 @@ const ImageCanvas = memo(
     const [isCtrlPressed, setIsCtrlPressed] = useState(false);
     const retainedPatchRef = useRef<typeof interactivePatch>(null);
 
-    const isWgpuActive = appSettings?.useWgpuRenderer !== false && selectedImage?.isReady && hasRenderedFirstFrame;
+    const holdPreviousFrame = useEditorStore((s) => s.holdPreviousFrame);
+    const isWgpuActive =
+      appSettings?.useWgpuRenderer !== false && ((selectedImage?.isReady && hasRenderedFirstFrame) || holdPreviousFrame);
     const { t } = useTranslation();
     const osPlatform = useOsPlatform();
     const modifierKey = osPlatform === 'macos' ? 'Cmd' : 'Ctrl';
@@ -1360,42 +1426,18 @@ const ImageCanvas = memo(
       if (isNewImage) {
         prevImageIdentityRef.current = selectedImage.path;
         setDisplayState({ base: newSrc, fade: null });
-        setIsFadingIn(false);
         return;
       }
 
-      if (isSliderDragging) {
+      // No crossfade: the new source is stacked over the old one at full opacity
+      // until it has decoded, then promoted to base, so it swaps without a flash.
+      if (isSliderDragging || !displayState.base || displayState.base === newSrc) {
         setDisplayState({ base: newSrc, fade: null });
-        setIsFadingIn(false);
-      } else {
-        if (displayState.base !== newSrc && displayState.base) {
-          setDisplayState((prev) => ({ base: prev.base, fade: newSrc }));
-          setIsFadingIn(false);
-
-          let frame1: number;
-          let frame2: number;
-
-          frame1 = requestAnimationFrame(() => {
-            frame2 = requestAnimationFrame(() => {
-              setIsFadingIn(true);
-            });
-          });
-
-          const timer = setTimeout(() => {
-            setDisplayState({ base: newSrc, fade: null });
-            setIsFadingIn(false);
-          }, 150);
-
-          return () => {
-            cancelAnimationFrame(frame1);
-            cancelAnimationFrame(frame2);
-            clearTimeout(timer);
-          };
-        } else {
-          setDisplayState({ base: newSrc, fade: null });
-          setIsFadingIn(false);
-        }
+        return;
       }
+      setDisplayState((prev) => ({ base: prev.base, fade: newSrc ?? null }));
+      const timer = setTimeout(() => setDisplayState({ base: newSrc, fade: null }), 150);
+      return () => clearTimeout(timer);
     }, [previewSrc, selectedImage.path, isSliderDragging]);
 
     useEffect(() => {
@@ -1574,19 +1616,18 @@ const ImageCanvas = memo(
     const isAiSubjectActive =
       (isMasking || isAiEditing) &&
       (activeSubMask?.type === Mask.AiSubject || activeSubMask?.type === Mask.QuickEraser);
-    const isParametricActive =
-      (isMasking || isAiEditing) && (activeSubMask?.type === Mask.Color || activeSubMask?.type === Mask.Luminance);
+    const isParametricActive = (isMasking || isAiEditing) && activeSubMask?.type === Mask.Color;
     const isInitialDrawing = (isMasking || isAiEditing) && activeSubMask?.parameters?.isInitialDraw === true;
 
     const isToolActive = isBrushActive || isAiSubjectActive || isInitialDrawing || isParametricActive;
 
     useEffect(() => {
-      if (maskOverlayUrl && (isMasking || isAiEditing)) {
-        setDisplayedMaskUrl(maskOverlayUrl);
+      if (maskOverlay && (isMasking || isAiEditing)) {
+        setDisplayedMask(maskOverlay);
       } else {
-        setDisplayedMaskUrl(null);
+        setDisplayedMask(null);
       }
-    }, [maskOverlayUrl, isMasking, isAiEditing]);
+    }, [maskOverlay, isMasking, isAiEditing]);
 
     useEffect(() => {
       if (isToolActive) {
@@ -1921,8 +1962,36 @@ const ImageCanvas = memo(
           const y = pos.y / scaleY + cropY;
 
           let newParams = { ...activeSubMask.parameters };
-          newParams.targetX = x;
-          newParams.targetY = y;
+          const samples: Array<{ x: number; y: number }> = Array.isArray(newParams.samples)
+            ? [...newParams.samples]
+            : (Number.isFinite(newParams.targetX) && newParams.targetX >= 0 && Number.isFinite(newParams.targetY) && newParams.targetY >= 0
+                ? [{ x: Number(newParams.targetX), y: Number(newParams.targetY) }]
+                : []);
+          if (e.evt?.altKey) {
+            let closestIndex = -1;
+            let closestDistance = 20 / Math.max(scaleX, 0.001);
+            samples.forEach((sample, index) => {
+              const distance = Math.hypot(sample.x - x, sample.y - y);
+              if (distance < closestDistance) {
+                closestDistance = distance;
+                closestIndex = index;
+              }
+            });
+            if (closestIndex >= 0) samples.splice(closestIndex, 1);
+          } else if (e.evt?.shiftKey) {
+            if (samples.length < 5) samples.push({ x, y });
+          } else {
+            samples.splice(0, samples.length, { x, y });
+          }
+          newParams.samples = samples.slice(0, 5);
+          if (samples.length > 0) {
+            const activeSample = samples[samples.length - 1];
+            newParams.targetX = activeSample.x;
+            newParams.targetY = activeSample.y;
+          } else {
+            newParams.targetX = -10000;
+            newParams.targetY = -10000;
+          }
           newParams.rotation = adjustments.rotation || 0;
           newParams.flipHorizontal = adjustments.flipHorizontal || false;
           newParams.flipVertical = adjustments.flipVertical || false;
@@ -2512,6 +2581,29 @@ const ImageCanvas = memo(
       baseTool,
     ]);
 
+    // Pointer moves reach handleMove from the stage and, while drawing, from window too:
+    // several times per frame, each re-rendering the canvas (cursor preview, shape being
+    // placed). Process the latest move once per frame; preventDefault stays synchronous.
+    const handleMoveRef = useRef(handleMove);
+    handleMoveRef.current = handleMove;
+    const pendingMoveRef = useRef<any>(null);
+    const moveFrameRef = useRef<number | null>(null);
+    const scheduleMove = useCallback((e: any) => {
+      const native = e?.evt ?? e;
+      if (isDrawing.current && native?.cancelable) native.preventDefault();
+      pendingMoveRef.current = e;
+      if (moveFrameRef.current !== null) return;
+      moveFrameRef.current = requestAnimationFrame(() => {
+        moveFrameRef.current = null;
+        const latest = pendingMoveRef.current;
+        pendingMoveRef.current = null;
+        if (latest) handleMoveRef.current(latest);
+      });
+    }, []);
+    useEffect(() => () => {
+      if (moveFrameRef.current !== null) cancelAnimationFrame(moveFrameRef.current);
+    }, []);
+
     const handleMouseEnter = useCallback(() => {
       if (isToolActive) {
         setCursorPreview((p: CursorPreview) => ({ ...p, visible: true }));
@@ -2527,7 +2619,7 @@ const ImageCanvas = memo(
 
       function onGlobalMove(e: MouseEvent | TouchEvent) {
         if (!isDrawing.current) return;
-        handleMove(e);
+        scheduleMove(e);
       }
 
       function onGlobalUp() {
@@ -2545,7 +2637,7 @@ const ImageCanvas = memo(
         window.removeEventListener('touchmove', onGlobalMove);
         window.removeEventListener('touchcancel', onGlobalUp);
       };
-    }, [isToolActive, handleMove, handleUp]);
+    }, [isToolActive, scheduleMove, handleUp]);
 
     const handleStraightenMouseDown = (e: any) => {
       if (e.evt.button !== 0 && !e.evt.touches) {
@@ -2949,6 +3041,44 @@ const ImageCanvas = memo(
       [activeContainer, onLiveMaskPreview],
     );
 
+    // Konva fires a move per mouse event (often several per frame); each update rewrites the
+    // adjustments (whole-panel render, GPU render, overlay request). Apply the latest one per
+    // frame instead; the drag-end update goes through here too, so the final value lands.
+    const latestMaskCallbacks = useRef({ updateSubMask, handlePreviewUpdate });
+    latestMaskCallbacks.current = { updateSubMask, handlePreviewUpdate };
+    const pendingMaskUpdates = useRef(new Map<string, { update?: Partial<SubMask>; preview?: Partial<SubMask> }>());
+    const maskUpdateFrame = useRef<number | null>(null);
+    const scheduleMaskUpdates = useCallback(() => {
+      if (maskUpdateFrame.current !== null) return;
+      maskUpdateFrame.current = requestAnimationFrame(() => {
+        maskUpdateFrame.current = null;
+        const pending = pendingMaskUpdates.current;
+        pendingMaskUpdates.current = new Map();
+        const { updateSubMask: update, handlePreviewUpdate: preview } = latestMaskCallbacks.current;
+        pending.forEach((entry, id) => {
+          if (entry.preview) preview(id, entry.preview);
+          if (entry.update) update(id, entry.update);
+        });
+      });
+    }, []);
+    useEffect(() => () => {
+      if (maskUpdateFrame.current !== null) cancelAnimationFrame(maskUpdateFrame.current);
+    }, []);
+    const updateSubMaskPerFrame = useCallback(
+      (id: string, subMask: Partial<SubMask>) => {
+        pendingMaskUpdates.current.set(id, { ...pendingMaskUpdates.current.get(id), update: subMask });
+        scheduleMaskUpdates();
+      },
+      [scheduleMaskUpdates],
+    );
+    const previewSubMaskPerFrame = useCallback(
+      (id: string, subMask: Partial<SubMask>) => {
+        pendingMaskUpdates.current.set(id, { ...pendingMaskUpdates.current.get(id), preview: subMask });
+        scheduleMaskUpdates();
+      },
+      [scheduleMaskUpdates],
+    );
+
     const handleMaskInteractionStart = useCallback(
       (e?: any) => {
         setIsMaskInteractionActive(true);
@@ -2966,16 +3096,16 @@ const ImageCanvas = memo(
     }, [setIsMaskTouchInteracting]);
 
     const currentActiveSubMaskId = activeAiSubMaskId || activeMaskId;
+    // The overlay stays up while dragging a mask, a slider or hovering mask controls: it is
+    // what shows where a feather/range change lands.
     const maskOpacity =
-      !showMaskOverlay || isShowingOriginal || isSliderDragging || isMaskInteractionActive
+      !showMaskOverlay || isShowingOriginal
         ? 0
         : isCloneOrHealActive
           ? hoveredMarkerId === currentActiveSubMaskId || isMaskControlHovered
             ? 1
             : 0
-          : isMaskControlHovered
-            ? 0
-            : 1;
+          : 1;
 
     return (
       <div className="relative" style={{ width: '100%', height: '100%', cursor: effectiveCursor }}>
@@ -3041,8 +3171,6 @@ const ImageCanvas = memo(
                     height="100%"
                     style={{
                       imageRendering: isMaxZoom ? 'pixelated' : 'auto',
-                      opacity: isFadingIn ? 1 : 0,
-                      transition: 'opacity 150ms ease-in-out',
                     }}
                   />
                 )}
@@ -3308,11 +3436,9 @@ const ImageCanvas = memo(
                 </>
               )}
 
-              {displayedMaskUrl && (
-                <img
-                  alt="Mask Overlay"
-                  className="absolute object-contain pointer-events-none"
-                  src={displayedMaskUrl}
+              {displayedMask && (
+                <MaskOverlayCanvas
+                  overlay={displayedMask}
                   style={{
                     height: `${imageRenderSize.height}px`,
                     left: `${imageRenderSize.offsetX}px`,
@@ -3420,8 +3546,8 @@ const ImageCanvas = memo(
                 onTouchStart={handleStart}
                 onMouseEnter={handleMouseEnter}
                 onMouseLeave={handleMouseLeave}
-                onMouseMove={handleMove}
-                onTouchMove={handleMove}
+                onMouseMove={scheduleMove}
+                onTouchMove={scheduleMove}
                 onMouseUp={handleUp}
                 onTouchEnd={handleUp}
               >
@@ -3463,11 +3589,11 @@ const ImageCanvas = memo(
                               onMaskInteractionStart={handleMaskInteractionStart}
                               onMaskMouseEnter={() => !isToolActive && setIsMaskHovered(true)}
                               onMaskMouseLeave={() => !isToolActive && setIsMaskHovered(false)}
-                              onPreviewUpdate={handlePreviewUpdate}
+                              onPreviewUpdate={previewSubMaskPerFrame}
                               onSelect={() =>
                                 isMasking ? onSelectMask(renderSubMask.id) : onSelectAiSubMask(renderSubMask.id)
                               }
-                              onUpdate={updateSubMask}
+                              onUpdate={updateSubMaskPerFrame}
                               scale={scaleX}
                               scaleX={scaleX}
                               scaleY={scaleY}

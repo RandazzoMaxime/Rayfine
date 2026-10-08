@@ -184,6 +184,80 @@ fn attrs_from_description_tag(tag: &str) -> HashMap<String, String> {
     map
 }
 
+fn find_xml_open(source: &str, name: &str, from: usize) -> Option<usize> {
+    let needle = format!("<{name}");
+    let mut cursor = from;
+    while cursor < source.len() {
+        let start = cursor + source[cursor..].find(&needle)?;
+        let boundary = source.as_bytes().get(start + needle.len()).copied()?;
+        if boundary == b'>' || boundary == b'/' || boundary.is_ascii_whitespace() {
+            return Some(start);
+        }
+        cursor = start + needle.len();
+    }
+    None
+}
+
+fn matching_xml_element_bounds(source: &str, name: &str, start: usize) -> Option<(usize, usize, usize)> {
+    let open_end = start + source[start..].find('>')? + 1;
+    if source[start..open_end].trim_end().ends_with("/>") {
+        return Some((open_end, open_end, open_end));
+    }
+    let close = format!("</{name}>");
+    let mut depth = 1usize;
+    let mut cursor = open_end;
+    loop {
+        let next_open = find_xml_open(source, name, cursor);
+        let next_close = source[cursor..].find(&close).map(|offset| cursor + offset);
+        match (next_open, next_close) {
+            (_, Some(close_start)) if next_open.is_none_or(|open_start| close_start < open_start) => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((open_end, close_start, close_start + close.len()));
+                }
+                cursor = close_start + close.len();
+            }
+            (Some(open_start), _) => {
+                let child_end = open_start + source[open_start..].find('>')? + 1;
+                if !source[open_start..child_end].trim_end().ends_with("/>") {
+                    depth += 1;
+                }
+                cursor = child_end;
+            }
+            _ => return None,
+        }
+    }
+}
+
+fn first_xml_element_content<'a>(source: &'a str, name: &str) -> Option<&'a str> {
+    let start = find_xml_open(source, name, 0)?;
+    let (open_end, close_start, _) = matching_xml_element_bounds(source, name, start)?;
+    Some(&source[open_end..close_start])
+}
+
+struct RdfDescription<'a> {
+    attributes: &'a str,
+    contents: &'a str,
+}
+
+fn top_level_rdf_descriptions(source: &str) -> Vec<RdfDescription<'_>> {
+    let name = "rdf:Description";
+    let mut result = Vec::new();
+    let mut cursor = 0usize;
+    while let Some(start) = find_xml_open(source, name, cursor) {
+        let Some((open_end, close_start, end)) = matching_xml_element_bounds(source, name, start) else {
+            break;
+        };
+        let attributes_start = start + name.len() + 1;
+        result.push(RdfDescription {
+            attributes: &source[attributes_start..open_end - 1],
+            contents: &source[open_end..close_start],
+        });
+        cursor = end.max(open_end);
+    }
+    result
+}
+
 fn f_attr(attrs: &HashMap<String, String>, key: &str) -> Option<f64> {
     get_attr_as_f64(attrs, key)
 }
@@ -242,35 +316,21 @@ fn local_tone_from_attrs(attrs: &HashMap<String, String>) -> Map<String, Value> 
 pub fn parse_mask_group_based_corrections(xmp_content: &str) -> Vec<Value> {
     let mut masks: Vec<Value> = Vec::new();
 
-    // Find MaskGroupBasedCorrections block (also try PaintBasedCorrections as fallback for older LR)
-    let block_re = Regex::new(
-        r"(?s)<crs:(MaskGroupBasedCorrections|PaintBasedCorrections)>\s*<rdf:Seq>(.*?)</rdf:Seq>\s*</crs:(MaskGroupBasedCorrections|PaintBasedCorrections)>",
-    );
-    let Ok(block_re) = block_re else {
+    // RangeMask nodes contain nested RDF descriptions/sequences, so match their
+    // XML depth rather than stopping at the first nested closing element.
+    let Some(block) = first_xml_element_content(xmp_content, "crs:MaskGroupBasedCorrections")
+        .or_else(|| first_xml_element_content(xmp_content, "crs:PaintBasedCorrections"))
+    else {
         return masks;
     };
-    let Some(block_cap) = block_re.captures(xmp_content) else {
-        return masks;
-    };
-    let seq_body = block_cap.get(2).map(|m| m.as_str()).unwrap_or("");
-
-    // Split top-level rdf:li correction items — each starts with <rdf:li>
-    // Use a simple scan for <rdf:Description ...> that has Local* or CorrectionName / What=Correction
-    let desc_re = Regex::new(r#"(?s)<rdf:Description\b([^>]*?)/\s*>|<rdf:Description\b([^>]*)>(.*?)</rdf:Description>"#).ok();
-    let Some(desc_re) = desc_re else {
+    let Some(seq_body) = first_xml_element_content(block, "rdf:Seq") else {
         return masks;
     };
 
     // Walk all description tags; treat those with Local* or CorrectionMasks as mask containers
-    for cap in desc_re.captures_iter(seq_body) {
-        // Groups: 1=self-closing attrs, 2=open attrs, 3=inner
-        let attr_str = cap
-            .get(1)
-            .or_else(|| cap.get(2))
-            .map(|m| m.as_str())
-            .unwrap_or("");
-        let inner = cap.get(3).map(|m| m.as_str()).unwrap_or("");
-        let attrs = attrs_from_description_tag(attr_str);
+    for description in top_level_rdf_descriptions(seq_body) {
+        let inner = description.contents;
+        let attrs = attrs_from_description_tag(description.attributes);
 
         // Skip pure mask geometry descriptions at this level if nested under CorrectionMasks
         // Only process "Correction" level: has Local* keys or CorrectionName / What=Correction
@@ -293,20 +353,10 @@ pub fn parse_mask_group_based_corrections(xmp_content: &str) -> Vec<Value> {
 
         // Nested CorrectionMasks
         let mut sub_masks: Vec<Value> = Vec::new();
-        let mask_seq_re = Regex::new(
-            r"(?s)<crs:CorrectionMasks>\s*<rdf:Seq>(.*?)</rdf:Seq>\s*</crs:CorrectionMasks>",
-        )
-        .ok();
-        if let Some(mask_seq_re) = mask_seq_re {
-            if let Some(ms) = mask_seq_re.captures(inner) {
-                let mask_body = ms.get(1).map(|m| m.as_str()).unwrap_or("");
-                for mcap in desc_re.captures_iter(mask_body) {
-                    let mattr = mcap
-                        .get(1)
-                        .or_else(|| mcap.get(2))
-                        .map(|m| m.as_str())
-                        .unwrap_or("");
-                    let mattrs = attrs_from_description_tag(mattr);
+        if let Some(correction_masks) = first_xml_element_content(inner, "crs:CorrectionMasks") {
+            if let Some(mask_body) = first_xml_element_content(correction_masks, "rdf:Seq") {
+                for mask_description in top_level_rdf_descriptions(mask_body) {
+                    let mattrs = attrs_from_description_tag(mask_description.attributes);
                     let what = mattrs.get("What").cloned().unwrap_or_default();
                     let inverted = bool_attr(&mattrs, "MaskInverted");
                     let mask_name = mattrs
@@ -371,12 +421,43 @@ pub fn parse_mask_group_based_corrections(xmp_content: &str) -> Vec<Value> {
                         // Full brush dabs not reconstructed from XMP (binary mask data omitted)
                         ("brush", Value::Object(params))
                     } else if what.contains("RangeMask") || what.contains("Luminance") {
-                        let mut params = Map::new();
-                        params.insert(
-                            "rangeLow".to_string(),
-                            json!(f_attr(&mattrs, "LumRange").or_else(|| f_attr(&mattrs, "LuminanceRangeLow")).unwrap_or(0.0)),
-                        );
-                        ("luminance", Value::Object(params))
+                        let range_attrs = attrs_from_description_tag(mask_description.contents);
+                        let range_type = range_attrs.get("Type").and_then(|v| v.parse::<u8>().ok()).unwrap_or(0);
+                        if range_type == 2 || what.contains("Luminance") {
+                            let lum_range: Vec<f64> = range_attrs
+                                .get("LumRange")
+                                .map(|value| value.split_whitespace().filter_map(|v| v.parse::<f64>().ok()).collect())
+                                .unwrap_or_default();
+                            let low = f_attr(&range_attrs, "LumMin").or_else(|| lum_range.first().copied()).unwrap_or(0.0);
+                            let high = f_attr(&range_attrs, "LumMax").or_else(|| lum_range.get(1).copied()).unwrap_or(1.0);
+                            let smoothness = f_attr(&range_attrs, "LumFeather").unwrap_or(0.5);
+                            let mut params = Map::new();
+                            params.insert("rangeLow".to_string(), json!(low.clamp(0.0, 1.0) * 100.0));
+                            params.insert("rangeHigh".to_string(), json!(high.clamp(0.0, 1.0) * 100.0));
+                            params.insert("smoothness".to_string(), json!(smoothness.clamp(0.0, 1.0) * 100.0));
+                            ("luminance", Value::Object(params))
+                        } else {
+                            let refine = f_attr(&range_attrs, "ColorAmount").unwrap_or(0.5);
+                            let point_models = Regex::new(r"(?s)<crs:PointModels>\s*<rdf:Seq>(.*?)</rdf:Seq>\s*</crs:PointModels>")
+                                .ok()
+                                .and_then(|re| re.captures(mask_description.contents))
+                                .and_then(|cap| cap.get(1).map(|m| m.as_str().to_string()))
+                                .unwrap_or_default();
+                            let samples: Vec<Value> = Regex::new(r"<rdf:li>([^<]+)</rdf:li>")
+                                .ok()
+                                .map(|re| re.captures_iter(&point_models).filter_map(|cap| {
+                                    let values: Vec<f64> = cap[1].split_whitespace().filter_map(|v| v.parse().ok()).collect();
+                                    (values.len() >= 2).then(|| json!({"x": values[0], "y": values[1]}))
+                                }).collect())
+                                .unwrap_or_default();
+                            let mut params = Map::new();
+                            params.insert("refine".to_string(), json!(refine.clamp(0.0, 1.0) * 100.0));
+                            params.insert("samples".to_string(), json!(samples));
+                            params.insert("normalized".to_string(), json!(true));
+                            params.insert("targetX".to_string(), json!(-10000.0));
+                            params.insert("targetY".to_string(), json!(-10000.0));
+                            ("color", Value::Object(params))
+                        }
                     } else {
                         // Unknown mask type — still import tone as full-image mask
                         ("all", json!({}))
@@ -608,6 +689,20 @@ fn export_masks_to_xmp_lines(adj: &Map<String, Value>) -> Vec<String> {
                         r#"          <rdf:Description crs:What="Mask/Brush" crs:MaskActive="true" crs:MaskName="{}" crs:MaskInverted="{}" crs:MaskValue="1"/>"#,
                         sname,
                         if inverted { "True" } else { "False" }
+                    ));
+                }
+                "luminance" => {
+                    let p = params.cloned().unwrap_or_default();
+                    let low = (p.get("rangeLow").and_then(|v| v.as_f64()).unwrap_or(0.0) / 100.0).clamp(0.0, 1.0);
+                    let high = (p.get("rangeHigh").and_then(|v| v.as_f64()).unwrap_or(100.0) / 100.0).clamp(0.0, 1.0);
+                    let smoothness = (p.get("smoothness").and_then(|v| v.as_f64()).unwrap_or(50.0) / 100.0).clamp(0.0, 1.0);
+                    lines.push(format!(
+                        r#"          <rdf:Description crs:What="Mask/RangeMask" crs:MaskActive="true" crs:MaskName="{}" crs:MaskInverted="{}" crs:MaskValue="1"><crs:CorrectionRangeMask crs:Version="3" crs:Type="2" crs:LumMin="{}" crs:LumMax="{}" crs:LumFeather="{}"/></rdf:Description>"#,
+                        sname,
+                        if inverted { "True" } else { "False" },
+                        low,
+                        high,
+                        smoothness
                     ));
                 }
                 _ => {
@@ -2189,6 +2284,85 @@ mod tests {
         path.push("tests/fixtures/presets");
         path.push(name);
         fs::read_to_string(&path).unwrap_or_else(|e| panic!("missing fixture {:?}: {}", path, e))
+    }
+
+    fn range_mask_xmp(range_type: u8, range_attributes: &str, point_model: &str) -> String {
+        let points = if point_model.is_empty() {
+            String::new()
+        } else {
+            format!("<crs:PointModels><rdf:Seq><rdf:li>{point_model}</rdf:li></rdf:Seq></crs:PointModels>")
+        };
+        format!(r#"<x:xmpmeta>
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+  <rdf:Description crs:HasSettings="True">
+   <crs:MaskGroupBasedCorrections><rdf:Seq><rdf:li>
+    <rdf:Description crs:What="Correction" crs:CorrectionName="Range test" crs:CorrectionAmount="1">
+     <crs:CorrectionMasks><rdf:Seq><rdf:li>
+      <rdf:Description crs:What="Mask/RangeMask" crs:MaskName="Range" crs:MaskActive="true">
+       <crs:CorrectionRangeMask crs:Version="+2" crs:Type="{range_type}" {range_attributes}>{points}</crs:CorrectionRangeMask>
+      </rdf:Description>
+     </rdf:li></rdf:Seq></crs:CorrectionMasks>
+    </rdf:Description>
+   </rdf:li></rdf:Seq></crs:MaskGroupBasedCorrections>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#)
+    }
+
+    #[test]
+    fn luminance_range_mask_imports_both_bounds_and_smoothness() {
+        let xmp = range_mask_xmp(2, "crs:LumMin=\"0.2\" crs:LumMax=\"0.8\" crs:LumFeather=\"0.35\"", "");
+        let preset = convert_xmp_to_preset(&xmp).expect("parse luminance range mask");
+        let masks = preset.adjustments["masks"].as_array().unwrap();
+        let sub = &masks[0]["subMasks"][0];
+        assert_eq!(sub["type"].as_str(), Some("luminance"));
+        assert_eq!(sub["parameters"]["rangeLow"].as_f64(), Some(20.0));
+        assert_eq!(sub["parameters"]["rangeHigh"].as_f64(), Some(80.0));
+        assert_eq!(sub["parameters"]["smoothness"].as_f64(), Some(35.0));
+    }
+
+    #[test]
+    fn color_range_mask_imports_as_color_not_luminance_or_full_image() {
+        let xmp = range_mask_xmp(1, "crs:ColorAmount=\"0.5\"", "0.25 0.75 0.4 0.5 0.9 0");
+        let preset = convert_xmp_to_preset(&xmp).expect("parse color range mask");
+        let masks = preset.adjustments["masks"].as_array().unwrap();
+        let sub = &masks[0]["subMasks"][0];
+        assert_eq!(sub["type"].as_str(), Some("color"));
+        assert_eq!(sub["parameters"]["refine"].as_f64(), Some(50.0));
+        assert_eq!(sub["parameters"]["samples"][0]["x"].as_f64(), Some(0.25));
+        assert_eq!(sub["parameters"]["samples"][0]["y"].as_f64(), Some(0.75));
+        assert_eq!(sub["parameters"]["normalized"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn luminance_range_mask_exports_and_reimports_all_three_controls() {
+        let adjustments = serde_json::json!({
+            "masks": [{
+                "name": "Highlights",
+                "opacity": 100,
+                "subMasks": [{
+                    "id": "luma-1",
+                    "type": "luminance",
+                    "name": "Luminance Range",
+                    "visible": true,
+                    "invert": false,
+                    "opacity": 100,
+                    "mode": "additive",
+                    "parameters": {"rangeLow": 30.0, "rangeHigh": 80.0, "smoothness": 40.0}
+                }]
+            }]
+        });
+        let xmp = convert_adjustments_to_xmp("Luminance Range", &adjustments);
+        assert!(xmp.contains("What=\"Mask/RangeMask\""));
+        assert!(xmp.contains("LumMin=\"0.3\""));
+        assert!(xmp.contains("LumMax=\"0.8\""));
+        assert!(xmp.contains("LumFeather=\"0.4\""));
+
+        let roundtrip = convert_xmp_to_preset(&xmp).expect("reimport luma range");
+        let params = &roundtrip.adjustments["masks"][0]["subMasks"][0]["parameters"];
+        assert_eq!(params["rangeLow"].as_f64(), Some(30.0));
+        assert_eq!(params["rangeHigh"].as_f64(), Some(80.0));
+        assert_eq!(params["smoothness"].as_f64(), Some(40.0));
     }
 
     #[test]

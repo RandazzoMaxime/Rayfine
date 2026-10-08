@@ -56,7 +56,7 @@ use std::hash::{Hash, Hasher};
 use std::io::Cursor;
 use std::io::Write;
 use std::panic;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
@@ -236,27 +236,6 @@ fn get_image_dimensions(path: String) -> Result<ImageDimensions, String> {
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-fn cancel_thumbnail_generation(
-    state: tauri::State<AppState>,
-    app_handle: tauri::AppHandle,
-) -> Result<(), String> {
-    state
-        .thumbnail_cancellation_token
-        .store(true, Ordering::SeqCst);
-
-    let mut tracker = state.thumbnail_progress.lock().unwrap();
-    tracker.total = 0;
-    tracker.completed = 0;
-    drop(tracker);
-
-    let _ = app_handle.emit(
-        "thumbnail-progress",
-        serde_json::json!({ "current": 0, "total": 0 }),
-    );
-    Ok(())
-}
-
 pub fn get_cached_full_warped_image(
     state: &tauri::State<AppState>,
     js_adjustments: &serde_json::Value,
@@ -306,6 +285,7 @@ async fn update_wgpu_transform(
     tokio::task::spawn_blocking(move || {
         let mut display_lock = context.display.lock().unwrap();
         if let Some(display) = display_lock.as_mut() {
+            display.hold_present = false;
             if dual {
                 display.fit_contain(
                     &context.device,
@@ -2256,6 +2236,13 @@ pub fn run() {
         }
     }
 
+    // In-app updates from the public GitHub releases; installs only builds signed with the
+    // release key (pubkey in tauri.conf.json).
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    }
+
     builder
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_fs::init())
@@ -2599,7 +2586,6 @@ pub fn run() {
             lut_cache: Mutex::new(HashMap::new()),
             initial_file_path: Mutex::new(None),
             pending_edit_session: Mutex::new(None),
-            thumbnail_cancellation_token: Arc::new(AtomicBool::new(false)),
             thumbnail_progress: Mutex::new(ThumbnailProgressTracker { total: 0, completed: 0 }),
             preview_worker_tx: Mutex::new(None),
             analytics_worker_tx: Mutex::new(None),
@@ -2647,7 +2633,6 @@ pub fn run() {
             dual_display::list_monitors,
             dual_display::get_dual_display_state,
             dual_display::set_dual_display,
-            cancel_thumbnail_generation,
             update_wgpu_transform,
             android_integration::resolve_android_content_uri_name,
             cache_utils::clear_session_caches,

@@ -1,8 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { Invokes } from '../components/ui/AppProperties';
 import { useLibraryStore } from '../store/useLibraryStore';
-import { usePresetStore } from '../store/usePresetStore';
-import { findPreset } from './presetTree';
 import { loadMetadataPresets, nonemptyFields } from './metadataPresets';
 
 function expandKeywords(raw: string): string[] {
@@ -24,30 +22,12 @@ function expandKeywords(raw: string): string[] {
   return Array.from(expanded);
 }
 
-/** Apply develop preset, metadata preset and keywords chosen in Library "Apply during import". */
+/** Apply the metadata preset and keywords chosen in Library "Apply during import". */
 export async function applyImportSidecars(paths: string[]) {
   if (!paths.length) return;
   const lib = useLibraryStore.getState();
-  const developId = lib.importApplyDevelopPresetId;
   const metadataId = lib.importApplyMetadataPresetId;
   const keywordRaw = lib.importApplyKeywords || '';
-
-  if (developId) {
-    let tree = usePresetStore.getState().presets;
-    if (!tree.length) {
-      try {
-        await usePresetStore.getState().load();
-        tree = usePresetStore.getState().presets;
-      } catch {
-        /* ignore */
-      }
-    }
-    const found = findPreset(tree, developId);
-    const adj = found?.preset?.adjustments;
-    if (adj && Object.keys(adj).length > 0) {
-      await invoke(Invokes.ApplyAdjustmentsToPaths, { paths, adjustments: adj });
-    }
-  }
 
   if (metadataId) {
     const preset = loadMetadataPresets().find((p) => p.id === metadataId);

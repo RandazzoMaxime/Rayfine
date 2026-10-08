@@ -423,7 +423,8 @@ export default function LibraryGrid(props: any) {
             requestQueueRef.current.clear();
           }
           requestTimeoutRef.current = null;
-        }, 50);
+          // 0: rows mounted in the same commit still batch; useThumbnails debounces scrolls.
+        }, 0);
       }
     },
     [onRequestThumbnails],

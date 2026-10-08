@@ -53,6 +53,7 @@ export function useImageProcessing(
   const pendingApplyRef = useRef<{ adjustments: Adjustments; targetRes?: number } | null>(null);
   const currentOriginalResRef = useRef<number>(0);
   const dragIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const editedPathRef = useRef<string | null>(null);
   const activeWaveformChannelRef = useRef(activeWaveformChannel);
   activeWaveformChannelRef.current = activeWaveformChannel;
 
@@ -504,7 +505,15 @@ export function useImageProcessing(
       dragIdleTimer.current = setTimeout(() => {
         if (previewOverride) return;
 
-        debouncedSave(selectedImage.path, adjustments);
+        // Re-saving the opened state would rewrite the sidecar and regenerate the thumbnail
+        // on the GPU (evicting the editor texture) on every visit. Once the photo has been
+        // edited, always save (an undo back to the opened state must persist too).
+        const opened = useEditorStore.getState().loadedAdjustments;
+        const isOpenedState = opened?.path === selectedImage.path && opened.adjustments === adjustments;
+        if (editedPathRef.current === selectedImage.path || !isOpenedState) {
+          editedPathRef.current = selectedImage.path;
+          debouncedSave(selectedImage.path, adjustments);
+        }
 
         const otherPaths = multiSelectedPaths.filter((p) => p !== selectedImage.path);
         if (appSettings?.copyPasteSettings?.autoSync && otherPaths.length > 0) {

@@ -61,6 +61,10 @@ pub struct WgpuDisplay {
     pub dummy_detail_view: wgpu::TextureView,
     /// Hash of the adjustments the detail patch was rendered with.
     pub detail_hash: u64,
+    /// Set when a new photo starts loading: renders update the texture but are not
+    /// presented, so the previous photo stays on screen. The next transform update
+    /// (the new photo's rect) clears it and presents, avoiding a blank or stretched frame.
+    pub hold_present: bool,
 }
 
 impl WgpuDisplay {
@@ -100,6 +104,9 @@ impl WgpuDisplay {
 
 impl WgpuDisplay {
     pub fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        if self.hold_present {
+            return;
+        }
         if let Some(bind_group) = &self.current_bind_group {
             let output = match self.surface.get_current_texture() {
                 wgpu::CurrentSurfaceTexture::Success(tex)
@@ -532,6 +539,7 @@ fn create_wgpu_display(
         detail_view: dummy_detail_view.clone(),
         dummy_detail_view,
         detail_hash: 0,
+        hold_present: false,
     })
 }
 
@@ -680,25 +688,137 @@ fn read_texture_data_roi(
     }
 }
 
+/// The f32 samples of `img` and their channel count (3 or 4), converting only when the
+/// image is not already a float buffer.
+fn f32_samples(img: &DynamicImage) -> (std::borrow::Cow<'_, [f32]>, usize) {
+    if let Some(rgb) = img.as_rgb32f() {
+        (std::borrow::Cow::Borrowed(rgb.as_raw().as_slice()), 3)
+    } else if let Some(rgba) = img.as_rgba32f() {
+        (std::borrow::Cow::Borrowed(rgba.as_raw().as_slice()), 4)
+    } else {
+        (std::borrow::Cow::Owned(img.to_rgba32f().into_raw()), 4)
+    }
+}
+
+/// One row of RGB or RGBA f32 into RGBA f16 (`dst.len()` = pixels * 4). Converted in bulk
+/// (F16C when the CPU has it, same round-to-nearest-even as `f16::from_f32`); RGB is
+/// then spread to RGBA in place, back to front so no source is overwritten before use.
+fn rgba_f16_row(src: &[f32], channels: usize, dst: &mut [f16]) {
+    use half::slice::HalfFloatSliceExt;
+    dst[..src.len()].convert_from_f32_slice(src);
+    if channels == 3 {
+        for i in (0..src.len() / 3).rev() {
+            dst[4 * i + 3] = f16::ONE;
+            dst[4 * i + 2] = dst[3 * i + 2];
+            dst[4 * i + 1] = dst[3 * i + 1];
+            dst[4 * i] = dst[3 * i];
+        }
+    }
+}
+
 pub fn to_rgba_f16(img: &DynamicImage) -> Vec<f16> {
     use rayon::prelude::*;
-    // Parallel conversion straight from the float buffers (no intermediate RGBA32F copy).
-    if let Some(rgb) = img.as_rgb32f() {
-        let src = rgb.as_raw();
-        let mut out = vec![f16::ZERO; src.len() / 3 * 4];
-        out.par_chunks_mut(4).zip(src.par_chunks(3)).for_each(|(d, s)| {
-            d[0] = f16::from_f32(s[0]);
-            d[1] = f16::from_f32(s[1]);
-            d[2] = f16::from_f32(s[2]);
-            d[3] = f16::ONE;
-        });
+    let w = img.width() as usize;
+    let mut out = vec![f16::ZERO; w * 4 * img.height() as usize];
+    if w == 0 {
         return out;
     }
-    if let Some(rgba) = img.as_rgba32f() {
-        return rgba.as_raw().par_iter().map(|&v| f16::from_f32(v)).collect();
+    let (src, channels) = f32_samples(img);
+    out.par_chunks_mut(w * 4)
+        .zip(src.par_chunks(w * channels))
+        .for_each(|(d, s)| rgba_f16_row(s, channels, d));
+    out
+}
+
+/// Uploads `image` as an Rgba16Float texture, converting straight into the mapped upload
+/// buffer: no intermediate f16 copy of the frame and no second memcpy into wgpu's own
+/// staging buffer.
+pub(crate) fn upload_rgba_f16_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    image: &DynamicImage,
+) -> Result<wgpu::Texture, String> {
+    let (width, height) = image.dimensions();
+    let texture_size = wgpu::Extent3d {
+        width,
+        height,
+        depth_or_array_layers: 1,
+    };
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Input Texture"),
+        size: texture_size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba16Float,
+        // COPY_SRC only so the round-trip test can read the upload back.
+        usage: wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_DST
+            | if cfg!(test) { wgpu::TextureUsages::COPY_SRC } else { wgpu::TextureUsages::empty() },
+        view_formats: &[],
+    });
+    let bytes_per_row = (width * 8).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+    let staging = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Input Texture Upload"),
+        size: bytes_per_row as u64 * height as u64,
+        usage: wgpu::BufferUsages::COPY_SRC,
+        mapped_at_creation: true,
+    });
+    {
+        let mut mapped = staging
+            .slice(..)
+            .get_mapped_range_mut()
+            .map_err(|e| format!("Failed to map input upload buffer: {e:?}"))?;
+        write_rgba_f16_upload(image, mapped.slice(..), bytes_per_row as usize);
     }
-    let rgba_f32 = img.to_rgba32f();
-    rgba_f32.into_raw().into_iter().map(f16::from_f32).collect()
+    staging.unmap();
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("Input Texture Upload"),
+    });
+    encoder.copy_buffer_to_texture(
+        wgpu::TexelCopyBufferInfo {
+            buffer: &staging,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(bytes_per_row),
+                rows_per_image: Some(height),
+            },
+        },
+        texture.as_image_copy(),
+        texture_size,
+    );
+    queue.submit(Some(encoder.finish()));
+    Ok(texture)
+}
+
+/// Fills a mapped upload buffer (rows `bytes_per_row` apart) with `img` as RGBA f16.
+/// Each row is converted in cache, then written once to the (write-only) mapping.
+fn write_rgba_f16_upload(img: &DynamicImage, mut mapped: wgpu::WriteOnly<'_, [u8]>, bytes_per_row: usize) {
+    use rayon::prelude::*;
+    let (w, h) = (img.width() as usize, img.height() as usize);
+    if w == 0 {
+        return;
+    }
+    assert!(w * 8 <= bytes_per_row && mapped.len() >= bytes_per_row * h);
+    let (src, channels) = f32_samples(img);
+    // `WriteOnly<[u8]>` is not `Send`, so rows are written through the raw mapping.
+    let base = mapped.as_raw_ptr().cast::<u8>().as_ptr() as usize;
+    src.par_chunks(w * channels).enumerate().for_each_init(
+        || vec![f16::ZERO; w * 4],
+        |converted, (y, s)| {
+            rgba_f16_row(s, channels, converted);
+            // SAFETY: the buffer stays mapped (borrowed by `mapped`) for this whole call;
+            // row `y` covers [y * bytes_per_row, y * bytes_per_row + w * 8), inside the
+            // mapping (asserted above) and disjoint from every other row; only written.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    converted.as_ptr().cast::<u8>(),
+                    (base + y * bytes_per_row) as *mut u8,
+                    w * 8,
+                );
+            }
+        },
+    );
 }
 
 #[repr(C)]
@@ -1426,7 +1546,9 @@ impl GpuProcessor {
             let (mw,mh)=((width as f32*ratio).round().max(1.0) as u32,(height as f32*ratio).round().max(1.0) as u32);
             let proxy=if (mw,mh)==(width,height) {image.clone()} else {image.resize_exact(mw,mh,image::imageops::FilterType::Triangle)};
             let rgb=proxy.to_rgb32f();
-            let logs:Vec<f32>=rgb.pixels().map(|p| crate::raw_tone::basic_log_luminance(p.0) as f32).collect();
+            // Per pixel in parallel (~12 f64 transcendentals each; ~300 ms serial).
+            use rayon::prelude::*;
+            let logs:Vec<f32>=rgb.as_raw().par_chunks_exact(3).map(|p| crate::raw_tone::basic_log_luminance([p[0],p[1],p[2]]) as f32).collect();
             let maps=crate::tonemap::prepare(&logs,mw,mh);
             let a=&maps.source; let b=&maps.filtered_stats;
             let shift=a.anchor-b.anchor;
@@ -2127,8 +2249,10 @@ fn process_and_get_dynamic_image_inner(
 
     let mut processor_lock = state.gpu_processor.lock().unwrap();
     let mut needs_new_processor = false;
-    let new_width = (width + 255) & !255;
-    let new_height = (height + 255) & !255;
+    // Square: switching between landscape and portrait photos must not rebuild the
+    // processor (GPU wait + texture reallocation + pipeline creation, ~100-250 ms).
+    let side = (width.max(height) + 255) & !255;
+    let (new_width, new_height) = (side, side);
 
     if let Some(p) = processor_lock.as_ref() {
         if p.width < width || p.height < height || (output_to_display && !p.processor.has_display) {
@@ -2187,27 +2311,7 @@ fn process_and_get_dynamic_image_inner(
             timeout: Some(std::time::Duration::from_millis(500)),
         });
 
-        let img_rgba_f16 = to_rgba_f16(base_image);
-        let texture_size = wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        };
-        let texture = device.create_texture_with_data(
-            queue,
-            &wgpu::TextureDescriptor {
-                label: Some("Input Texture"),
-                size: texture_size,
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba16Float,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            },
-            TextureDataOrder::MipMajor,
-            bytemuck::cast_slice(&img_rgba_f16),
-        );
+        let texture = upload_rgba_f16_texture(device, queue, base_image)?;
         let texture_view = texture.create_view(&Default::default());
 
         *cache_lock = Some(GpuImageCache {
@@ -2475,4 +2579,100 @@ fn process_and_get_dynamic_image_inner(
     let img_buf = ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(out_w, out_h, processed_pixels)
         .ok_or("Failed to create image buffer from GPU data")?;
     Ok(DynamicImage::ImageRgba8(img_buf))
+}
+
+#[cfg(test)]
+mod to_rgba_f16_tests {
+    use super::to_rgba_f16;
+    use half::f16;
+    use image::{DynamicImage, ImageBuffer, Rgb, Rgba};
+
+    /// Edge values plus a deterministic sweep: subnormals, overflow, NaN, infinities, ties.
+    fn samples(n: usize) -> Vec<f32> {
+        let mut v = vec![
+            0.0, -0.0, 1.0, -1.0, 65504.0, 65520.0, 1e9, -1e9, 6.0e-8, 5.96e-8, 3.0e-5,
+            f32::INFINITY, f32::NEG_INFINITY, f32::NAN, f32::MIN_POSITIVE, 1.0 + 1.0 / 2048.0,
+        ];
+        let mut x: u32 = 0x1234_5678;
+        while v.len() < n {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            v.push(f32::from_bits(x));
+        }
+        v
+    }
+
+    fn reference(v: &[f32]) -> Vec<u16> {
+        v.iter().map(|&x| f16::from_f32(x).to_bits()).collect()
+    }
+
+    #[test]
+    fn rgb_matches_scalar_conversion_bit_for_bit() {
+        let (w, h) = (37u32, 11u32);
+        let src = samples((w * h * 3) as usize);
+        let img = DynamicImage::ImageRgb32F(ImageBuffer::<Rgb<f32>, _>::from_raw(w, h, src.clone()).unwrap());
+        let out: Vec<u16> = to_rgba_f16(&img).iter().map(|v| v.to_bits()).collect();
+        let expected = reference(&src);
+        for (px, (d, s)) in out.chunks_exact(4).zip(expected.chunks_exact(3)).enumerate() {
+            assert_eq!(&d[..3], s, "pixel {px}");
+            assert_eq!(d[3], f16::ONE.to_bits(), "alpha {px}");
+        }
+    }
+
+    /// GPU round trip: what lands in the texture is exactly the CPU reference conversion.
+    /// Odd width so the 256-byte row padding is exercised. Needs a GPU (fails explicitly).
+    #[test]
+    fn upload_lands_in_texture_bit_for_bit() {
+        let instance = wgpu::Instance::default();
+        let adapter = pollster::block_on(instance.request_adapter(&Default::default()))
+            .expect("GPU adapter required for this test");
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&Default::default())).expect("GPU device");
+        let (w, h) = (37u32, 11u32);
+        let src = samples((w * h * 3) as usize);
+        let img = DynamicImage::ImageRgb32F(ImageBuffer::<Rgb<f32>, _>::from_raw(w, h, src).unwrap());
+
+        let texture = super::upload_rgba_f16_texture(&device, &queue, &img).unwrap();
+        let bytes_per_row = (w * 8).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: (bytes_per_row * h) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        encoder.copy_texture_to_buffer(
+            texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(h),
+                },
+            },
+            texture.size(),
+        );
+        queue.submit(Some(encoder.finish()));
+        readback.slice(..).map_async(wgpu::MapMode::Read, |r| r.expect("map readback"));
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+
+        let mapped = readback.slice(..).get_mapped_range().expect("mapped readback");
+        let expected: Vec<u16> = to_rgba_f16(&img).iter().map(|v| v.to_bits()).collect();
+        for y in 0..h as usize {
+            let row = &mapped[y * bytes_per_row as usize..][..w as usize * 8];
+            let got: &[u16] = bytemuck::cast_slice(row);
+            assert_eq!(got, &expected[y * w as usize * 4..][..w as usize * 4], "row {y}");
+        }
+    }
+
+    #[test]
+    fn rgba_matches_scalar_conversion_bit_for_bit() {
+        let (w, h) = (300u32, 230u32); // spans several bulk chunks
+        let src = samples((w * h * 4) as usize);
+        let img = DynamicImage::ImageRgba32F(ImageBuffer::<Rgba<f32>, _>::from_raw(w, h, src.clone()).unwrap());
+        let out: Vec<u16> = to_rgba_f16(&img).iter().map(|v| v.to_bits()).collect();
+        assert_eq!(out, reference(&src));
+    }
 }

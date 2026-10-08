@@ -329,10 +329,10 @@ export default function DevelopLeftPanel({ isInstantTransition, width }: Develop
   const [openHistory, setOpenHistory] = useState(false);
   const [openCollections, setOpenCollections] = useState(true);
 
-  const { selectedImage, adjustments, history, historyIndex, goToHistoryIndex, resetHistory, zoom } = useEditorStore(
+  // No `adjustments` subscription: it changes on every slider frame; read it on demand.
+  const { selectedImage, history, historyIndex, goToHistoryIndex, resetHistory, zoom } = useEditorStore(
     useShallow((s) => ({
       selectedImage: s.selectedImage,
-      adjustments: s.adjustments,
       history: s.history,
       historyIndex: s.historyIndex,
       goToHistoryIndex: s.goToHistoryIndex,
@@ -341,9 +341,11 @@ export default function DevelopLeftPanel({ isInstantTransition, width }: Develop
     })),
   );
 
+  const historyLabels = useMemo(() => history.map((_: any, idx: number) => historyLabel(history, idx, t)), [history, t]);
+
   const handleClearHistory = () => {
     // LR-style Clear: keep current adjustments as the only history step
-    resetHistory({ ...adjustments });
+    resetHistory({ ...useEditorStore.getState().adjustments });
     toast.info(t('ui.developLeft.historyCleared' as any, { defaultValue: 'History cleared' }));
   };
 
@@ -351,7 +353,7 @@ export default function DevelopLeftPanel({ isInstantTransition, width }: Develop
     const onClear = () => handleClearHistory();
     window.addEventListener('rustroom:clear-history', onClear as EventListener);
     return () => window.removeEventListener('rustroom:clear-history', onClear as EventListener);
-  }, [adjustments]);
+  }, []);
 
   const { setUI } = useUIStore(
     useShallow((s) => ({
@@ -620,7 +622,7 @@ export default function DevelopLeftPanel({ isInstantTransition, width }: Develop
           {/* Newest first (classic History stack) */}
           {[...history.keys()].reverse().map((idx) => {
             const isCurrent = idx === historyIndex;
-            const label = historyLabel(history, idx, t);
+            const label = historyLabels[idx];
             return (
               <li key={idx}>
                 <button

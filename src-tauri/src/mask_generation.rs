@@ -189,11 +189,34 @@ struct FlowMaskParameters {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
+struct ParametricMaskSample {
+    x: f64,
+    y: f64,
+}
+
+fn default_no_sample() -> f64 {
+    -10_000.0
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 struct ParametricMaskParameters {
+    #[serde(default = "default_no_sample")]
     target_x: f64,
+    #[serde(default = "default_no_sample")]
     target_y: f64,
+    #[serde(default)]
+    samples: Vec<ParametricMaskSample>,
     #[serde(default = "default_tolerance")]
     tolerance: f32,
+    #[serde(default)]
+    refine: Option<f32>,
+    #[serde(default)]
+    range_low: Option<f32>,
+    #[serde(default)]
+    range_high: Option<f32>,
+    #[serde(default)]
+    smoothness: Option<f32>,
     #[serde(default)]
     grow: f32,
     #[serde(default)]
@@ -215,9 +238,14 @@ fn default_tolerance() -> f32 {
 impl Default for ParametricMaskParameters {
     fn default() -> Self {
         Self {
-            target_x: 0.0,
-            target_y: 0.0,
+            target_x: default_no_sample(),
+            target_y: default_no_sample(),
+            samples: Vec::new(),
             tolerance: default_tolerance(),
+            refine: None,
+            range_low: None,
+            range_high: None,
+            smoothness: None,
             grow: 0.0,
             feather: 35.0,
             rotation: 0.0,
@@ -1049,16 +1077,29 @@ fn generate_color_bitmap(
     let warped = warped_image?;
     let (full_w, full_h) = warped.dimensions();
 
-    let target_x = params.target_x.round() as i32;
-    let target_y = params.target_y.round() as i32;
-    if target_x < 0 || target_y < 0 || target_x >= full_w as i32 || target_y >= full_h as i32 {
+    let mut references: Vec<[f32; 3]> = params
+        .samples
+        .iter()
+        .filter_map(|sample| {
+            let x = sample.x.round() as i32;
+            let y = sample.y.round() as i32;
+            (x >= 0 && y >= 0 && x < full_w as i32 && y < full_h as i32)
+                .then(|| warped.get_pixel(x as u32, y as u32))
+                .map(|p| [p[0] as f32, p[1] as f32, p[2] as f32])
+        })
+        .collect();
+    // Existing saved masks use the original single-point fields.
+    if references.is_empty() {
+        let x = params.target_x.round() as i32;
+        let y = params.target_y.round() as i32;
+        if x >= 0 && y >= 0 && x < full_w as i32 && y < full_h as i32 {
+            let p = warped.get_pixel(x as u32, y as u32);
+            references.push([p[0] as f32, p[1] as f32, p[2] as f32]);
+        }
+    }
+    if references.is_empty() {
         return None;
     }
-
-    let ref_pixel = warped.get_pixel(target_x as u32, target_y as u32);
-    let ref_r = ref_pixel[0] as f32;
-    let ref_g = ref_pixel[1] as f32;
-    let ref_b = ref_pixel[2] as f32;
 
     let mut mask = GrayImage::new(width, height);
 
@@ -1077,7 +1118,8 @@ fn generate_color_bitmap(
     let center_x = scaled_coarse_rotated_w / 2.0;
     let center_y = scaled_coarse_rotated_h / 2.0;
 
-    let tolerance_sq = (params.tolerance * 2.55).max(1.0).powi(2) * 3.0;
+    let refine = params.refine.unwrap_or(params.tolerance).clamp(0.0, 100.0);
+    let tolerance_sq = (refine * 2.55).max(1.0).powi(2) * 3.0;
     let inv_scale = 1.0 / scale;
 
     for y_out in 0..height {
@@ -1121,14 +1163,17 @@ fn generate_color_bitmap(
 
                 if x_src < full_w && y_src < full_h {
                     let pixel = warped.get_pixel(x_src, y_src);
-                    let dist_sq = (pixel[0] as f32 - ref_r).powi(2)
-                        + (pixel[1] as f32 - ref_g).powi(2)
-                        + (pixel[2] as f32 - ref_b).powi(2);
-
-                    if dist_sq <= tolerance_sq {
-                        let intensity = 1.0 - (dist_sq.sqrt() / tolerance_sq.sqrt());
-                        mask.put_pixel(x_out, y_out, Luma([(intensity * 255.0) as u8]));
-                    }
+                    let intensity = references.iter().fold(0.0f32, |best, reference| {
+                        let dist_sq = (pixel[0] as f32 - reference[0]).powi(2)
+                            + (pixel[1] as f32 - reference[1]).powi(2)
+                            + (pixel[2] as f32 - reference[2]).powi(2);
+                        if dist_sq <= tolerance_sq {
+                            best.max(1.0 - (dist_sq.sqrt() / tolerance_sq.sqrt()))
+                        } else {
+                            best
+                        }
+                    });
+                    mask.put_pixel(x_out, y_out, Luma([(intensity * 255.0) as u8]));
                 }
             }
         }
@@ -1150,15 +1195,24 @@ fn generate_luminance_bitmap(
     let warped = warped_image?;
     let (full_w, full_h) = warped.dimensions();
 
-    let target_x = params.target_x.round() as i32;
-    let target_y = params.target_y.round() as i32;
-    if target_x < 0 || target_y < 0 || target_x >= full_w as i32 || target_y >= full_h as i32 {
-        return None;
-    }
-
-    let ref_pixel = warped.get_pixel(target_x as u32, target_y as u32);
-    let ref_luma =
-        0.299 * ref_pixel[0] as f32 + 0.587 * ref_pixel[1] as f32 + 0.114 * ref_pixel[2] as f32;
+    let has_manual_range = params.range_low.is_some() || params.range_high.is_some();
+    let (range_low, range_high, smoothness, legacy_sample_luma) = if has_manual_range {
+        (
+            params.range_low.unwrap_or(0.0).clamp(0.0, 100.0) / 100.0,
+            params.range_high.unwrap_or(100.0).clamp(0.0, 100.0) / 100.0,
+            params.smoothness.unwrap_or(50.0).clamp(0.0, 100.0),
+            None,
+        )
+    } else {
+        let x = params.target_x.round() as i32;
+        let y = params.target_y.round() as i32;
+        if x < 0 || y < 0 || x >= full_w as i32 || y >= full_h as i32 {
+            return None;
+        }
+        let p = warped.get_pixel(x as u32, y as u32);
+        let luma = 0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32;
+        (0.0, 1.0, 0.0, Some(luma))
+    };
 
     let mut mask = GrayImage::new(width, height);
 
@@ -1177,7 +1231,7 @@ fn generate_luminance_bitmap(
     let center_x = scaled_coarse_rotated_w / 2.0;
     let center_y = scaled_coarse_rotated_h / 2.0;
 
-    let tolerance_val = (params.tolerance * 2.55).max(1.0);
+    let legacy_tolerance = (params.tolerance * 2.55).max(1.0);
     let inv_scale = 1.0 / scale;
 
     for y_out in 0..height {
@@ -1221,21 +1275,49 @@ fn generate_luminance_bitmap(
 
                 if x_src < full_w && y_src < full_h {
                     let pixel = warped.get_pixel(x_src, y_src);
-                    let luma =
-                        0.299 * pixel[0] as f32 + 0.587 * pixel[1] as f32 + 0.114 * pixel[2] as f32;
-                    let dist = (luma - ref_luma).abs();
-
-                    if dist <= tolerance_val {
-                        let intensity = 1.0 - (dist / tolerance_val);
-                        mask.put_pixel(x_out, y_out, Luma([(intensity * 255.0) as u8]));
-                    }
+                    let luma = 0.299 * pixel[0] as f32 + 0.587 * pixel[1] as f32 + 0.114 * pixel[2] as f32;
+                    let intensity = if let Some(ref_luma) = legacy_sample_luma {
+                        let dist = (luma - ref_luma).abs();
+                        if dist <= legacy_tolerance { 1.0 - dist / legacy_tolerance } else { 0.0 }
+                    } else {
+                        luminance_range_weight(luma / 255.0, range_low, range_high, smoothness)
+                    };
+                    mask.put_pixel(x_out, y_out, Luma([(intensity.clamp(0.0, 1.0) * 255.0) as u8]));
                 }
             }
         }
     }
 
-    apply_grow_and_feather(&mut mask, params.grow, params.feather, width, height);
+    if legacy_sample_luma.is_some() {
+        apply_grow_and_feather(&mut mask, params.grow, params.feather, width, height);
+    }
     Some(mask)
+}
+
+fn luminance_range_weight(luma: f32, low: f32, high: f32, smoothness: f32) -> f32 {
+    let low = low.clamp(0.0, 1.0);
+    let high = high.clamp(0.0, 1.0);
+    if high <= low || !luma.is_finite() { return 0.0; }
+    if low <= 0.0 && high >= 1.0 { return 1.0; }
+
+    let softness = (smoothness.clamp(0.0, 100.0) / 100.0) * ((high - low) * 0.25).min(0.1);
+    let low_weight = if low <= 0.0 { 1.0 } else if softness <= 1.0e-6 {
+        if luma >= low { 1.0 } else { 0.0 }
+    } else {
+        smoothstep(low - softness, low + softness, luma)
+    };
+    let high_weight = if high >= 1.0 { 1.0 } else if softness <= 1.0e-6 {
+        if luma <= high { 1.0 } else { 0.0 }
+    } else {
+        1.0 - smoothstep(high - softness, high + softness, luma)
+    };
+    low_weight * high_weight
+}
+
+fn smoothstep(edge0: f32, edge1: f32, value: f32) -> f32 {
+    if edge1 <= edge0 { return if value >= edge1 { 1.0 } else { 0.0 }; }
+    let t = ((value - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 fn generate_all_bitmap(width: u32, height: u32) -> GrayImage {
@@ -1387,8 +1469,11 @@ pub fn generate_mask_bitmap(
     Some(final_mask)
 }
 
+/// The live mask overlay as raw bytes: `width` and `height` (u32 LE) then one intensity byte
+/// per pixel (empty when nothing to show). The frontend tints it into a canvas: no PNG
+/// encode, base64 or image decode per update. Async so it never runs on the main thread.
 #[tauri::command]
-pub fn generate_mask_overlay(
+pub async fn generate_mask_overlay(
     mut mask_def: serde_json::Value,
     width: u32,
     height: u32,
@@ -1396,7 +1481,7 @@ pub fn generate_mask_overlay(
     crop_offset: (f32, f32),
     mut js_adjustments: Option<serde_json::Value>,
     state: tauri::State<'_, AppState>,
-) -> Result<String, String> {
+) -> Result<tauri::ipc::Response, String> {
     if let Some(ref mut adj) = js_adjustments {
         crate::adjustment_utils::hydrate_adjustments(&state, adj);
     }
@@ -1423,24 +1508,14 @@ pub fn generate_mask_overlay(
         scaled_crop_offset,
         warped_image.as_deref(),
     ) {
-        let mut rgba_mask = RgbaImage::new(width, height);
-        for (x, y, pixel) in gray_mask.enumerate_pixels() {
-            let intensity = pixel[0];
-            let alpha = (intensity as f32 * 0.5) as u8;
-            rgba_mask.put_pixel(x, y, Rgba([255, 0, 0, alpha]));
-        }
-
-        let mut buf = Cursor::new(Vec::new());
-        rgba_mask
-            .write_to(&mut buf, ImageFormat::Png)
-            .map_err(|e| e.to_string())?;
-
-        let base64_str = general_purpose::STANDARD.encode(buf.get_ref());
-        let data_url = format!("data:image/png;base64,{}", base64_str);
-
-        Ok(data_url)
+        let (w, h) = gray_mask.dimensions();
+        let mut bytes = Vec::with_capacity(8 + gray_mask.as_raw().len());
+        bytes.extend_from_slice(&w.to_le_bytes());
+        bytes.extend_from_slice(&h.to_le_bytes());
+        bytes.extend_from_slice(gray_mask.as_raw());
+        Ok(tauri::ipc::Response::new(bytes))
     } else {
-        Ok("".to_string())
+        Ok(tauri::ipc::Response::new(Vec::new()))
     }
 }
 
@@ -1508,4 +1583,71 @@ pub fn get_cached_or_generate_mask(
     }
 
     generated
+}
+
+#[cfg(test)]
+mod range_mask_tests {
+    use super::*;
+
+    fn test_image() -> DynamicImage {
+        DynamicImage::ImageRgb32F(image::Rgb32FImage::from_fn(3, 1, |x, _| match x {
+            0 => image::Rgb([1.0, 0.0, 0.0]),
+            1 => image::Rgb([0.0, 1.0, 0.0]),
+            _ => image::Rgb([0.0, 0.0, 1.0]),
+        }))
+    }
+
+    #[test]
+    fn luminance_range_uses_manual_endpoints_without_a_sampled_target() {
+        let image = DynamicImage::ImageRgb32F(image::Rgb32FImage::from_fn(5, 1, |x, _| {
+            let y = x as f32 / 4.0;
+            image::Rgb([y, y, y])
+        }));
+        let mask = generate_luminance_bitmap(
+            &serde_json::json!({
+                "rangeLow": 50.0,
+                "rangeHigh": 100.0,
+                "smoothness": 0.0
+            }),
+            5,
+            1,
+            1.0,
+            (0.0, 0.0),
+            Some(&image),
+        ).expect("a luminance interval should not require a sampled point");
+
+        assert_eq!(mask.pixels().map(|p| p[0]).collect::<Vec<_>>(), vec![0, 0, 255, 255, 255]);
+    }
+
+    #[test]
+    fn luminance_smoothness_softens_both_range_edges_without_lifting_the_center() {
+        let hard_low = luminance_range_weight(0.20, 0.25, 0.75, 0.0);
+        let soft_low = luminance_range_weight(0.20, 0.25, 0.75, 100.0);
+        let center = luminance_range_weight(0.50, 0.25, 0.75, 100.0);
+        let soft_high = luminance_range_weight(0.80, 0.25, 0.75, 100.0);
+        assert_eq!(hard_low, 0.0, "hard range should cut below its low endpoint");
+        assert!(soft_low > 0.0 && soft_low < 1.0, "smoothness should add a low-edge falloff");
+        assert!(center > soft_low && center > soft_high, "range center should remain the strongest");
+        assert!(soft_high > 0.0 && soft_high < 1.0, "smoothness should add a high-edge falloff");
+    }
+
+    #[test]
+    fn color_range_combines_multiple_sampled_colors() {
+        let image = test_image();
+        let mask = generate_color_bitmap(
+            &serde_json::json!({
+                "samples": [{"x": 0.0, "y": 0.0}, {"x": 2.0, "y": 0.0}],
+                "refine": 20.0
+            }),
+            3,
+            1,
+            1.0,
+            (0.0, 0.0),
+            Some(&image),
+        ).expect("sampled colors should generate a mask");
+
+        assert!(mask.get_pixel(0, 0)[0] > 0, "first sample should be selected");
+        assert_eq!(mask.get_pixel(1, 0)[0], 0, "unrelated green should stay out of the mask");
+        assert!(mask.get_pixel(2, 0)[0] > 0, "second sample should be added to the mask");
+    }
 }

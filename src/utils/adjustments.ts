@@ -674,6 +674,18 @@ const deepCloneParametric = (pCurve: any): ParametricCurve => ({
   blue: { ...DEFAULT_PARAMETRIC_CURVE_SETTINGS, ...(pCurve?.blue || {}) },
 });
 
+/** RAW camera-matching profile name ("Appareil — <make model>"), from the load EXIF. */
+export const detectedCameraProfileFor = (exif: Record<string, string> | null | undefined, isRaw: boolean) => {
+  const make = (exif?.Make || exif?.make || '').trim();
+  const model = (exif?.Model || exif?.model || '').trim();
+  const camera = [make, model].filter(Boolean).join(' ');
+  return isRaw && camera ? `Appareil — ${camera}` : undefined;
+};
+
+/** RAWs without a profile (or LR's "Adobe Standard") default to the camera-matching one. */
+export const needsDetectedCameraProfile = (cameraProfile: unknown) =>
+  !cameraProfile || String(cameraProfile).toLowerCase() === 'adobe standard';
+
 export const normalizeLoadedAdjustments = (loadedAdjustments: Adjustments): any => {
   if (!loadedAdjustments) {
     return INITIAL_ADJUSTMENTS;

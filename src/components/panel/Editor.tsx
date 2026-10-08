@@ -10,7 +10,7 @@ import { ImageDimensions, RenderSize, useImageRenderSize } from '../../hooks/use
 import { Adjustments, AiPatch, MaskContainer } from '../../utils/adjustments';
 import { calculateCenteredCrop, rotateCropCenter } from '../../utils/cropUtils';
 import EditorToolbar from './editor/EditorToolbar';
-import ImageCanvas from './editor/ImageCanvas';
+import ImageCanvas, { MaskOverlayBitmap } from './editor/ImageCanvas';
 import { Mask, SubMask } from './right/Masks';
 import { Panel, TransformState, Invokes } from '../ui/AppProperties';
 import Text from '../ui/Text';
@@ -116,6 +116,7 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
   const activeAiSubMaskId = useEditorStore((s) => s.activeAiSubMaskId);
   const isMaskControlHovered = useEditorStore((s) => s.isMaskControlHovered);
   const hasRenderedFirstFrame = useEditorStore((s) => s.hasRenderedFirstFrame);
+  const holdPreviousFrame = useEditorStore((s) => s.holdPreviousFrame);
 
   const setEditor = useEditorStore((s) => s.setEditor);
   const undo = useEditorStore((s) => s.undo);
@@ -151,7 +152,7 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
   const [isMaskTouchInteracting, setIsMaskTouchInteracting] = useState(false);
   const [isLoaderVisible, setIsLoaderVisible] = useState(false);
   const [showExifDateView, setShowExifDateView] = useState(false);
-  const [maskOverlayUrl, setMaskOverlayUrl] = useState<string | null>(null);
+  const [maskOverlay, setMaskOverlay] = useState<MaskOverlayBitmap | null>(null);
   const [transformState, setTransformState] = useState<TransformState>({ scale: 1, positionX: 0, positionY: 0 });
 
   const imageContainerRef = useRef<HTMLDivElement>(null);
@@ -227,6 +228,9 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
       }),
     [setEditor],
   );
+
+  // Stable so the memoized EditorToolbar skips the per-frame re-render while dragging.
+  const toggleExifDateView = useCallback(() => setShowExifDateView((prev) => !prev), []);
 
   const handleToggleFullScreen = useCallback(() => {
     const currentlyZoomed = targetZoom > 1.01;
@@ -982,7 +986,7 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
     }
   }, [isMasking, isAiEditing]);
 
-  const hasDisplayableImage = finalPreviewUrl || selectedImage?.thumbnailUrl;
+  const hasDisplayableImage = finalPreviewUrl || selectedImage?.thumbnailUrl || holdPreviousFrame;
   const showSpinner = isLoading && !hasDisplayableImage;
 
   useLayoutEffect(() => {
@@ -1058,7 +1062,7 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
     pendingOverlayRequestRef.current = null;
 
     if (!maskDef || !maskDef.visible || renderSize.width === 0) {
-      setMaskOverlayUrl(null);
+      setMaskOverlay(null);
       return;
     }
 
@@ -1089,7 +1093,7 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
       const strippedMaskDef = structuredClone(maskDef);
       stripSubMasks(strippedMaskDef.subMasks);
 
-      const dataUrl: string = await invoke(Invokes.GenerateMaskOverlay, {
+      const buffer: ArrayBuffer = await invoke(Invokes.GenerateMaskOverlay, {
         cropOffset,
         height: Math.round(renderSize.height),
         maskDef: strippedMaskDef,
@@ -1098,14 +1102,20 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
         jsAdjustments: strippedAdjustments,
       });
 
-      if (dataUrl) {
-        setMaskOverlayUrl(dataUrl);
+      // [width u32 LE][height u32 LE][one intensity byte per pixel], empty when nothing to show.
+      if (buffer.byteLength > 8) {
+        const header = new DataView(buffer, 0, 8);
+        setMaskOverlay({
+          width: header.getUint32(0, true),
+          height: header.getUint32(4, true),
+          data: new Uint8Array(buffer, 8),
+        });
       } else {
-        setMaskOverlayUrl(null);
+        setMaskOverlay(null);
       }
     } catch (e) {
       console.error('Failed to generate live mask overlay:', e);
-      setMaskOverlayUrl(null);
+      setMaskOverlay(null);
     } finally {
       isGeneratingOverlayRef.current = false;
       if (pendingOverlayRequestRef.current) {
@@ -1218,6 +1228,14 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
       const clipY = (currentRect.top - OVERLAP) * dpr;
       const clipW = Math.max((currentRect.width + OVERLAP * 2) * dpr, 1);
       const clipH = Math.max((currentRect.height + OVERLAP * 2) * dpr, 1);
+
+      if (useEditorStore.getState().holdPreviousFrame) {
+        // The previous photo stays on screen; force a fresh send once the new frame is in,
+        // since that send is what lets the backend present it.
+        lastWgpuTransformRef.current = '';
+        wgpuSyncRef.current = requestAnimationFrame(syncWgpu);
+        return;
+      }
 
       if (state.useWgpuRenderer === false || !state.isReady || !state.hasRenderedFirstFrame) {
         const hiddenTransform = `${windowWidth},${windowHeight},-999999,-999999,1,1,${clipX},${clipY},${clipW},${clipH},${state.bgPrimary?.join(',')},${state.bgSecondary?.join(',')}`;
@@ -1994,15 +2012,16 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
   const isWgpuActive =
     !dualDisplayActive &&
     appSettings?.useWgpuRenderer !== false &&
-    !!selectedImage?.isReady &&
-    hasRenderedFirstFrame;
+    ((!!selectedImage?.isReady && hasRenderedFirstFrame) || holdPreviousFrame);
   const hasRenderedAnyPreview = hasRenderedFirstFrame || !!finalPreviewUrl;
 
   return (
     <div
       className={clsx(
         'flex-1 flex flex-col relative overflow-hidden min-h-0',
-        !isInstantTransition && 'transition-all duration-300 ease-in-out',
+        // Layout only: the background flips with isWgpuActive on every photo switch
+        // and must not fade.
+        !isInstantTransition && 'transition-[padding,border-radius,gap] duration-300 ease-in-out',
         isFullScreen
           ? 'rounded-none p-0 gap-0'
           : clsx('rounded-lg p-2 gap-2', isWgpuActive ? 'bg-transparent' : 'bg-bg-secondary'),
@@ -2034,7 +2053,7 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
           selectedImage={selectedImage}
           showOriginal={showOriginal}
           showDateView={showExifDateView}
-          onToggleDateView={() => setShowExifDateView((prev) => !prev)}
+          onToggleDateView={toggleExifDateView}
           adjustmentsHistory={adjustmentsHistory}
           adjustmentsHistoryIndex={adjustmentsHistoryIndex}
           goToAdjustmentsHistoryIndex={goToHistoryIndex}
@@ -2108,7 +2127,7 @@ export default function Editor({ onBackToLibrary, onContextMenu, onImageSelect, 
             isGuidedUprightActive={isGuidedUprightActive}
             isRotationActive={isRotationActive}
             isSliderDragging={isSliderDragging}
-            maskOverlayUrl={maskOverlayUrl}
+            maskOverlay={maskOverlay}
             onGenerateAiMask={handleGenerateAiMask}
             onSelectAiPatchContainer={(id) => setEditor({ activeAiPatchContainerId: id })}
             onSelectMaskContainer={(id) => setEditor({ activeMaskContainerId: id })}

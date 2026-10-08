@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import clsx from 'clsx';
 import { Check, ChevronDown, Pencil, Trash2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -6,8 +6,6 @@ import { toast } from 'react-toastify';
 import { v4 as uuidv4 } from 'uuid';
 
 import { useLibraryStore } from '../../../store/useLibraryStore';
-import { usePresetStore } from '../../../store/usePresetStore';
-import { flattenPresets } from '../../../utils/presetTree';
 import {
   METADATA_PRESET_FIELDS,
   MetadataPreset,
@@ -88,38 +86,25 @@ function MenuItem({
   );
 }
 
-/** LR-style "Apply During Import": develop preset (existing only) + metadata preset + keywords. */
+/** LR-style "Apply During Import": metadata preset + keywords. */
 export default function LibraryImportApply() {
   const { t } = useTranslation();
-  const developId = useLibraryStore((s) => s.importApplyDevelopPresetId);
   const metadataId = useLibraryStore((s) => s.importApplyMetadataPresetId);
   const keywords = useLibraryStore((s) => s.importApplyKeywords);
   const setLibrary = useLibraryStore((s) => s.setLibrary);
 
-  const loadPresets = usePresetStore((s) => s.load);
-  const presetTree = usePresetStore((s) => s.presets);
-  const developPresets = useMemo(() => flattenPresets(presetTree), [presetTree]);
-
   const [metaPresets, setMetaPresets] = useState<MetadataPreset[]>(() =>
     typeof window !== 'undefined' ? loadMetadataPresets() : [],
   );
-  const [openDev, setOpenDev] = useState(false);
   const [openMeta, setOpenMeta] = useState(false);
   const [editor, setEditor] = useState<MetadataPreset | null>(null);
   const [manager, setManager] = useState(false);
-
-  useEffect(() => {
-    void loadPresets();
-  }, [loadPresets]);
 
   const persistMeta = (next: MetadataPreset[]) => {
     setMetaPresets(next);
     saveMetadataPresets(next);
   };
 
-  const developLabel =
-    developPresets.find((p) => p.preset.id === developId)?.preset.name ||
-    t('library.rightPanel.applyNone' as any, { defaultValue: 'Aucun' });
   const metadataLabel =
     metaPresets.find((p) => p.id === metadataId)?.name ||
     t('library.rightPanel.applyNone' as any, { defaultValue: 'Aucun' });
@@ -145,47 +130,11 @@ export default function LibraryImportApply() {
     <div className="space-y-1.5">
       <div className="space-y-1.5">
         <MenuSelect
-          label={t('library.rightPanel.developParams' as any, { defaultValue: 'Param. développement' })}
-          valueLabel={developLabel}
-          open={openDev}
-          onClose={() => setOpenDev(false)}
-          onToggle={() => {
-            setOpenDev((v) => !v);
-            setOpenMeta(false);
-          }}
-        >
-          <MenuItem
-            active={!developId}
-            onClick={() => {
-              setLibrary({ importApplyDevelopPresetId: null });
-              setOpenDev(false);
-            }}
-          >
-            {t('library.rightPanel.applyNone' as any, { defaultValue: 'Aucun' })}
-          </MenuItem>
-          {developPresets.map(({ preset, groupName }) => (
-            <MenuItem
-              key={preset.id}
-              active={developId === preset.id}
-              onClick={() => {
-                setLibrary({ importApplyDevelopPresetId: preset.id });
-                setOpenDev(false);
-              }}
-            >
-              {groupName ? `${groupName} / ${preset.name}` : preset.name}
-            </MenuItem>
-          ))}
-        </MenuSelect>
-
-        <MenuSelect
           label={t('library.rightPanel.metadata' as any, { defaultValue: 'Métadonnées' })}
           valueLabel={metadataLabel}
           open={openMeta}
           onClose={() => setOpenMeta(false)}
-          onToggle={() => {
-            setOpenMeta((v) => !v);
-            setOpenDev(false);
-          }}
+          onToggle={() => setOpenMeta((v) => !v)}
         >
           <MenuItem
             active={!metadataId}

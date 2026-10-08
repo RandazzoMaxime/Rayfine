@@ -5,6 +5,8 @@
 //! sources use a uniform grid of pixel centers with at most 1600 on the long edge;
 //! this bounds allocation/work without introducing per-photo calibration.
 
+use rayon::prelude::*;
+
 const FLARE: f64 = 1.0 / 4096.0;
 const MAX_EDGE: u64 = 1600;
 const TO_PROPHOTO: [[f64; 3]; 3] = [
@@ -49,21 +51,34 @@ pub(crate) fn prepare(image: &image::DynamicImage) -> SceneStats {
         (width, height)
     };
     let count = (sw * sh) as usize;
-    let mut filtered = Vec::with_capacity(count);
-    let mut sum = 0.0;
     let threshold = FLARE.log2() + 1.0;
-    for sy in 0..sh {
-        let y = ((2 * sy + 1) * height / (2 * sh)).min(height - 1);
-        for sx in 0..sw {
-            let x = ((2 * sx + 1) * width / (2 * sw)).min(width - 1);
-            let offset = ((y * width + x) as usize) * channels;
-            let rgb = [source[offset], source[offset + 1], source[offset + 2]];
-            let log = basic_log_luminance(rgb);
-            sum += log;
-            if log > threshold {
-                filtered.push(log);
+    // Rows in parallel (~12 f64 transcendentals per sample made this ~300 ms serial on
+    // every new photo). Row sums are added in row order, so the result does not depend
+    // on thread scheduling.
+    let rows: Vec<(f64, Vec<f64>)> = (0..sh)
+        .into_par_iter()
+        .map(|sy| {
+            let y = ((2 * sy + 1) * height / (2 * sh)).min(height - 1);
+            let mut row_sum = 0.0;
+            let mut row_filtered = Vec::new();
+            for sx in 0..sw {
+                let x = ((2 * sx + 1) * width / (2 * sw)).min(width - 1);
+                let offset = ((y * width + x) as usize) * channels;
+                let rgb = [source[offset], source[offset + 1], source[offset + 2]];
+                let log = basic_log_luminance(rgb);
+                row_sum += log;
+                if log > threshold {
+                    row_filtered.push(log);
+                }
             }
-        }
+            (row_sum, row_filtered)
+        })
+        .collect();
+    let mut sum = 0.0;
+    let mut filtered = Vec::with_capacity(count);
+    for (row_sum, row_filtered) in rows {
+        sum += row_sum;
+        filtered.extend(row_filtered);
     }
     // The mean includes shadows excluded from the filtered quantile bounds.
     let mean = sum / count as f64;

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { GLOBAL_KEYS } from './AppProperties';
 
@@ -42,7 +42,7 @@ const TOUCH_THUMB_HIT_RADIUS_PX = 24;
 const hasFineAdjustmentModifier = (event: MouseEvent | TouchEvent | React.MouseEvent | React.TouchEvent) =>
   'shiftKey' in event && (event.shiftKey || event.altKey);
 
-const Slider = ({
+const SliderInner = ({
   defaultValue = 0,
   disabled = false,
   label,
@@ -66,6 +66,8 @@ const Slider = ({
   const [displayValue, setDisplayValue] = useState<number>(value);
   const [isDragging, setIsDragging] = useState(false);
   const animationFrameRef = useRef<number | undefined>(undefined);
+  const dragFrameRef = useRef<number | undefined>(undefined);
+  const pendingDragValueRef = useRef<number | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [inputValue, setInputValue] = useState<string>(String(value));
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -229,13 +231,28 @@ const Slider = ({
         lastPointerXRef.current = clientX;
       }
 
-      const snappedValue = snapToStepRef.current(accumulatedValueRef.current);
+      // One React update per frame: a high-rate mouse fires many moves per frame and
+      // each one would otherwise re-render the whole Develop panel.
+      pendingDragValueRef.current = snapToStepRef.current(accumulatedValueRef.current);
+      if (dragFrameRef.current === undefined) {
+        dragFrameRef.current = requestAnimationFrame(flushDragValue);
+      }
+    };
 
-      setDisplayValue(snappedValue);
-      onChangeRef.current({ target: { value: snappedValue } });
+    const flushDragValue = () => {
+      dragFrameRef.current = undefined;
+      const pending = pendingDragValueRef.current;
+      if (pending === null) return;
+      pendingDragValueRef.current = null;
+      setDisplayValue(pending);
+      onChangeRef.current({ target: { value: pending } });
     };
 
     const handlePointerUp = () => {
+      if (dragFrameRef.current !== undefined) {
+        cancelAnimationFrame(dragFrameRef.current);
+      }
+      flushDragValue();
       lastUpTime.current = Date.now();
       pendingTouchRef.current = null;
       suppressTouchChangeRef.current = false;
@@ -249,6 +266,11 @@ const Slider = ({
     window.addEventListener('touchcancel', handlePointerUp);
 
     return () => {
+      if (dragFrameRef.current !== undefined) {
+        cancelAnimationFrame(dragFrameRef.current);
+        dragFrameRef.current = undefined;
+      }
+      pendingDragValueRef.current = null;
       window.removeEventListener('mousemove', handlePointerMove);
       window.removeEventListener('mouseup', handlePointerUp);
       window.removeEventListener('touchmove', handlePointerMove);
@@ -659,6 +681,36 @@ const Slider = ({
         )}
       </div>
     </div>
+  );
+};
+
+const MemoSliderInner = React.memo(SliderInner);
+
+/**
+ * Callers pass inline callbacks, so a plain memo would never hit. The callbacks are
+ * routed through a ref (always the latest closure, never a stale one) and only the
+ * data props decide whether a slider re-renders, so dragging one slider no longer
+ * re-renders all the others. formatValue/parseValue pass through untouched: their
+ * output depends on caller state (e.g. as-shot Kelvin), so they must stay reactive.
+ */
+const Slider = (props: SliderProps) => {
+  const latest = useRef(props);
+  useLayoutEffect(() => {
+    latest.current = props;
+  });
+  const stable = useMemo(
+    () => ({
+      onChange: (event: SliderChangeEvent) => latest.current.onChange(event),
+      onDragStateChange: (state: boolean) => latest.current.onDragStateChange?.(state),
+    }),
+    [],
+  );
+  return (
+    <MemoSliderInner
+      {...props}
+      onChange={stable.onChange}
+      onDragStateChange={stable.onDragStateChange}
+    />
   );
 };
 
