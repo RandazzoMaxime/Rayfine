@@ -727,8 +727,10 @@ function App() {
   );
 
   const hasRoots = rootPaths && rootPaths.length > 0;
+  const shellModuleActive = STUB_MODULES.includes(activeView as any);
   // No welcome screen: Library (with its panels and Import bar) is always the landing view.
-  const hasMainContent = hasRoots || !!selectedImage || activeView === 'library' || activeView === 'develop';
+  const hasMainContent =
+    hasRoots || !!selectedImage || activeView === 'library' || activeView === 'develop' || shellModuleActive;
 
   // Land straight in the last session on launch (replaces the "Continue session" splash).
   const autoContinuedRef = useRef(false);
@@ -773,7 +775,9 @@ function App() {
 
   const shouldHideFolderTree =
     isAndroid || !!selectedImage || activeView === 'develop' || STUB_MODULES.includes(activeView as any);
+  const editorSurfaceVisible = !shellModuleActive && (!!selectedImage || activeView === 'develop');
   const isWgpuActive =
+    editorSurfaceVisible &&
     !dualDisplayActive &&
     appSettings?.useWgpuRenderer !== false &&
     ((selectedImage?.isReady && hasRenderedFirstFrame) || holdPreviousFrame);

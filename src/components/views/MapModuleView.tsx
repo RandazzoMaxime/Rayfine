@@ -69,12 +69,13 @@ export default function MapModuleView({ onBackToLibrary, onOpenDevelop }: Props)
   });
   const [exporting, setExporting] = useState(false);
 
-  const { libraryActivePath } = useLibraryStore(
+  const { libraryActivePath, setLibrary } = useLibraryStore(
     useShallow((s) => ({
       libraryActivePath: s.libraryActivePath,
+      setLibrary: s.setLibrary,
     })),
   );
-  const { albumId, setAlbumId, images: sourceList, albumLoading, albumTree } = useModuleCollectionSource();
+  const { albumId, setAlbumId, images: sourceList, albumLoading, albumTree, activeAlbum } = useModuleCollectionSource();
   const { developLeftPanelWidth, isInstantTransition, setUI } = useUIStore(
     useShallow((s) => ({
       developLeftPanelWidth: s.developLeftPanelWidth,
