@@ -20,6 +20,14 @@ pub const CLIP_START: f32 = 0.98;
 pub const SCENE_HEADROOM: f32 = 16.0;
 /// Preview/fast demosaic still keeps a few stops so library proxies can recover.
 pub const FAST_HEADROOM: f32 = 4.0;
+/// Log-EV peak at Highlights UI = ±100 (after ÷120). Keep in sync with `shader.wgsl`.
+/// Calibrated on public LR pairs (`bench/lr-compare/MAPPING.md`); identity at 0.
+pub const HIGHLIGHT_LOG_STRENGTH: f32 = 2.35;
+pub const SHADOW_LOG_STRENGTH: f32 = 2.0;
+pub const WHITES_LOG_STRENGTH: f32 = 0.28;
+pub const BLACKS_LOG_STRENGTH: f32 = 0.32;
+/// Reinhard `k` for overrange when Highlights/Whites pull. Larger = stronger recovery.
+pub const OVERRANGE_PULL_K: f32 = 5.0;
 
 /// Uniforms already divided by the UI scales (see module docs).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -125,16 +133,18 @@ pub fn blacks_mask(log_base: f32) -> f32 {
 
 /// Log-domain local tone. `log_base` should be edge-aware (guided/blurred) when available.
 ///
-/// Strengths are chosen so UI Highlights −100 recovers about 1.6 stops on a clipped sky
-/// (LightCraft uses `1.7 * mask` on a −1..1 slider). Overrange is compressed separately
+/// Strengths are chosen so UI Highlights −100 recovers about 1.6–1.8 stops on a
+/// clipped sky (LightCraft uses `1.7 * mask` on a −1..1 slider). Slightly above
+/// LightCraft so FiveK-style HighlightRecovery + positive EV still pulls the
+/// sky (see `bench/lr-compare/MAPPING.md`). Overrange is compressed separately
 /// by [`overrange_scale`] so the curve stays monotone.
 #[inline]
 pub fn local_tone_delta(log_base: f32, _linear_luma: f32, sliders: ToneSliders) -> f32 {
     let ws = shadow_mask(log_base);
-    sliders.highlights * 2.0 * highlight_mask(log_base)
-        + sliders.shadows * 2.0 * ws * ws.sqrt()
-        + sliders.whites * 0.24 * whites_mask(log_base)
-        + sliders.blacks * 0.32 * blacks_mask(log_base)
+    sliders.highlights * HIGHLIGHT_LOG_STRENGTH * highlight_mask(log_base)
+        + sliders.shadows * SHADOW_LOG_STRENGTH * ws * ws.sqrt()
+        + sliders.whites * WHITES_LOG_STRENGTH * whites_mask(log_base)
+        + sliders.blacks * BLACKS_LOG_STRENGTH * blacks_mask(log_base)
 }
 
 /// Monotone Reinhard rolloff for values above sensor white when Highlights or
@@ -146,7 +156,7 @@ pub fn overrange_scale(linear_luma: f32, gain: f32, sliders: ToneSliders) -> f32
     if pull <= 1e-6 || linear_luma <= 1.0 || gain <= 0.0 {
         return 1.0;
     }
-    let k = pull * 4.0;
+    let k = pull * OVERRANGE_PULL_K;
     let excess = linear_luma - 1.0;
     let y_out = gain + excess * gain / (1.0 + excess * k);
     y_out / (linear_luma * gain)

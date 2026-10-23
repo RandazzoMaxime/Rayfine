@@ -8,7 +8,7 @@
 
 use image::{Rgb, RgbImage};
 use rapidraw_lib::{
-    ToneSliders, develop_image, develop_pixel, legacy_develop_pixel, lightcraft_like_pixel,
+    ToneSliders, develop_image, legacy_develop_pixel, lightcraft_like_pixel,
 };
 use std::env;
 use std::path::{Path, PathBuf};

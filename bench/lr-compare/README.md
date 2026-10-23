@@ -1,5 +1,25 @@
 # Lightroom Classic comparison — 2026-10-02
 
+## Public RAW + XMP + Lightroom export (this PR)
+
+Private A7S02588 captures stay local. This folder now also compares **licensed
+public triples** (FiveK Expert C, optional PPR10K / Play Raw):
+
+```text
+python bench/lr-compare/test_crs_map.py
+python bench/lr-compare/test_metrics.py
+python bench/lr-compare/download_public_pairs.py --accept-research-license --source fivek
+python bench/lr-compare/compare_public_pairs.py \
+  --datasets bench/lr-compare/datasets --out bench/lr-compare/out/public
+```
+
+- Mapping and limits: [MAPPING.md](MAPPING.md)
+- Licenses and why each source is in or out: [SOURCES.md](SOURCES.md)
+- `datasets/` is gitignored. Commit scripts only.
+- Train / val split is fixed in `download_public_pairs.py`. Do not fit curves on `val`.
+
+# Lightroom Classic comparison — 2026-10-02 (private catalog)
+
 Source: A7S02588.ARW (Sony ILCE-7SM3, 4240×2832). Lightroom Classic 15.5.1,
 Adobe Standard, as-shot WB (5650 K / tint 14), linear point curves, sharpening
 and colour NR disabled. Dedicated virtual copies preserve the masters. A second
