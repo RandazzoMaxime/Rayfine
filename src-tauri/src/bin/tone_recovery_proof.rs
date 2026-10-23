@@ -8,7 +8,7 @@
 
 use image::{Rgb, RgbImage};
 use rapidraw_lib::{
-    ToneSliders, develop_pixel, legacy_develop_pixel, lightcraft_like_pixel,
+    ToneSliders, develop_image, develop_pixel, legacy_develop_pixel, lightcraft_like_pixel,
 };
 use std::env;
 use std::path::{Path, PathBuf};
@@ -81,24 +81,45 @@ enum PathKind {
     Lightcraft,
 }
 
-fn develop_kind(rgb: [f32; 3], sliders: ToneSliders, kind: PathKind) -> [f32; 3] {
+fn collect_scene(scene: impl Fn(u32, u32) -> ScenePixel, w: u32, h: u32) -> Vec<[f32; 3]> {
+    let mut px = Vec::with_capacity((w * h) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            px.push(scene(x, y).rgb);
+        }
+    }
+    px
+}
+
+fn pixels_to_image(pixels: &[[f32; 3]], w: u32, h: u32) -> RgbImage {
+    let mut img = RgbImage::new(w, h);
+    for y in 0..h {
+        for x in 0..w {
+            let p = pixels[(y * w + x) as usize];
+            img.put_pixel(x, y, Rgb([to_u8(p[0]), to_u8(p[1]), to_u8(p[2])]));
+        }
+    }
+    img
+}
+
+fn develop_buffer(pixels: &[[f32; 3]], w: u32, h: u32, sliders: ToneSliders, kind: PathKind, preview: bool) -> Vec<[f32; 3]> {
     match kind {
-        PathKind::Legacy => legacy_develop_pixel(rgb, sliders),
-        PathKind::New => develop_pixel(rgb, luma(rgb), sliders, true),
-        PathKind::Lightcraft => lightcraft_like_pixel(rgb, sliders),
+        PathKind::New => develop_image(pixels, w as usize, h as usize, sliders, true, preview),
+        PathKind::Legacy => pixels
+            .iter()
+            .map(|p| {
+                let clamped = [p[0].clamp(0.0, 1.0), p[1].clamp(0.0, 1.0), p[2].clamp(0.0, 1.0)];
+                legacy_develop_pixel(clamped, sliders)
+            })
+            .collect(),
+        PathKind::Lightcraft => pixels.iter().map(|p| lightcraft_like_pixel(*p, sliders)).collect(),
     }
 }
 
 fn render_scene(scene: impl Fn(u32, u32) -> ScenePixel, sliders: ToneSliders, kind: PathKind) -> RgbImage {
-    let mut img = RgbImage::new(W, H);
-    for y in 0..H {
-        for x in 0..W {
-            let p = scene(x, y);
-            let out = develop_kind(p.rgb, sliders, kind);
-            img.put_pixel(x, y, Rgb([to_u8(out[0]), to_u8(out[1]), to_u8(out[2])]));
-        }
-    }
-    img
+    let buf = collect_scene(scene, W, H);
+    let out = develop_buffer(&buf, W, H, sliders, kind, false);
+    pixels_to_image(&out, W, H)
 }
 
 fn luma(rgb: [f32; 3]) -> f32 {
@@ -106,19 +127,20 @@ fn luma(rgb: [f32; 3]) -> f32 {
 }
 
 fn clipping_map(scene: impl Fn(u32, u32) -> ScenePixel, sliders: ToneSliders, kind: PathKind) -> RgbImage {
+    let buf = collect_scene(scene, W, H);
+    let out = develop_buffer(&buf, W, H, sliders, kind, false);
     let mut img = RgbImage::new(W, H);
     for y in 0..H {
         for x in 0..W {
-            let p = scene(x, y);
-            let out = develop_kind(p.rgb, sliders, kind);
-            let hi = out.iter().any(|c| *c >= 0.998);
-            let lo = out.iter().any(|c| *c <= 0.002);
+            let p = out[(y * W + x) as usize];
+            let hi = p.iter().any(|c| *c >= 0.998);
+            let lo = p.iter().any(|c| *c <= 0.002);
             let px = if hi {
                 [255, 0, 0]
             } else if lo {
                 [0, 0, 255]
             } else {
-                [to_u8(out[0]), to_u8(out[1]), to_u8(out[2])]
+                [to_u8(p[0]), to_u8(p[1]), to_u8(p[2])]
             };
             img.put_pixel(x, y, Rgb(px));
         }
@@ -212,6 +234,8 @@ fn label_bar(text: &str, width: u32) -> RgbImage {
         ('Y', [0x11, 0x0A, 0x04, 0x04, 0x04]),
         ('/', [0x01, 0x02, 0x04, 0x08, 0x10]),
         (':', [0x00, 0x04, 0x00, 0x04, 0x00]),
+        ('=', [0x00, 0x1F, 0x00, 0x1F, 0x00]),
+        ('.', [0x00, 0x00, 0x00, 0x00, 0x04]),
     ];
     let mut cx = 6i32;
     for ch in text.chars() {
@@ -281,11 +305,44 @@ fn panel(title: &str, img: RgbImage) -> RgbImage {
     stack_vertical(&[label_bar(title, img.width()), img, hist])
 }
 
+fn zoom_crop(img: &RgbImage, cx: u32, cy: u32, size: u32, zoom: u32) -> RgbImage {
+    let mut out = RgbImage::new(size * zoom, size * zoom);
+    let x0 = cx.saturating_sub(size / 2);
+    let y0 = cy.saturating_sub(size / 2);
+    for y in 0..size {
+        for x in 0..size {
+            let sx = (x0 + x).min(img.width() - 1);
+            let sy = (y0 + y).min(img.height() - 1);
+            let p = *img.get_pixel(sx, sy);
+            for dy in 0..zoom {
+                for dx in 0..zoom {
+                    out.put_pixel(x * zoom + dx, y * zoom + dy, p);
+                }
+            }
+        }
+    }
+    out
+}
+
+fn hard_horizon(x: u32, y: u32) -> ScenePixel {
+    if y < H / 2 {
+        let u = x as f32 / (W - 1) as f32;
+        ScenePixel {
+            rgb: [1.6 + u * 0.6, 1.4 + u * 0.3, 2.0],
+        }
+    } else {
+        ScenePixel {
+            rgb: [0.04, 0.055, 0.03],
+        }
+    }
+}
+
 fn sheet(
     name: &str,
     scene: impl Fn(u32, u32) -> ScenePixel + Copy,
     sliders: ToneSliders,
     out_dir: &Path,
+    mode: &str,
 ) {
     let before = render_scene(scene, sliders, PathKind::Legacy);
     let after = render_scene(scene, sliders, PathKind::New);
@@ -294,6 +351,7 @@ fn sheet(
     let clip_a = clipping_map(scene, sliders, PathKind::New);
     let (hi_b, lo_b) = clip_stats(&before);
     let (hi_a, lo_a) = clip_stats(&after);
+    let settings = sliders.ui_label(mode);
     let row = stack_horizontal(&[
         panel("AVANT (legacy)", before),
         panel("APRES (nouveau)", after),
@@ -301,16 +359,38 @@ fn sheet(
         panel("CLIP AVANT", clip_b),
         panel("CLIP APRES", clip_a),
     ]);
+    let framed = stack_vertical(&[label_bar(&settings, row.width()), row]);
     let path = out_dir.join(format!("{name}.png"));
-    row.save(&path).expect("write sheet");
+    framed.save(&path).expect("write sheet");
     eprintln!(
-        "wrote {}  clip_hi {:.1}%->{:.1}%  clip_lo {:.1}%->{:.1}%",
+        "wrote {}  {}  clip_hi {:.1}%->{:.1}%  clip_lo {:.1}%->{:.1}%",
         path.display(),
+        settings,
         hi_b * 100.0,
         hi_a * 100.0,
         lo_b * 100.0,
         lo_a * 100.0
     );
+}
+
+fn halo_sheet(name: &str, sliders: ToneSliders, out_dir: &Path) {
+    let before = render_scene(hard_horizon, sliders, PathKind::Legacy);
+    let after = render_scene(hard_horizon, sliders, PathKind::New);
+    let cx = W / 2;
+    let cy = H / 2;
+    let crop_b = zoom_crop(&before, cx, cy, 48, 8);
+    let crop_a = zoom_crop(&after, cx, cy, 48, 8);
+    let settings = sliders.ui_label("quality");
+    let row = stack_horizontal(&[
+        panel("CROP AVANT", crop_b),
+        panel("CROP APRES", crop_a),
+        panel("AVANT", before),
+        panel("APRES", after),
+    ]);
+    let framed = stack_vertical(&[label_bar(&settings, row.width()), row]);
+    let path = out_dir.join(format!("{name}.png"));
+    framed.save(&path).expect("write halo");
+    eprintln!("wrote {}  {}", path.display(), settings);
 }
 
 struct SceneBuffer {
@@ -356,37 +436,24 @@ fn load_raw_scene(path: &Path) -> Option<SceneBuffer> {
 }
 
 fn render_raw(scene: &SceneBuffer, sliders: ToneSliders, kind: PathKind) -> RgbImage {
-    let mut img = RgbImage::new(scene.width, scene.height);
-    for y in 0..scene.height {
-        for x in 0..scene.width {
-            let mut rgb = scene.get(x, y);
-            if matches!(kind, PathKind::Legacy) {
-                rgb = [rgb[0].clamp(0.0, 1.0), rgb[1].clamp(0.0, 1.0), rgb[2].clamp(0.0, 1.0)];
-            }
-            let out = develop_kind(rgb, sliders, kind);
-            img.put_pixel(x, y, Rgb([to_u8(out[0]), to_u8(out[1]), to_u8(out[2])]));
-        }
-    }
-    img
+    let out = develop_buffer(&scene.pixels, scene.width, scene.height, sliders, kind, false);
+    pixels_to_image(&out, scene.width, scene.height)
 }
 
 fn raw_clip_map(scene: &SceneBuffer, sliders: ToneSliders, kind: PathKind) -> RgbImage {
+    let out = develop_buffer(&scene.pixels, scene.width, scene.height, sliders, kind, false);
     let mut img = RgbImage::new(scene.width, scene.height);
     for y in 0..scene.height {
         for x in 0..scene.width {
-            let mut rgb = scene.get(x, y);
-            if matches!(kind, PathKind::Legacy) {
-                rgb = [rgb[0].clamp(0.0, 1.0), rgb[1].clamp(0.0, 1.0), rgb[2].clamp(0.0, 1.0)];
-            }
-            let out = develop_kind(rgb, sliders, kind);
-            let hi = out.iter().any(|c| *c >= 0.998);
-            let lo = out.iter().any(|c| *c <= 0.002);
+            let p = out[(y * scene.width + x) as usize];
+            let hi = p.iter().any(|c| *c >= 0.998);
+            let lo = p.iter().any(|c| *c <= 0.002);
             let px = if hi {
                 [255, 0, 0]
             } else if lo {
                 [0, 0, 255]
             } else {
-                [to_u8(out[0]), to_u8(out[1]), to_u8(out[2])]
+                [to_u8(p[0]), to_u8(p[1]), to_u8(p[2])]
             };
             img.put_pixel(x, y, Rgb(px));
         }
@@ -394,7 +461,7 @@ fn raw_clip_map(scene: &SceneBuffer, sliders: ToneSliders, kind: PathKind) -> Rg
     img
 }
 
-fn raw_sheet(name: &str, scene: &SceneBuffer, sliders: ToneSliders, out_dir: &Path) {
+fn raw_sheet(name: &str, scene: &SceneBuffer, sliders: ToneSliders, out_dir: &Path, mode: &str) {
     let before = render_raw(scene, sliders, PathKind::Legacy);
     let after = render_raw(scene, sliders, PathKind::New);
     let reference = render_raw(scene, sliders, PathKind::Lightcraft);
@@ -402,6 +469,7 @@ fn raw_sheet(name: &str, scene: &SceneBuffer, sliders: ToneSliders, out_dir: &Pa
     let clip_a = raw_clip_map(scene, sliders, PathKind::New);
     let (hi_b, lo_b) = clip_stats(&before);
     let (hi_a, lo_a) = clip_stats(&after);
+    let settings = sliders.ui_label(mode);
     let row = stack_horizontal(&[
         panel("AVANT RAW", before),
         panel("APRES RAW", after),
@@ -409,11 +477,13 @@ fn raw_sheet(name: &str, scene: &SceneBuffer, sliders: ToneSliders, out_dir: &Pa
         panel("CLIP AVANT", clip_b),
         panel("CLIP APRES", clip_a),
     ]);
+    let framed = stack_vertical(&[label_bar(&settings, row.width()), row]);
     let path = out_dir.join(format!("{name}.png"));
-    row.save(&path).expect("write raw sheet");
+    framed.save(&path).expect("write raw sheet");
     eprintln!(
-        "wrote {}  clip_hi {:.1}%->{:.1}%  clip_lo {:.1}%->{:.1}%",
+        "wrote {}  {}  clip_hi {:.1}%->{:.1}%  clip_lo {:.1}%->{:.1}%",
         path.display(),
+        settings,
         hi_b * 100.0,
         hi_a * 100.0,
         lo_b * 100.0,
@@ -427,31 +497,62 @@ fn main() {
     std::fs::create_dir_all(&out).expect("mkdir");
     let raws: Vec<PathBuf> = args.map(PathBuf::from).collect();
 
-    let cases: &[(&str, ToneSliders)] = &[
-        ("00_default", ToneSliders::from_ui(0.0, 0.0, 0.0, 0.0, 0.0)),
-        ("01_exposure_plus", ToneSliders::from_ui(1.2, 0.0, 0.0, 0.0, 0.0)),
-        ("02_exposure_minus", ToneSliders::from_ui(-1.0, 0.0, 0.0, 0.0, 0.0)),
-        ("03_highlights_m100", ToneSliders::from_ui(0.0, -100.0, 0.0, 0.0, 0.0)),
-        ("04_shadows_p100", ToneSliders::from_ui(0.0, 0.0, 100.0, 0.0, 0.0)),
-        ("05_whites_m80", ToneSliders::from_ui(0.0, 0.0, 0.0, -80.0, 0.0)),
-        ("06_blacks_m80", ToneSliders::from_ui(0.0, 0.0, 0.0, 0.0, -80.0)),
+    let grid: &[(&str, ToneSliders)] = &[
+        ("00_default", ToneSliders::from_ui_full(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)),
+        ("h_m25", ToneSliders::from_ui_full(0.0, -25.0, 0.0, 0.0, 0.0, 0.0)),
+        ("h_m50", ToneSliders::from_ui_full(0.0, -50.0, 0.0, 0.0, 0.0, 0.0)),
+        ("h_m100", ToneSliders::from_ui_full(0.0, -100.0, 0.0, 0.0, 0.0, 0.0)),
+        ("s_p25", ToneSliders::from_ui_full(0.0, 0.0, 25.0, 0.0, 0.0, 0.0)),
+        ("s_p50", ToneSliders::from_ui_full(0.0, 0.0, 50.0, 0.0, 0.0, 0.0)),
+        ("s_p100", ToneSliders::from_ui_full(0.0, 0.0, 100.0, 0.0, 0.0, 0.0)),
+        ("e_m1", ToneSliders::from_ui_full(-1.0, 0.0, 0.0, 0.0, 0.0, 0.0)),
+        ("e_p1", ToneSliders::from_ui_full(1.0, 0.0, 0.0, 0.0, 0.0, 0.0)),
+        ("e_p2", ToneSliders::from_ui_full(2.0, 0.0, 0.0, 0.0, 0.0, 0.0)),
+        ("e_p1_h_m50", ToneSliders::from_ui_full(1.0, -50.0, 0.0, 0.0, 0.0, 0.0)),
+        ("e_p2_h_m100", ToneSliders::from_ui_full(2.0, -100.0, 20.0, 0.0, 0.0, 0.0)),
+        ("e_m1_h_m50", ToneSliders::from_ui_full(-1.0, -50.0, 0.0, 0.0, 0.0, 0.0)),
+        ("w_m40", ToneSliders::from_ui_full(0.0, 0.0, 0.0, -40.0, 0.0, 0.0)),
+        ("w_p40", ToneSliders::from_ui_full(0.0, 0.0, 0.0, 40.0, 0.0, 0.0)),
+        ("b_m40", ToneSliders::from_ui_full(0.0, 0.0, 0.0, 0.0, -40.0, 0.0)),
+        ("b_p40", ToneSliders::from_ui_full(0.0, 0.0, 0.0, 0.0, 40.0, 0.0)),
+        ("c_p30_h_m50", ToneSliders::from_ui_full(0.0, -50.0, 0.0, 0.0, 0.0, 30.0)),
         (
-            "07_sky_recovery",
-            ToneSliders::from_ui(0.4, -100.0, 70.0, -40.0, 10.0),
+            "preset_ciel",
+            ToneSliders::from_ui_full(0.35, -70.0, 35.0, -25.0, 10.0, 10.0),
         ),
         (
-            "08_push_and_recover",
-            ToneSliders::from_ui(1.2, -100.0, 40.0, -30.0, 0.0),
+            "preset_contrejour",
+            ToneSliders::from_ui_full(1.2, -100.0, 55.0, -30.0, 15.0, 15.0),
+        ),
+        (
+            "preset_neige",
+            ToneSliders::from_ui_full(0.15, -55.0, 20.0, -40.0, -10.0, 5.0),
         ),
     ];
 
-    for (name, sliders) in cases {
-        sheet(&format!("sky_{name}"), synthetic_sky, *sliders, &out);
-        sheet(&format!("ramp_{name}"), hdr_ramp, *sliders, &out);
-        if *name == "03_highlights_m100" || *name == "07_sky_recovery" {
-            sheet(&format!("magenta_{name}"), magenta_sky, *sliders, &out);
+    for (name, sliders) in grid {
+        sheet(&format!("sky_{name}"), synthetic_sky, *sliders, &out, "quality");
+        if *name == "00_default" || name.starts_with("h_") || name.starts_with("preset_") {
+            sheet(&format!("ramp_{name}"), hdr_ramp, *sliders, &out, "quality");
+        }
+        if *name == "h_m100" || *name == "preset_contrejour" {
+            sheet(&format!("magenta_{name}"), magenta_sky, *sliders, &out, "quality");
         }
     }
+    halo_sheet("halo_h_m50", ToneSliders::from_ui(0.0, -50.0, 0.0, 0.0, 0.0), &out);
+    halo_sheet("halo_h_m100", ToneSliders::from_ui(0.0, -100.0, 0.0, 0.0, 0.0), &out);
+    halo_sheet("halo_s_p100", ToneSliders::from_ui(0.0, 0.0, 100.0, 0.0, 0.0), &out);
+
+    let raw_keys = [
+        "00_default",
+        "h_m50",
+        "h_m100",
+        "s_p50",
+        "e_p1_h_m50",
+        "preset_ciel",
+        "preset_contrejour",
+        "preset_neige",
+    ];
 
     for raw_path in &raws {
         let Some(scene) = load_raw_scene(raw_path) else {
@@ -462,8 +563,11 @@ fn main() {
             .and_then(|s| s.to_str())
             .unwrap_or("raw")
             .replace(' ', "_");
-        for (name, sliders) in cases {
-            raw_sheet(&format!("{stem}_{name}"), &scene, *sliders, &out);
+        let mode = "quality";
+        for (name, sliders) in grid {
+            if raw_keys.contains(name) {
+                raw_sheet(&format!("{stem}_{name}"), &scene, *sliders, &out, mode);
+            }
         }
     }
 }

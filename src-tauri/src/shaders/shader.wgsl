@@ -483,10 +483,68 @@ fn soft_shoulder_rgb(c: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(soft_shoulder_channel(c.r), soft_shoulder_channel(c.g), soft_shoulder_channel(c.b));
 }
 
-// Reconstruct clipped channels. Fully clipped pixels become neutral at their
-// peak; partly clipped ones lift the clipped channel to the pixel peak so a
-// white-balanced magenta sky can be darkened as a highlight.
-fn reconstruct_highlights_linear(color: vec3<f32>, blurred: vec3<f32>) -> vec3<f32> {
+fn load_linear_rgb(coord: vec2<i32>, is_raw: u32) -> vec3<f32> {
+    let dims = vec2<i32>(textureDimensions(input_texture));
+    let c = clamp(coord, vec2<i32>(0), dims - 1);
+    var rgb = textureLoad(input_texture, c, 0).rgb;
+    if (is_raw == 0u) {
+        rgb = srgb_to_linear(rgb);
+    }
+    return max(rgb, vec3<f32>(0.0));
+}
+
+fn load_linear_luma(coord: vec2<i32>, is_raw: u32) -> f32 {
+    return get_luma(load_linear_rgb(coord, is_raw));
+}
+
+// 5×5 He guided filter on luma (guide = signal). Edge-preserving fine scale.
+fn guided_box_luma(coord: vec2<i32>, radius: i32, eps: f32, is_raw: u32) -> f32 {
+    let i0 = load_linear_luma(coord, is_raw);
+    var sum_i = 0.0;
+    var sum_ii = 0.0;
+    var count = 0.0;
+    for (var dy = -radius; dy <= radius; dy = dy + 1) {
+        for (var dx = -radius; dx <= radius; dx = dx + 1) {
+            let v = load_linear_luma(coord + vec2<i32>(dx, dy), is_raw);
+            sum_i += v;
+            sum_ii += v * v;
+            count += 1.0;
+        }
+    }
+    let mean_i = sum_i / max(count, 1.0);
+    let var_i = max(sum_ii / max(count, 1.0) - mean_i * mean_i, 0.0);
+    let a = var_i / (var_i + eps);
+    return a * i0 + (mean_i - a * mean_i);
+}
+
+// Fine guided + mid/coarse Gaussian (pre-blurred) with range weights so a
+// sky/relief edge does not borrow the other side's mask (no halo).
+fn multi_scale_mask_luma(
+    coord: vec2<i32>,
+    color: vec3<f32>,
+    fine_blur: vec3<f32>,
+    mid_blur: vec3<f32>,
+    is_raw: u32
+) -> f32 {
+    let pixel = get_luma(max(color, vec3<f32>(0.0)));
+    let guided = guided_box_luma(coord, 2, 0.001, is_raw);
+    let mid = get_luma(max(fine_blur, vec3<f32>(0.0)));
+    let coarse = get_luma(max(mid_blur, vec3<f32>(0.0)));
+    let w_mid = 1.0 - smoothstep(0.02, 0.10, abs(pixel - mid));
+    let w_coarse = 1.0 - smoothstep(0.03, 0.18, abs(pixel - coarse));
+    var base = mix(guided, mid, w_mid * 0.55);
+    base = mix(base, coarse, w_coarse * 0.35);
+    return base;
+}
+
+// Inpaint-opposed reconstruction: clipped channels are rebuilt from unclipped
+// ones using chroma ratios of a reliable 5×5 neighbourhood (or the pre-blur).
+fn reconstruct_highlights_linear(
+    color: vec3<f32>,
+    blurred: vec3<f32>,
+    coord: vec2<i32>,
+    is_raw: u32
+) -> vec3<f32> {
     let peak = max(color.r, max(color.g, color.b));
     const CLIP: f32 = 0.98;
     if (peak < CLIP) { return color; }
@@ -496,27 +554,80 @@ fn reconstruct_highlights_linear(color: vec3<f32>, blurred: vec3<f32>) -> vec3<f
         select(0.0, 1.0, color.b >= CLIP)
     );
     let n = clipped.r + clipped.g + clipped.b;
+
+    var acc = vec3<f32>(0.0);
+    var wsum = 0.0;
+    for (var dy = -2; dy <= 2; dy = dy + 1) {
+        for (var dx = -2; dx <= 2; dx = dx + 1) {
+            if (dx == 0 && dy == 0) { continue; }
+            let rgb = load_linear_rgb(coord + vec2<i32>(dx, dy), is_raw);
+            let p = max(rgb.r, max(rgb.g, rgb.b));
+            if (p > 0.05 && p < CLIP) {
+                let w = 1.0 / (1.0 + 0.25 * f32(dx * dx + dy * dy));
+                acc += rgb * w;
+                wsum += w;
+            }
+        }
+    }
+    var chroma = vec3<f32>(0.0);
+    var have_chroma = false;
+    if (wsum > 1.0e-4) {
+        chroma = acc / wsum;
+        have_chroma = true;
+    } else {
+        let b = max(blurred, vec3<f32>(0.0));
+        let bp = max(b.r, max(b.g, b.b));
+        if (bp > 0.05 && bp < CLIP) {
+            chroma = b;
+            have_chroma = true;
+        }
+    }
+
     if (n >= 2.5) {
+        if (have_chroma) {
+            let energy = max(color.r + color.g + color.b, 1.0e-4);
+            let sum = max(chroma.r + chroma.g + chroma.b, 1.0e-4);
+            return max(color, chroma / sum * energy);
+        }
         return vec3<f32>(peak);
     }
-    var lifted = mix(color, vec3<f32>(peak), clipped);
-    let b = max(blurred, vec3<f32>(0.0));
-    let bpeak = max(b.r, max(b.g, b.b));
-    if (bpeak > 0.05 && bpeak < CLIP) {
-        let chroma = b / max(b.r + b.g + b.b, 1.0e-4);
-        let energy = max(lifted.r + lifted.g + lifted.b, 1.0e-4);
-        let borrowed = chroma * energy;
-        lifted = mix(lifted, max(lifted, borrowed), clipped);
+
+    var out = color;
+    if (have_chroma) {
+        if (clipped.r > 0.5) {
+            var accv = 0.0;
+            var w = 0.0;
+            if (clipped.g < 0.5 && chroma.g > 1.0e-5) { accv += color.g * chroma.r / chroma.g; w += 1.0; }
+            if (clipped.b < 0.5 && chroma.b > 1.0e-5) { accv += color.b * chroma.r / chroma.b; w += 1.0; }
+            if (w > 0.0) { out.r = max(out.r, accv / w); }
+        }
+        if (clipped.g > 0.5) {
+            var accv = 0.0;
+            var w = 0.0;
+            if (clipped.r < 0.5 && chroma.r > 1.0e-5) { accv += color.r * chroma.g / chroma.r; w += 1.0; }
+            if (clipped.b < 0.5 && chroma.b > 1.0e-5) { accv += color.b * chroma.g / chroma.b; w += 1.0; }
+            if (w > 0.0) { out.g = max(out.g, accv / w); }
+        }
+        if (clipped.b > 0.5) {
+            var accv = 0.0;
+            var w = 0.0;
+            if (clipped.r < 0.5 && chroma.r > 1.0e-5) { accv += color.r * chroma.b / chroma.r; w += 1.0; }
+            if (clipped.g < 0.5 && chroma.g > 1.0e-5) { accv += color.g * chroma.b / chroma.g; w += 1.0; }
+            if (w > 0.0) { out.b = max(out.b, accv / w); }
+        }
+        return out;
     }
-    return lifted;
+    return mix(color, vec3<f32>(peak), clipped);
 }
 
 // Local Highlights / Shadows / Whites / Blacks in scene-linear log luminance.
-// The mask is evaluated on the blurred luma (edge-preserving, fewer halos);
-// the gain is applied to the pixel. Identity when every slider is 0.
+// The mask is a multi-scale guided luma (5×5 He + pre-blurred mid/coarse).
+// Identity when every slider is 0.
 fn apply_scene_local_tone(
     color: vec3<f32>,
-    blurred_color_input_space: vec3<f32>,
+    coord: vec2<i32>,
+    fine_blur_input_space: vec3<f32>,
+    mid_blur_input_space: vec3<f32>,
     is_raw: u32,
     hl: f32,
     sh: f32,
@@ -526,17 +637,17 @@ fn apply_scene_local_tone(
     if (hl == 0.0 && sh == 0.0 && wh == 0.0 && bl == 0.0) {
         return color;
     }
-    var blurred_linear: vec3<f32>;
+    var fine_linear: vec3<f32>;
+    var mid_linear: vec3<f32>;
     if (is_raw == 1u) {
-        blurred_linear = blurred_color_input_space;
+        fine_linear = fine_blur_input_space;
+        mid_linear = mid_blur_input_space;
     } else {
-        blurred_linear = srgb_to_linear(blurred_color_input_space);
+        fine_linear = srgb_to_linear(fine_blur_input_space);
+        mid_linear = srgb_to_linear(mid_blur_input_space);
     }
     let pixel_luma = get_luma(max(color, vec3<f32>(0.0)));
-    let blurred_luma = get_luma(max(blurred_linear, vec3<f32>(0.0)));
-    // Mix a little of the pixel luma so a hard edge does not pull the mask
-    // across (guided-filter-like, without a second pass).
-    let mask_luma = mix(blurred_luma, pixel_luma, 0.25);
+    let mask_luma = multi_scale_mask_luma(coord, color, fine_linear, mid_linear, is_raw);
     let log_base = log_grey_luma(mask_luma);
     let ws = scene_shadow_mask(log_base);
     let delta = hl * 2.0 * scene_highlight_mask(log_base)
@@ -579,7 +690,7 @@ fn apply_tonal_adjustments(
         } else {
             blurred_linear = srgb_to_linear(blurred_color_input_space);
         }
-        rgb = apply_scene_local_tone(rgb, blurred_linear, is_raw, 0.0, 0.0, wh, 0.0);
+        rgb = apply_scene_local_tone(rgb, vec2<i32>(0), blurred_linear, blurred_linear, is_raw, 0.0, 0.0, wh, 0.0);
     }
 
     if (con != 0.0 && !(is_raw == 1u && adjustments.global.tonemapper_mode == 0u)) {
@@ -605,7 +716,7 @@ fn apply_highlights_adjustment(
     is_raw: u32,
     highlights_adj: f32
 ) -> vec3<f32> {
-    return apply_scene_local_tone(color_in, blurred_color_input_space, is_raw, highlights_adj, 0.0, 0.0, 0.0);
+    return apply_scene_local_tone(color_in, vec2<i32>(0), blurred_color_input_space, blurred_color_input_space, is_raw, highlights_adj, 0.0, 0.0, 0.0);
 }
 
 fn basic_raw_display(color: vec3<f32>) -> vec3<f32> {
@@ -1819,7 +1930,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     locally_contrasted_rgb = apply_local_contrast(locally_contrasted_rgb, structure_blurred, t_structure, is_raw, 1u, 0.0);
     locally_contrasted_rgb = apply_centre_local_contrast(locally_contrasted_rgb, adjustments.global.centre, absolute_coord_i, clarity_blurred, is_raw);
 
-    locally_contrasted_rgb = reconstruct_highlights_linear(locally_contrasted_rgb, tonal_blurred);
+    locally_contrasted_rgb = reconstruct_highlights_linear(locally_contrasted_rgb, tonal_blurred, absolute_coord_i, is_raw);
     var processed_rgb = apply_linear_exposure(locally_contrasted_rgb, t_exposure);
 
     if (t_glow > 0.0) {
@@ -1859,7 +1970,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     composite_rgb_linear = apply_centre_tonal_and_color(composite_rgb_linear, adjustments.global.centre, absolute_coord_i);
     composite_rgb_linear = apply_white_balance(composite_rgb_linear, t_temperature, t_tint);
     composite_rgb_linear = apply_filmic_exposure(composite_rgb_linear, t_brightness);
-    composite_rgb_linear = apply_scene_local_tone(composite_rgb_linear, tonal_blurred, is_raw, t_highlights, t_shadows, t_whites, t_blacks);
+    composite_rgb_linear = apply_scene_local_tone(composite_rgb_linear, absolute_coord_i, tonal_blurred, clarity_blurred, is_raw, t_highlights, t_shadows, t_whites, t_blacks);
     composite_rgb_linear = apply_tonal_adjustments(composite_rgb_linear, tonal_blurred, is_raw, t_contrast, 0.0, 0.0, 0.0);
     composite_rgb_linear = apply_color_calibration(composite_rgb_linear, adjustments.global.color_calibration);
     // HSL panel is costly per pixel; skip it when every hue/sat/lum slider is at zero.

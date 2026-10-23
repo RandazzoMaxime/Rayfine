@@ -2293,7 +2293,7 @@ fn perf_shader_profile() {
         ("- white balance", vec![("composite_rgb_linear = apply_white_balance(composite_rgb_linear, t_temperature, t_tint);", "")]),
         ("- filmic exposure", vec![("composite_rgb_linear = apply_filmic_exposure(composite_rgb_linear, t_brightness);", "")]),
         ("- tonal + highlights", vec![
-            ("composite_rgb_linear = apply_scene_local_tone(composite_rgb_linear, tonal_blurred, is_raw, t_highlights, t_shadows, t_whites, t_blacks);", ""),
+            ("composite_rgb_linear = apply_scene_local_tone(composite_rgb_linear, absolute_coord_i, tonal_blurred, clarity_blurred, is_raw, t_highlights, t_shadows, t_whites, t_blacks);", ""),
             ("composite_rgb_linear = apply_tonal_adjustments(composite_rgb_linear, tonal_blurred, is_raw, t_contrast, 0.0, 0.0, 0.0);", ""),
         ]),
         ("- color calibration", vec![("composite_rgb_linear = apply_color_calibration(composite_rgb_linear, adjustments.global.color_calibration);", "")]),

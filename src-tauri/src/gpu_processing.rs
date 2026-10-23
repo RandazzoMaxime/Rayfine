@@ -1736,7 +1736,18 @@ impl GpuProcessor {
         let need_clarity_blur = nz(g.clarity)
             || nz(g.centré)
             || g.halation_amount > 0.0
-            || active_masks.iter().any(|m| nz(m.clarity) || m.halation_amount > 0.0);
+            || nz(g.highlights)
+            || nz(g.shadows)
+            || nz(g.whites)
+            || nz(g.blacks)
+            || active_masks.iter().any(|m| {
+                nz(m.clarity)
+                    || m.halation_amount > 0.0
+                    || nz(m.highlights)
+                    || nz(m.shadows)
+                    || nz(m.whites)
+                    || nz(m.blacks)
+            });
         let legacy_dehaze_blur = if g.is_raw_image == 1 {
             g.dehaze < -1e-4 || active_masks.iter().any(|m| m.dehaze < -1e-4)
         } else {

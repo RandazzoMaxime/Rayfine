@@ -120,6 +120,16 @@ fn develop_internal(
 
     raw_image.wb_coeffs =
         crate::multi_exposure::neutralize_wb_if_multiexposure(raw_image.wb_coeffs, file_bytes);
+    let wb_rgb = if raw_image.wb_coeffs[0].is_nan() || raw_image.wb_coeffs[1].abs() < 1e-6 {
+        [1.0, 1.0, 1.0]
+    } else {
+        [
+            raw_image.wb_coeffs[0],
+            raw_image.wb_coeffs[1],
+            raw_image.wb_coeffs[2],
+        ]
+    };
+    let channel_clip = crate::scene_tone::channel_clip_levels(wb_rgb);
 
     check_cancel()?;
     // Custom fused MHC demosaic + calibration + crop for plain Bayer sensors (quality mode).
@@ -165,9 +175,9 @@ fn develop_internal(
         }
         Intermediate::ThreeColor(pixels) => {
             if ungamma {
-                rescale_rgb::<true>(&mut pixels.data, rescale_factor, safe_highlight_compression, clamp_limit);
+                rescale_rgb::<true>(&mut pixels.data, rescale_factor, safe_highlight_compression, clamp_limit, channel_clip);
             } else {
-                rescale_rgb::<false>(&mut pixels.data, rescale_factor, safe_highlight_compression, clamp_limit);
+                rescale_rgb::<false>(&mut pixels.data, rescale_factor, safe_highlight_compression, clamp_limit, channel_clip);
             }
         }
         Intermediate::FourColor(pixels) => {
@@ -189,10 +199,11 @@ fn develop_internal(
     };
 
     if let Intermediate::ThreeColor(pixels) = &mut developed_intermediate {
-        crate::scene_tone::reconstruct_image(
+        crate::scene_tone::reconstruct_image_at(
             &mut pixels.data,
             width as usize,
             height as usize,
+            channel_clip,
         );
         pixels.data.par_iter_mut().for_each(|p| {
             *p = crate::scene_tone::clamp_headroom(*p, clamp_limit);
@@ -268,6 +279,7 @@ fn rescale_rgb<const UNGAMMA: bool>(
     rescale_factor: f32,
     safe_highlight_compression: f32,
     clamp_limit: f32,
+    channel_clip: [f32; 3],
 ) {
     data.par_iter_mut().for_each(|p| {
         let mut r = (p[0] * rescale_factor).max(0.0);
@@ -280,7 +292,7 @@ fn rescale_rgb<const UNGAMMA: bool>(
             b = srgb_to_linear(b.clamp(0.0, 1.0));
         }
 
-        let reconstructed = crate::scene_tone::reconstruct_pixel([r, g, b], None);
+        let reconstructed = crate::scene_tone::reconstruct_pixel_at([r, g, b], None, channel_clip);
         r = reconstructed[0];
         g = reconstructed[1];
         b = reconstructed[2];
