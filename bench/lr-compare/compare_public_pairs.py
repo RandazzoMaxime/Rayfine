@@ -122,11 +122,11 @@ def _run_rust(raw: Path, sliders: dict, out_dir: Path, long_edge: int) -> tuple[
         bin_name,
         "--",
         "--raw",
-        str(raw),
+        str(raw.resolve()),
         "--sliders",
-        str(sliders_path),
+        str(sliders_path.resolve()),
         "--out",
-        str(out_dir),
+        str(out_dir.resolve()),
         "--long-edge",
         str(long_edge),
     ]
@@ -136,7 +136,11 @@ def _run_rust(raw: Path, sliders: dict, out_dir: Path, long_edge: int) -> tuple[
 
 
 def _font(size: int) -> ImageFont.ImageFont:
-    for name in ("DejaVuSans.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"):
+    for name in (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        "DejaVuSans.ttf",
+    ):
         try:
             return ImageFont.truetype(name, size)
         except OSError:
@@ -148,11 +152,14 @@ def _to_image(arr: np.ndarray) -> Image.Image:
     return Image.fromarray(np.clip(arr * 255.0 + 0.5, 0, 255).astype(np.uint8), mode="RGB")
 
 
-def _banner(text: str, width: int, fill: tuple[int, int, int] = (28, 28, 32)) -> Image.Image:
-    font = _font(14)
-    bar = Image.new("RGB", (width, 28), fill)
+def _banner(text: str, width: int, fill: tuple[int, int, int] = (28, 28, 32), height: int = 36) -> Image.Image:
+    font = _font(15)
+    bar = Image.new("RGB", (width, height), fill)
     draw = ImageDraw.Draw(bar)
-    draw.text((8, 6), text, fill=(235, 235, 235), font=font)
+    y = 8
+    for line in text.split("\n"):
+        draw.text((10, y), line, fill=(235, 235, 235), font=font)
+        y += 18
     return bar
 
 
@@ -207,13 +214,13 @@ def _contact_sheet(
         ]
     )
     caption = (
-        f"{ident}  {sliders_banner}  "
-        f"dE { _fmt(before_m.de_mean)}->{_fmt(after_m.de_mean)}  "
+        f"{ident}  {sliders_banner}\n"
+        f"dE {_fmt(before_m.de_mean)}->{_fmt(after_m.de_mean)}  "
         f"p95 {_fmt(before_m.de_p95)}->{_fmt(after_m.de_p95)}  "
         f"SSIM {_fmt(before_m.ssim, 3)}->{_fmt(after_m.ssim, 3)}  "
         f"hiMAE {_fmt(before_m.highlight_mae, 3)}->{_fmt(after_m.highlight_mae, 3)}"
     )
-    sheet = _stack_v([_banner(caption, row.width, (20, 32, 48)), row])
+    sheet = _stack_v([_banner(caption, row.width, (20, 32, 48), height=48), row])
     dest.parent.mkdir(parents=True, exist_ok=True)
     sheet.save(dest)
 
@@ -260,6 +267,7 @@ def main() -> None:
     parser.add_argument("--skip-render", action="store_true")
     args = parser.parse_args()
     pairs = _find_pairs(args.datasets)
+    pairs.sort(key=lambda p: (0 if p["split"] == "train" else 1, p["id"]))
     if not pairs:
         raise SystemExit(f"no complete pairs under {args.datasets}")
     args.out.mkdir(parents=True, exist_ok=True)

@@ -153,7 +153,7 @@ def map_crs_to_rayfine(attrs: dict[str, str]) -> ToneMapping:
             mapped.limits.append("Treated Brightness 50 / Contrast 25 as PV2010 UI identity.")
         mapped.highlights = -highlight_recovery
         mapped.shadows = fill_light
-        mapped.blacks = -(shadows_pv2010 - 5.0) * 4.0
+        mapped.blacks = max(-100.0, min(100.0, -(shadows_pv2010 - 5.0) * 2.0))
         mapped.whites = 0.0
         mapped.contrast = contrast
         mapped.exposure += brightness / 100.0
@@ -168,7 +168,7 @@ def map_crs_to_rayfine(attrs: dict[str, str]) -> ToneMapping:
             [
                 "PV2010 HighlightRecovery 0..100 → Highlights2012 0..−100 (same number, opposite sign).",
                 "PV2010 FillLight 0..100 → Shadows2012 (same sign; strength is not equivalent).",
-                "PV2010 Shadows (default 5) → Blacks2012 via −4×(Shadows−5); Whites stay 0.",
+                "PV2010 Shadows (default 5) → Blacks2012 via −2×(Shadows−5), clamped ±100; Whites stay 0.",
                 "PV2010 Brightness is folded as Exposure += Brightness/100 (FiveK 0-base).",
             ]
         )

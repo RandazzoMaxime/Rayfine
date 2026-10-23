@@ -33,6 +33,14 @@ class CrsMapTests(unittest.TestCase):
         self.assertAlmostEqual(mapped.whites, 0.0)
         self.assertAlmostEqual(mapped.contrast, -15.0)
 
+    def test_pv2010_shadows_scale_is_mild(self) -> None:
+        mapped = map_xmp_text(
+            """<rdf:Description crs:ProcessVersion="5.0" crs:Shadows="30"
+               crs:Exposure="0" crs:HighlightRecovery="0" crs:FillLight="0"
+               crs:Brightness="0" crs:Contrast="0"/>"""
+        )
+        self.assertAlmostEqual(mapped.blacks, -50.0)
+
     def test_pv2010_ui_defaults_are_identity(self) -> None:
         xmp = """<rdf:Description crs:ProcessVersion="5.0"
            crs:Exposure="0" crs:HighlightRecovery="0" crs:FillLight="0"

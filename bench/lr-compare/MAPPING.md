@@ -31,12 +31,21 @@ FiveK was retouched in Lightroom 3.4. Expert C TIFFs embed the develop packet
 | `crs:Exposure` | `exposure` | 1:1 EV. |
 | `crs:HighlightRecovery` 0…100 | `highlights` | `−HighlightRecovery` (48 → −48). |
 | `crs:FillLight` 0…100 | `shadows` | same number; strength is not equivalent. |
-| `crs:Shadows` (default 5) | `blacks` | `−4 × (Shadows − 5)`. Default 5 → 0. |
+| `crs:Shadows` (default 5) | `blacks` | `−2 × (Shadows − 5)`, clamped ±100. Default 5 → 0. Train IDs used 5; val `a0006` (Shadows 30) crushed at 4× so the scale was halved. |
 | `crs:Whites2012` | `whites` | missing → 0. |
 | `crs:Brightness` | folded into `exposure` | `exposure += Brightness / 100` (FiveK 0-base). LR3 UI default 50/25 is treated as identity. |
 | `crs:Contrast` | `contrast` | 1:1 from the FiveK 0-base. |
 | Parametric 4-point + Medium Contrast | unused | FiveK often uses these; they inflate residual ΔE. |
 | ACR 4.4 / Adobe Standard | unused | Demosaic + camera matrix stay Rayfine/rawler. |
+
+## Exposure baseline (why +EV pairs look pink/white)
+
+`develop_raw_image` normalizes sensor white to 1.0. Lightroom’s `crs:Exposure`
+is relative to Adobe’s hidden baseline (often a negative offset so Exposure 0
+already looks right). Adding Expert C’s `+2.81` EV on top of Rayfine’s
+normalized linear therefore blows midtones that Adobe still had in reserve.
+This is **not** fitted away. Judge those IDs on highlight MAE / clip, not on
+absolute ΔE.
 
 ## Limits that will show up in ΔE
 
