@@ -313,58 +313,119 @@ fn sheet(
     );
 }
 
-fn render_raw_preview(path: &Path, sliders: ToneSliders, legacy: bool) -> Option<RgbImage> {
+struct SceneBuffer {
+    width: u32,
+    height: u32,
+    pixels: Vec<[f32; 3]>,
+}
+
+impl SceneBuffer {
+    fn get(&self, x: u32, y: u32) -> [f32; 3] {
+        self.pixels[(y * self.width + x) as usize]
+    }
+}
+
+fn load_raw_scene(path: &Path) -> Option<SceneBuffer> {
     let bytes = std::fs::read(path).ok()?;
-    let img = rapidraw_lib::develop_raw_image(&bytes, true, 4.0, "default".to_string(), None).ok()?;
+    eprintln!("developing {} ({} bytes)", path.display(), bytes.len());
+    let img = rapidraw_lib::develop_raw_image(&bytes, true, 4.0, "default".to_string(), None)
+        .map_err(|e| {
+            eprintln!("develop failed for {}: {e}", path.display());
+            e
+        })
+        .ok()?;
     let rgb = img.to_rgb32f();
     let (w, h) = rgb.dimensions();
     let scale = (W as f32 / w as f32).min(H as f32 / h as f32);
     let dw = ((w as f32 * scale).round() as u32).max(1);
     let dh = ((h as f32 * scale).round() as u32).max(1);
-    let mut out = RgbImage::new(dw, dh);
+    let mut pixels = Vec::with_capacity((dw * dh) as usize);
     for y in 0..dh {
         for x in 0..dw {
             let sx = (x as f32 / dw as f32 * w as f32) as u32;
             let sy = (y as f32 / dh as f32 * h as f32) as u32;
             let p = rgb.get_pixel(sx.min(w - 1), sy.min(h - 1));
-            let rgb = [p[0], p[1], p[2]];
-            let scene = if legacy {
-                // Old quality/fast path discarded values above sensor white.
-                [rgb[0].clamp(0.0, 1.0), rgb[1].clamp(0.0, 1.0), rgb[2].clamp(0.0, 1.0)]
-            } else {
-                rgb
-            };
-            let disp = if legacy {
-                legacy_develop_pixel(scene, sliders)
-            } else {
-                develop_pixel(scene, luma(scene), sliders, true)
-            };
-            out.put_pixel(x, y, Rgb([to_u8(disp[0]), to_u8(disp[1]), to_u8(disp[2])]));
+            pixels.push([p[0], p[1], p[2]]);
         }
     }
-    Some(out)
+    Some(SceneBuffer {
+        width: dw,
+        height: dh,
+        pixels,
+    })
 }
 
-fn raw_sheet(name: &str, raw_path: &Path, sliders: ToneSliders, out_dir: &Path) {
-    let Some(before) = render_raw_preview(raw_path, sliders, true) else {
-        eprintln!("skip raw sheet {name}: failed to develop");
-        return;
-    };
-    let after = render_raw_preview(raw_path, sliders, false).unwrap();
+fn render_raw(scene: &SceneBuffer, sliders: ToneSliders, kind: PathKind) -> RgbImage {
+    let mut img = RgbImage::new(scene.width, scene.height);
+    for y in 0..scene.height {
+        for x in 0..scene.width {
+            let mut rgb = scene.get(x, y);
+            if matches!(kind, PathKind::Legacy) {
+                rgb = [rgb[0].clamp(0.0, 1.0), rgb[1].clamp(0.0, 1.0), rgb[2].clamp(0.0, 1.0)];
+            }
+            let out = develop_kind(rgb, sliders, kind);
+            img.put_pixel(x, y, Rgb([to_u8(out[0]), to_u8(out[1]), to_u8(out[2])]));
+        }
+    }
+    img
+}
+
+fn raw_clip_map(scene: &SceneBuffer, sliders: ToneSliders, kind: PathKind) -> RgbImage {
+    let mut img = RgbImage::new(scene.width, scene.height);
+    for y in 0..scene.height {
+        for x in 0..scene.width {
+            let mut rgb = scene.get(x, y);
+            if matches!(kind, PathKind::Legacy) {
+                rgb = [rgb[0].clamp(0.0, 1.0), rgb[1].clamp(0.0, 1.0), rgb[2].clamp(0.0, 1.0)];
+            }
+            let out = develop_kind(rgb, sliders, kind);
+            let hi = out.iter().any(|c| *c >= 0.998);
+            let lo = out.iter().any(|c| *c <= 0.002);
+            let px = if hi {
+                [255, 0, 0]
+            } else if lo {
+                [0, 0, 255]
+            } else {
+                [to_u8(out[0]), to_u8(out[1]), to_u8(out[2])]
+            };
+            img.put_pixel(x, y, Rgb(px));
+        }
+    }
+    img
+}
+
+fn raw_sheet(name: &str, scene: &SceneBuffer, sliders: ToneSliders, out_dir: &Path) {
+    let before = render_raw(scene, sliders, PathKind::Legacy);
+    let after = render_raw(scene, sliders, PathKind::New);
+    let reference = render_raw(scene, sliders, PathKind::Lightcraft);
+    let clip_b = raw_clip_map(scene, sliders, PathKind::Legacy);
+    let clip_a = raw_clip_map(scene, sliders, PathKind::New);
+    let (hi_b, lo_b) = clip_stats(&before);
+    let (hi_a, lo_a) = clip_stats(&after);
     let row = stack_horizontal(&[
         panel("AVANT RAW", before),
         panel("APRES RAW", after),
+        panel("LIGHTCRAFT-LIKE", reference),
+        panel("CLIP AVANT", clip_b),
+        panel("CLIP APRES", clip_a),
     ]);
     let path = out_dir.join(format!("{name}.png"));
     row.save(&path).expect("write raw sheet");
-    eprintln!("wrote {}", path.display());
+    eprintln!(
+        "wrote {}  clip_hi {:.1}%->{:.1}%  clip_lo {:.1}%->{:.1}%",
+        path.display(),
+        hi_b * 100.0,
+        hi_a * 100.0,
+        lo_b * 100.0,
+        lo_a * 100.0
+    );
 }
 
 fn main() {
     let mut args = env::args().skip(1);
     let out = PathBuf::from(args.next().unwrap_or_else(|| "docs/tone-recovery".into()));
     std::fs::create_dir_all(&out).expect("mkdir");
-    let raw = args.next().map(PathBuf::from);
+    let raws: Vec<PathBuf> = args.map(PathBuf::from).collect();
 
     let cases: &[(&str, ToneSliders)] = &[
         ("00_default", ToneSliders::from_ui(0.0, 0.0, 0.0, 0.0, 0.0)),
@@ -386,8 +447,19 @@ fn main() {
         if *name == "03_highlights_m100" || *name == "07_sky_recovery" {
             sheet(&format!("magenta_{name}"), magenta_sky, *sliders, &out);
         }
-        if let Some(raw) = &raw {
-            raw_sheet(&format!("raw_{name}"), raw, *sliders, &out);
+    }
+
+    for raw_path in &raws {
+        let Some(scene) = load_raw_scene(raw_path) else {
+            continue;
+        };
+        let stem = raw_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("raw")
+            .replace(' ', "_");
+        for (name, sliders) in cases {
+            raw_sheet(&format!("{stem}_{name}"), &scene, *sliders, &out);
         }
     }
 }
