@@ -91,22 +91,30 @@ pub fn blacks_mask(log_base: f32) -> f32 {
 /// Log-domain local tone. `log_base` should be edge-aware (guided/blurred) when available.
 ///
 /// Strengths are chosen so UI Highlights −100 recovers about 1.6 stops on a clipped sky
-/// (LightCraft uses `1.7 * mask` on a −1..1 slider). Values well above sensor white get
-/// extra tail compression so an HDR ramp does not pile up at display 1.0.
+/// (LightCraft uses `1.7 * mask` on a −1..1 slider). Overrange is compressed separately
+/// by [`overrange_scale`] so the curve stays monotone.
 #[inline]
-pub fn local_tone_delta(log_base: f32, linear_luma: f32, sliders: ToneSliders) -> f32 {
+pub fn local_tone_delta(log_base: f32, _linear_luma: f32, sliders: ToneSliders) -> f32 {
     let ws = shadow_mask(log_base);
-    let mut delta = sliders.highlights * 2.0 * highlight_mask(log_base)
+    sliders.highlights * 2.0 * highlight_mask(log_base)
         + sliders.shadows * 2.0 * ws * ws.sqrt()
         + sliders.whites * 0.24 * whites_mask(log_base)
-        + sliders.blacks * 0.32 * blacks_mask(log_base);
-    if sliders.highlights < 0.0 && linear_luma > 1.0 {
-        delta += sliders.highlights
-            * 1.4
-            * highlight_mask(log_base)
-            * linear_luma.log2().max(0.0);
+        + sliders.blacks * 0.32 * blacks_mask(log_base)
+}
+
+/// Monotone Reinhard rolloff for values above sensor white when Highlights or
+/// Whites are pulled. Continuous with the log gain at luma = 1 (C1), so an HDR
+/// ramp stays increasing instead of folding back.
+#[inline]
+pub fn overrange_scale(linear_luma: f32, gain: f32, sliders: ToneSliders) -> f32 {
+    let pull = (-sliders.highlights).max(0.0) + (-sliders.whites).max(0.0) * 0.35;
+    if pull <= 1e-6 || linear_luma <= 1.0 || gain <= 0.0 {
+        return 1.0;
     }
-    delta
+    let k = pull * 4.0;
+    let excess = linear_luma - 1.0;
+    let y_out = gain + excess * gain / (1.0 + excess * k);
+    y_out / (linear_luma * gain)
 }
 
 #[inline]
@@ -120,12 +128,18 @@ pub fn apply_exposure(rgb: [f32; 3], exposure_ev: f32) -> [f32; 3] {
 
 #[inline]
 pub fn apply_local_tone(rgb: [f32; 3], log_base: f32, sliders: ToneSliders) -> [f32; 3] {
-    let delta = local_tone_delta(log_base, luma(rgb).max(0.0), sliders);
-    if delta.abs() < 1e-8 {
+    let y = luma(rgb).max(0.0);
+    let delta = local_tone_delta(log_base, y, sliders);
+    let g = if delta.abs() < 1e-8 {
+        1.0
+    } else {
+        2f32.powf(delta)
+    };
+    let s = g * overrange_scale(y, g, sliders);
+    if (s - 1.0).abs() < 1e-8 {
         return rgb;
     }
-    let g = 2f32.powf(delta);
-    [rgb[0] * g, rgb[1] * g, rgb[2] * g]
+    [rgb[0] * s, rgb[1] * s, rgb[2] * s]
 }
 
 /// Soft shoulder above 0.95 scene-linear. Identity at and below 0.95 so default midtones
@@ -529,7 +543,8 @@ mod tests {
         let hi0 = develop_pixel([0.8, 0.8, 0.8], 0.8, ToneSliders::default(), true);
         assert!(luma(shadow) > luma(shadow0) + 0.01);
         assert!((luma(hi) - luma(hi0)).abs() < 0.03);
-        assert!(luma(mid) < 0.55);
+        let mid0 = develop_pixel([0.18, 0.18, 0.18], 0.18, ToneSliders::default(), true);
+        assert!(luma(mid) < luma(mid0) + 0.04);
     }
 
     #[test]

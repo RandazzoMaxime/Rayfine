@@ -539,17 +539,26 @@ fn apply_scene_local_tone(
     let mask_luma = mix(blurred_luma, pixel_luma, 0.25);
     let log_base = log_grey_luma(mask_luma);
     let ws = scene_shadow_mask(log_base);
-    var delta = hl * 2.0 * scene_highlight_mask(log_base)
+    let delta = hl * 2.0 * scene_highlight_mask(log_base)
         + sh * 2.0 * ws * sqrt(ws)
         + wh * 0.24 * scene_whites_mask(log_base)
         + bl * 0.32 * scene_blacks_mask(log_base);
-    if (hl < 0.0 && pixel_luma > 1.0) {
-        delta += hl * 1.4 * scene_highlight_mask(log_base) * max(log2(pixel_luma), 0.0);
+    var gain = 1.0;
+    if (abs(delta) >= 0.00001) {
+        gain = exp2(delta);
     }
-    if (abs(delta) < 0.00001) {
+    var scale = gain;
+    let pull = max(-hl, 0.0) + max(-wh, 0.0) * 0.35;
+    if (pull > 0.000001 && pixel_luma > 1.0 && gain > 0.0) {
+        let k = pull * 4.0;
+        let excess = pixel_luma - 1.0;
+        let y_out = gain + excess * gain / (1.0 + excess * k);
+        scale = y_out / max(pixel_luma * gain, 1.0e-8);
+    }
+    if (abs(scale - 1.0) < 0.00001) {
         return color;
     }
-    return color * exp2(delta);
+    return color * scale;
 }
 
 fn apply_tonal_adjustments(
