@@ -439,6 +439,10 @@ fn main() {
             "07_sky_recovery",
             ToneSliders::from_ui(0.4, -100.0, 70.0, -40.0, 10.0),
         ),
+        (
+            "08_push_and_recover",
+            ToneSliders::from_ui(1.2, -100.0, 40.0, -30.0, 0.0),
+        ),
     ];
 
     for (name, sliders) in cases {
