@@ -41,8 +41,12 @@ mod panorama_utils;
 mod preset_converter;
 mod raw_processing;
 mod raw_tone;
+mod scene_tone;
 mod tonemap;
 pub use raw_processing::develop_raw_image;
+pub use scene_tone::{
+    ToneSliders, develop_pixel, legacy_develop_pixel, lightcraft_like_pixel,
+};
 mod tagging;
 mod tagging_utils;
 mod window_customizer;

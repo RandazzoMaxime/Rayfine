@@ -450,96 +450,127 @@ fn apply_raw_contrast(color: vec3<f32>, contrast: f32) -> vec3<f32> {
     return select(pow(max(f, vec3<f32>(0.0)), vec3<f32>(1.0 / p)), color, color > vec3<f32>(1.0));
 }
 
-fn apply_tonal_adjustments(
+fn log_grey_luma(linear_luma: f32) -> f32 {
+    return log2(max(linear_luma, 1.0e-8) / 0.18);
+}
+
+fn scene_highlight_mask(log_base: f32) -> f32 {
+    return smoothstep(-1.0, 2.8, log_base);
+}
+
+fn scene_shadow_mask(log_base: f32) -> f32 {
+    return 1.0 - smoothstep(-4.8, 0.3, log_base);
+}
+
+fn scene_whites_mask(log_base: f32) -> f32 {
+    return smoothstep(0.5, 3.0, log_base);
+}
+
+fn scene_blacks_mask(log_base: f32) -> f32 {
+    return 1.0 - smoothstep(-6.0, -1.5, log_base);
+}
+
+// Soft shoulder above 0.95 scene-linear. Identity at and below 0.95 so default
+// midtones match the previous Basic transfer. Inspired by LightCraft's display
+// knee (MIT / Apache-2.0), rewritten for this pipeline.
+fn soft_shoulder_channel(x: f32) -> f32 {
+    if (x <= 0.95) { return max(x, 0.0); }
+    let d = x - 0.95;
+    return 0.95 + d / (1.0 + d / 0.12);
+}
+
+fn soft_shoulder_rgb(c: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(soft_shoulder_channel(c.r), soft_shoulder_channel(c.g), soft_shoulder_channel(c.b));
+}
+
+// Reconstruct clipped channels. Fully clipped pixels become neutral at their
+// peak; partly clipped ones lift the clipped channel to the pixel peak so a
+// white-balanced magenta sky can be darkened as a highlight.
+fn reconstruct_highlights_linear(color: vec3<f32>, blurred: vec3<f32>) -> vec3<f32> {
+    let peak = max(color.r, max(color.g, color.b));
+    const CLIP: f32 = 0.98;
+    if (peak < CLIP) { return color; }
+    let clipped = vec3<f32>(
+        select(0.0, 1.0, color.r >= CLIP),
+        select(0.0, 1.0, color.g >= CLIP),
+        select(0.0, 1.0, color.b >= CLIP)
+    );
+    let n = clipped.r + clipped.g + clipped.b;
+    if (n >= 2.5) {
+        return vec3<f32>(peak);
+    }
+    var lifted = mix(color, vec3<f32>(peak), clipped);
+    let b = max(blurred, vec3<f32>(0.0));
+    let bpeak = max(b.r, max(b.g, b.b));
+    if (bpeak > 0.05 && bpeak < CLIP) {
+        let chroma = b / max(b.r + b.g + b.b, 1.0e-4);
+        let energy = max(lifted.r + lifted.g + lifted.b, 1.0e-4);
+        let borrowed = chroma * energy;
+        lifted = mix(lifted, max(lifted, borrowed), clipped);
+    }
+    return lifted;
+}
+
+// Local Highlights / Shadows / Whites / Blacks in scene-linear log luminance.
+// The mask is evaluated on the blurred luma (edge-preserving, fewer halos);
+// the gain is applied to the pixel. Identity when every slider is 0.
+fn apply_scene_local_tone(
     color: vec3<f32>,
     blurred_color_input_space: vec3<f32>,
     is_raw: u32,
-    con: f32,
+    hl: f32,
     sh: f32,
     wh: f32,
     bl: f32
 ) -> vec3<f32> {
-    var rgb = color;
-
+    if (hl == 0.0 && sh == 0.0 && wh == 0.0 && bl == 0.0) {
+        return color;
+    }
     var blurred_linear: vec3<f32>;
     if (is_raw == 1u) {
         blurred_linear = blurred_color_input_space;
     } else {
         blurred_linear = srgb_to_linear(blurred_color_input_space);
     }
-
-    let positive_raw_black = is_raw == 1u && adjustments.global.tonemapper_mode == 0u
-        && bl > 0.0 && max(color.r, max(color.g, color.b)) <= 1.0;
-    let deferred_negative_black = is_raw == 1u && adjustments.global.tonemapper_mode == 0u
-        && bl < 0.0 && max(color.r, max(color.g, color.b)) <= 1.0;
-
-    if (wh != 0.0) {
-        // Avoid the former 100% setting's near-singular gain on RAWs.
-        let white_response = select(0.25, 0.15 + 0.04 * pow(clamp(wh * 0.3, 0.0, 1.0), 2.0), is_raw == 1u);
-        let white_level = 1.0 - wh * white_response;
-        let w_mult = 1.0 / max(white_level, 0.01);
-        rgb *= w_mult;
-        blurred_linear *= w_mult;
-    }
-
-    let pixel_luma = get_luma(max(rgb, vec3<f32>(0.0)));
+    let pixel_luma = get_luma(max(color, vec3<f32>(0.0)));
     let blurred_luma = get_luma(max(blurred_linear, vec3<f32>(0.0)));
-
-    let safe_pixel_luma = max(pixel_luma, 0.0001);
-    let safe_blurred_luma = max(blurred_luma, 0.0001);
-
-    if (sh != 0.0 || (bl != 0.0 && !positive_raw_black && !deferred_negative_black)) {
-        let t_pixel = pow(safe_pixel_luma, 0.4545);
-        let t_blurred = pow(safe_blurred_luma, 0.4545);
-
-        let shadow_lift = sh * t_pixel * pow(max(1.0 - t_pixel, 0.0), 4.5);
-        let black_power = select(12.0, 8.0, is_raw == 1u);
-        let black_lift = select(bl * t_pixel * pow(max(1.0 - t_pixel, 0.0), black_power), 0.0, positive_raw_black || deferred_negative_black);
-        let lift_amount = max(shadow_lift + black_lift, 0.0);
-
-        let t_pixel_curved = max(t_pixel + shadow_lift + black_lift, 0.0);
-
-        let shadow_pivot = 0.2;
-        let stretch_factor = 1.0 + (lift_amount * 1.3);
-        let contrasted_t = shadow_pivot + (t_pixel_curved - shadow_pivot) * stretch_factor;
-
-        let final_t = max(mix(t_pixel_curved, contrasted_t, 0.85), 0.0);
-        let curved_luma = pow(final_t, 2.2);
-
-        let luma_ratio = curved_luma / safe_pixel_luma;
-        rgb *= luma_ratio;
-
-        let detail = t_pixel / max(t_blurred, 0.0001);
-        let safe_detail = clamp(detail, 0.8, 1.25);
-
-        let noise_protection = smoothstep(0.0, 0.1, t_blurred);
-
-        let detail_amp = 1.0 + (lift_amount * 1.2 * noise_protection);
-
-        let enhanced_detail = pow(safe_detail, detail_amp);
-        let detail_correction = enhanced_detail / safe_detail;
-
-        let linear_correction = pow(detail_correction, 2.2);
-        rgb *= linear_correction;
-
-        if (luma_ratio > 1.0) {
-            let recovered_luma = get_luma(rgb);
-            let boost_amount = clamp((luma_ratio - 1.0) * 0.15, 0.0, 0.4);
-            rgb = mix(rgb, vec3<f32>(recovered_luma), boost_amount);
-        }
+    // Mix a little of the pixel luma so a hard edge does not pull the mask
+    // across (guided-filter-like, without a second pass).
+    let mask_luma = mix(blurred_luma, pixel_luma, 0.25);
+    let log_base = log_grey_luma(mask_luma);
+    let ws = scene_shadow_mask(log_base);
+    var delta = hl * 2.0 * scene_highlight_mask(log_base)
+        + sh * 2.0 * ws * sqrt(ws)
+        + wh * 0.24 * scene_whites_mask(log_base)
+        + bl * 0.32 * scene_blacks_mask(log_base);
+    if (hl < 0.0 && pixel_luma > 1.0) {
+        delta += hl * 1.4 * scene_highlight_mask(log_base) * max(log2(pixel_luma), 0.0);
     }
+    if (abs(delta) < 0.00001) {
+        return color;
+    }
+    return color * exp2(delta);
+}
 
-    if (positive_raw_black) {
-        // Common RAW lift reconstructed from PV6. The continuous interpolation
-        // matches +50/+100 and is validated at +1/+10/+25/+26/+75 on both scenes.
-        let u = clamp(0.4 * bl, 0.0, 1.0);
-        let amount = 0.25 * u * u / (0.5 + 0.5 * u);
-        let h = min(4.0 - 2.0 * amount, 3.0);
-        let c1 = exp2(-(4.0 * amount + h));
-        let c2 = exp2(-h);
-        let y = dot(max(rgb, vec3<f32>(0.0)), vec3<f32>(0.25, 0.5, 0.25));
-        let q = ((c1 + 1.0) / (y + c1)) * ((y + c2) / (c2 + 1.0));
-        rgb *= y + (1.0 - y) * q;
+fn apply_tonal_adjustments(
+    color: vec3<f32>,
+    blurred_color_input_space: vec3<f32>,
+    is_raw: u32,
+    con: f32,
+    _sh: f32,
+    wh: f32,
+    _bl: f32
+) -> vec3<f32> {
+    var rgb = color;
+    // Whites still apply here so glow/halation bloom sees the same gain.
+    if (wh != 0.0) {
+        var blurred_linear: vec3<f32>;
+        if (is_raw == 1u) {
+            blurred_linear = blurred_color_input_space;
+        } else {
+            blurred_linear = srgb_to_linear(blurred_color_input_space);
+        }
+        rgb = apply_scene_local_tone(rgb, blurred_linear, is_raw, 0.0, 0.0, wh, 0.0);
     }
 
     if (con != 0.0 && !(is_raw == 1u && adjustments.global.tonemapper_mode == 0u)) {
@@ -565,45 +596,15 @@ fn apply_highlights_adjustment(
     is_raw: u32,
     highlights_adj: f32
 ) -> vec3<f32> {
-    if (highlights_adj == 0.0) { return color_in; }
+    return apply_scene_local_tone(color_in, blurred_color_input_space, is_raw, highlights_adj, 0.0, 0.0, 0.0);
+}
 
-    let pixel_luma = get_luma(max(color_in, vec3<f32>(0.0)));
-    let safe_pixel_luma = max(pixel_luma, 0.0001);
-
-    let pixel_mask_input = tanh(safe_pixel_luma * 1.5);
-    // The previous threshold left RAW midtones unaffected, even at -100.
-    let highlight_mask = select(smoothstep(0.3, 0.95, pixel_mask_input),
-        smoothstep(0.0, 0.61, pixel_mask_input), is_raw == 1u);
-
-    if (highlight_mask < 0.001) {
-        return color_in;
-    }
-
-    let luma = pixel_luma;
-    var final_adjusted_color: vec3<f32>;
-
-    if (highlights_adj < 0.0) {
-        var new_luma: f32;
-        if (luma <= 1.0) {
-            let gamma = 1.0 - highlights_adj * select(1.75, 0.65, is_raw == 1u);
-            new_luma = pow(luma, gamma);
-        } else {
-            let luma_excess = luma - 1.0;
-            let compression_strength = -highlights_adj * 6.0;
-            let compressed_excess = luma_excess / (1.0 + luma_excess * compression_strength);
-            new_luma = 1.0 + compressed_excess;
-        }
-        let tonally_adjusted_color = color_in * (new_luma / max(luma, 0.0001));
-        let desaturation_amount = smoothstep(1.0, 10.0, luma);
-        let white_point = vec3<f32>(new_luma);
-        final_adjusted_color = mix(tonally_adjusted_color, white_point, desaturation_amount);
-    } else {
-        let adjustment = highlights_adj * select(1.75, 0.84, is_raw == 1u);
-        let factor = pow(2.0, adjustment);
-        final_adjusted_color = color_in * factor;
-    }
-
-    return mix(color_in, final_adjusted_color, highlight_mask);
+fn basic_raw_display(color: vec3<f32>) -> vec3<f32> {
+    let compressed = soft_shoulder_rgb(color * exp2(0.25));
+    var srgb_emulated = linear_to_srgb_extended(clamp(compressed, vec3<f32>(0.0), vec3<f32>(1.0)));
+    const BRIGHTNESS_GAMMA: f32 = 1.378;
+    srgb_emulated = pow(max(srgb_emulated, vec3<f32>(0.0)), vec3<f32>(1.0 / BRIGHTNESS_GAMMA));
+    return srgb_emulated * srgb_emulated * (3.0 - 2.0 * srgb_emulated);
 }
 
 fn apply_linear_exposure(color_in: vec3<f32>, exposure_adj: f32) -> vec3<f32> {
@@ -1798,14 +1799,18 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     locally_contrasted_rgb += sharpness_delta;
 
+    // Clarity-only local-Laplacian path. Highlights/Shadows used to be deferred
+    // here and skipped on overrange pixels (max > 1), which is exactly the sky
+    // we need to recover. They now run in scene-linear via apply_scene_local_tone.
     let deferred_raw_tone = is_raw == 1u && adjustments.global.tonemapper_mode == 0u && raw_tone.misc.w > 0.5
-        && (abs(t_shadows)>0.0001 || t_clarity>0.0001) && max(initial_linear_rgb.r,max(initial_linear_rgb.g,initial_linear_rgb.b))<=1.0;
+        && t_clarity>0.0001;
     if (!(deferred_raw_tone && t_clarity>0.0)) {
         locally_contrasted_rgb = apply_local_contrast(locally_contrasted_rgb, clarity_blurred, t_clarity, is_raw, 1u, 0.0);
     }
     locally_contrasted_rgb = apply_local_contrast(locally_contrasted_rgb, structure_blurred, t_structure, is_raw, 1u, 0.0);
     locally_contrasted_rgb = apply_centre_local_contrast(locally_contrasted_rgb, adjustments.global.centre, absolute_coord_i, clarity_blurred, is_raw);
 
+    locally_contrasted_rgb = reconstruct_highlights_linear(locally_contrasted_rgb, tonal_blurred);
     var processed_rgb = apply_linear_exposure(locally_contrasted_rgb, t_exposure);
 
     if (t_glow > 0.0) {
@@ -1845,10 +1850,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     composite_rgb_linear = apply_centre_tonal_and_color(composite_rgb_linear, adjustments.global.centre, absolute_coord_i);
     composite_rgb_linear = apply_white_balance(composite_rgb_linear, t_temperature, t_tint);
     composite_rgb_linear = apply_filmic_exposure(composite_rgb_linear, t_brightness);
-    let negative_raw_black_sdr = is_raw == 1u && t_blacks < 0.0 && adjustments.global.tonemapper_mode == 0u
-        && max(composite_rgb_linear.r, max(composite_rgb_linear.g, composite_rgb_linear.b)) <= 1.0;
-    composite_rgb_linear = apply_tonal_adjustments(composite_rgb_linear, tonal_blurred, is_raw, t_contrast, select(t_shadows,0.0,deferred_raw_tone), t_whites, t_blacks);
-    composite_rgb_linear = apply_highlights_adjustment(composite_rgb_linear, tonal_blurred, is_raw, select(t_highlights,0.0,deferred_raw_tone));
+    composite_rgb_linear = apply_scene_local_tone(composite_rgb_linear, tonal_blurred, is_raw, t_highlights, t_shadows, t_whites, t_blacks);
+    composite_rgb_linear = apply_tonal_adjustments(composite_rgb_linear, tonal_blurred, is_raw, t_contrast, 0.0, 0.0, 0.0);
     composite_rgb_linear = apply_color_calibration(composite_rgb_linear, adjustments.global.color_calibration);
     // HSL panel is costly per pixel; skip it when every hue/sat/lum slider is at zero.
     let hsl_magnitude =
@@ -1912,31 +1915,18 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if (adjustments.global.tonemapper_mode == 1u) {
         base_srgb = agx_full_transform(composite_rgb_linear);
     } else if (is_raw == 1u) {
-        // Empirical Basic RAW transfer validated against Adobe Standard on
-        // the comparison fixture. It is not a substitute for a DCP profile.
-        var srgb_emulated = linear_to_srgb(composite_rgb_linear * exp2(0.25));
-        const BRIGHTNESS_GAMMA: f32 = 1.378;
-        srgb_emulated = pow(srgb_emulated, vec3<f32>(1.0 / BRIGHTNESS_GAMMA));
-        const CONTRAST_MIX: f32 = 1.0;
-        let contrast_curve = srgb_emulated * srgb_emulated * (3.0 - 2.0 * srgb_emulated);
-        base_srgb = mix(srgb_emulated, contrast_curve, CONTRAST_MIX);
+        // Empirical Basic RAW transfer, now with a soft shoulder so values
+        // above sensor white are not clipped before Highlights can recover them.
+        base_srgb = basic_raw_display(composite_rgb_linear);
     } else {
-        base_srgb = linear_to_srgb(composite_rgb_linear);
+        base_srgb = linear_to_srgb_extended(soft_shoulder_rgb(composite_rgb_linear));
+        base_srgb = clamp(base_srgb, vec3<f32>(0.0), vec3<f32>(1.2));
     }
 
     if (deferred_raw_tone) {
         let working=srgb_to_prophoto(srgb_to_linear(base_srgb));
-        let toned=apply_raw_tonemap(working,read_tone_mask(absolute_coord_i),t_highlights*1.2,t_shadows*1.2,t_clarity*1.25);
+        let toned=apply_raw_tonemap(working,read_tone_mask(absolute_coord_i),0.0,0.0,t_clarity*1.25);
         base_srgb=linear_to_srgb_extended(prophoto_to_srgb(toned));
-    }
-
-    if (negative_raw_black_sdr) {
-        // Approximate the native minimum physical black clip in linear ProPhoto.
-        // Validated at -50/-100 on both scenes; full hard/soft curve is unresolved.
-        let clip = 0.0625 * clamp(-0.4 * t_blacks, 0.0, 1.0);
-        let working = srgb_to_prophoto(srgb_to_linear(base_srgb));
-        let changed = max((working - vec3<f32>(clip)) / (1.0 - clip), vec3<f32>(0.0));
-        base_srgb = linear_to_srgb_extended(prophoto_to_srgb(changed));
     }
 
     if (is_raw == 1u && adjustments.global.tonemapper_mode == 0u && t_contrast != 0.0) {

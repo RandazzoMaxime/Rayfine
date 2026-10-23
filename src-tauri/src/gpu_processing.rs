@@ -954,8 +954,8 @@ pub(crate) fn requires_guided_dehaze(a: &AllAdjustments) -> bool {
 
 pub(crate) fn requires_raw_tone_mask(a: &AllAdjustments) -> bool {
     a.global.is_raw_image == 1 && a.global.tonemapper_mode == 0 &&
-        (a.global.shadows.abs()>0.0001 || a.global.clarity>0.0001 ||
-            a.mask_adjustments[..(a.mask_count as usize).min(a.mask_adjustments.len())].iter().any(|m| m.shadows.abs()>0.0001 || m.clarity>0.0001))
+        (a.global.clarity>0.0001 ||
+            a.mask_adjustments[..(a.mask_count as usize).min(a.mask_adjustments.len())].iter().any(|m| m.clarity>0.0001))
 }
 /// Images are processed in tiles; tile-scoped GPU textures never need to exceed one tile plus overlap.
 const TILE_SIZE: u32 = 2048;

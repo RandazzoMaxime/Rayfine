@@ -141,10 +141,13 @@ fn develop_internal(
 
     let safe_highlight_compression = highlight_compression.max(1.01);
 
+    // Keep scene-linear headroom so Highlights/Whites can recover skies. The old
+    // quality clamp (highlight_compression, default 2.5) and the fast-path clamp
+    // at 1.0 discarded sensor values above white before any slider ran.
     let clamp_limit = if fast_demosaic {
-        1.0
+        crate::scene_tone::FAST_HEADROOM
     } else {
-        safe_highlight_compression
+        crate::scene_tone::SCENE_HEADROOM.max(safe_highlight_compression)
     };
 
     check_cancel()?;
@@ -184,6 +187,17 @@ fn develop_internal(
         let dim = developed_intermediate.dim();
         (dim.w as u32, dim.h as u32)
     };
+
+    if let Intermediate::ThreeColor(pixels) = &mut developed_intermediate {
+        crate::scene_tone::reconstruct_image(
+            &mut pixels.data,
+            width as usize,
+            height as usize,
+        );
+        pixels.data.par_iter_mut().for_each(|p| {
+            *p = crate::scene_tone::clamp_headroom(*p, clamp_limit);
+        });
+    }
 
     check_cancel()?;
 
@@ -265,6 +279,11 @@ fn rescale_rgb<const UNGAMMA: bool>(
             g = srgb_to_linear(g.clamp(0.0, 1.0));
             b = srgb_to_linear(b.clamp(0.0, 1.0));
         }
+
+        let reconstructed = crate::scene_tone::reconstruct_pixel([r, g, b], None);
+        r = reconstructed[0];
+        g = reconstructed[1];
+        b = reconstructed[2];
 
         let max_c = r.max(g).max(b);
 

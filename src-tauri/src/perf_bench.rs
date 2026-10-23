@@ -1095,7 +1095,7 @@ fn intermediate_to_rgba32f(inter: &Intermediate) -> Option<DynamicImage> {
 /// Uncached read (F_NOCACHE) to estimate cold external-SSD throughput.
 fn read_nocache(path: &Path) -> std::io::Result<Vec<u8>> {
     let mut f = fs::File::open(path)?;
-    #[cfg(unix)]
+    #[cfg(target_os = "macos")]
     {
         use std::os::fd::AsRawFd;
         unsafe {
@@ -2293,8 +2293,8 @@ fn perf_shader_profile() {
         ("- white balance", vec![("composite_rgb_linear = apply_white_balance(composite_rgb_linear, t_temperature, t_tint);", "")]),
         ("- filmic exposure", vec![("composite_rgb_linear = apply_filmic_exposure(composite_rgb_linear, t_brightness);", "")]),
         ("- tonal + highlights", vec![
-            ("composite_rgb_linear = apply_tonal_adjustments(composite_rgb_linear, tonal_blurred, is_raw, t_contrast, t_shadows, t_whites, t_blacks);", ""),
-            ("composite_rgb_linear = apply_highlights_adjustment(composite_rgb_linear, tonal_blurred, is_raw, t_highlights);", ""),
+            ("composite_rgb_linear = apply_scene_local_tone(composite_rgb_linear, tonal_blurred, is_raw, t_highlights, t_shadows, t_whites, t_blacks);", ""),
+            ("composite_rgb_linear = apply_tonal_adjustments(composite_rgb_linear, tonal_blurred, is_raw, t_contrast, 0.0, 0.0, 0.0);", ""),
         ]),
         ("- color calibration", vec![("composite_rgb_linear = apply_color_calibration(composite_rgb_linear, adjustments.global.color_calibration);", "")]),
         ("- HSL panel", vec![("if (hsl_magnitude > 0.0001) {", "if (false) {")]),
