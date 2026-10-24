@@ -272,3 +272,48 @@ Saturation stays 0 on all 9, as in the XMP.
 
 Highlight recovery: not re-run this pass; luma CameraTone + `highlight_desat`
 unchanged. Sky ΔEV train **+0.05**.
+
+### After the JPEG-extract + dim chroma_scale fix
+
+Root cause of the 0273/0156 miss: `extract_embedded_jpeg` took the
+largest `FF D8…first FF D9`. On Panasonic RW2 (and a6600-0156 ARW) the
+CFA holds stray SOI/EOI bigger than the real preview (2.4 MB / 8.5 MB)
+that do not decode, so CameraTone never fitted.
+
+Fix: LightCraft `walk_jpeg` (SOF baseline/progressive, 3 components,
+long edge ≥ 200). 0273 → 1920×1440, 0156 → 1616×1080. Both now
+`CameraFitted`.
+
+On a dim camera JPEG (mean Y < 0.08) the Adobe path also runs
+`fit_chroma` toward that preview (held-out gate). Landscape at the
+lifted night luma was 3.5× LR C*; the JPEG chroma curve is the
+available reference, not a global sat slider. Daylight IR stays on
+identity chroma.
+
+**C* Lab D50 after this fix:**
+
+| Split | Image | C* LR | LC | RF | RF/LR |
+|---|---|---:|---:|---:|---:|
+| train | a6600-0046 | 9.63 | 7.37 | 11.61 | 1.21 |
+| train | a6600-0089 | 15.57 | 11.54 | 13.39 | 0.86 |
+| train | g95-0192 | 29.72 | 31.58 | 24.30 | 0.82 |
+| train | g95-0314 | 11.14 | 9.02 | 10.36 | 0.93 |
+| train | z6ii-0086 | 13.70 | 17.52 | 16.19 | 1.18 |
+| val | a6600-0156 | 15.91 | 17.00 | 18.62 | 1.17 |
+| val | a7riv-1852 | 47.28 | 40.83 | 54.01 | 1.14 |
+| val | g95-0273 | 5.66 | 6.82 | 2.35 | 0.42 |
+| val | g95-1146 | 22.99 | 21.39 | 20.06 | 0.87 |
+
+Train mean RF/LR **0.999**. Val **0.900** (cible 0.90–1.10). 0273 is
+muted vs LR (camera JPEG almost grey in the shadows, k≈0.09) but ΔE
+**8.46 beats LC 9.24**. A 0.55 chroma floor was tried and rejected
+(C* 2.20×, ΔE 11.25).
+
+**ΔE réduit:** train LC / RF / avant = **9.61 / 11.67 / 11.53**. Val
+**11.92 / 12.81 / 14.82**. Still not ≤ LC overall. 0273, 0089 (5.31)
+and z6ii (13.05) beat LC. 0156 10.35 next to LC 10.08 (was Hdr/DRO-off
+10.55). Residual train gap is 0046 Adobe colour vs LC’s JPEG 3×3
+(9.25 vs 3.32) and G95 0192/0314.
+
+Train ΔEV LC / RF **+0.06 / +0.04**. Highlight path unchanged
+(`CameraTone` + `highlight_desat`). Same wgpu shader preview/export.
