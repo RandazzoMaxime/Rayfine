@@ -111,9 +111,23 @@ def _banner(text: str, width: int, fill: tuple[int, int, int] = (28, 28, 32), he
     bar = Image.new("RGB", (width, height), fill)
     draw = ImageDraw.Draw(bar)
     y = 4
-    for line in text.split("\n"):
-        draw.text((8, y), line, fill=(235, 235, 235), font=font)
+    cleaned = text.replace("\r", " ")
+    wrapped: list[str] = []
+    for line in cleaned.split("\n"):
+        line = " ".join(line.split())
+        while len(line) > 140:
+            wrapped.append(line[:140])
+            line = line[140:]
+        if line:
+            wrapped.append(line)
+    for line in wrapped:
+        try:
+            draw.text((8, y), line, fill=(235, 235, 235), font=font)
+        except Exception:
+            draw.text((8, y), line.encode("ascii", "replace").decode("ascii"), fill=(235, 235, 235), font=font)
         y += 16
+        if y > height - 14:
+            break
     return bar
 
 
@@ -200,7 +214,7 @@ def _sheet(
         f"{zone_txt}{robust_txt}\n"
         f"{notes}"
     )
-    sheet = _stack_v([_banner(caption, row.width, (20, 32, 48), height=68), row])
+    sheet = _stack_v([_banner(caption, row.width, (20, 32, 48), height=88), row])
     dest.parent.mkdir(parents=True, exist_ok=True)
     sheet.save(dest)
 
@@ -326,6 +340,7 @@ def main() -> None:
             f"{pair['meta'].get('page') or pair['meta'].get('jpeg_url') or ''}"
         )
         notes = " | ".join([provenance] + profile_notes + mapped.limits[:4])
+        notes = " ".join(notes.replace("\r", " ").split())
         stage_metrics: dict[str, dict] = {}
         for stage in (*STAGES, *PROFILE_LAYERS):
             png = work / f"adobe_{stage}.png"

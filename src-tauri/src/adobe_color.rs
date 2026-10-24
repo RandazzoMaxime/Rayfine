@@ -1051,7 +1051,19 @@ fn xmp_elem(xmp: &str, tag: &str) -> Option<String> {
     let close = format!("</{tag}>");
     let start = xmp.find(&open)? + open.len();
     let end = xmp[start..].find(&close)? + start;
-    Some(xmp[start..end].trim().to_string())
+    Some(clean_xmp_name(&xmp[start..end]))
+}
+
+fn clean_xmp_name(raw: &str) -> String {
+    if let Some(li) = raw.find("<rdf:li") {
+        if let Some(gt) = raw[li..].find('>') {
+            let rest = &raw[li + gt + 1..];
+            if let Some(end) = rest.find('<') {
+                return rest[..end].trim().to_string();
+            }
+        }
+    }
+    raw.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Load `crs:Table_<UUID>` from an Adobe Look XMP and merge onto `profile` (replaces DCP LookTable).
@@ -2495,6 +2507,7 @@ mod tests {
         apply_look_xmp(&mut p, Path::new(path)).expect("landscape");
         assert_eq!(p.look_uuid.to_ascii_uppercase(), "0B3BFB5CFB7DBF7FF175E98F24D316B0");
         assert_eq!(p.look_dims, [36, 16, 16]);
+        assert_eq!(p.look_name, "Adobe Landscape");
         assert!(p.has_look);
         let mid = apply_look_table(&p, [0.22, 0.22, 0.22]);
         assert!(mid.iter().all(|c| c.is_finite()), "{mid:?}");
