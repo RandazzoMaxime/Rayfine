@@ -121,6 +121,7 @@ struct GlobalAdjustments {
     halation_hue: f32,
     gray_mixer: array<f32, 8>,
     lc_tone_knots: array<vec2<f32>, 32>,
+    lc_chroma: array<vec4<f32>, 2>,
 }
 
 struct MaskAdjustments {
@@ -1984,6 +1985,14 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         for (var ki = 0u; ki < 32u; ki = ki + 1u) {
             LC_KNOTS[ki] = adjustments.global.lc_tone_knots[ki];
         }
+        LC_CHROMA[0] = adjustments.global.lc_chroma[0].x;
+        LC_CHROMA[1] = adjustments.global.lc_chroma[0].y;
+        LC_CHROMA[2] = adjustments.global.lc_chroma[0].z;
+        LC_CHROMA[3] = adjustments.global.lc_chroma[0].w;
+        LC_CHROMA[4] = adjustments.global.lc_chroma[1].x;
+        LC_CHROMA[5] = adjustments.global.lc_chroma[1].y;
+        LC_CHROMA[6] = adjustments.global.lc_chroma[1].z;
+        LC_CHROMA[7] = adjustments.global.lc_chroma[1].w;
         composite_rgb_linear = lc_develop_linear(
             composite_rgb_linear,
             mask,

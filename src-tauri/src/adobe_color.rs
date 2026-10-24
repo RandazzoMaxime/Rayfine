@@ -636,6 +636,31 @@ pub fn adobe_color_only_linear(
     prophoto_to_srgb_linear(ppr)
 }
 
+/// Adobe colour through HueSatMap + BaselineExposure + LookTable → linear sRGB.
+///
+/// This is the saturation Adobe Standard + Landscape actually apply when the
+/// user curve is Linear and Vibrance is 0. ProfileToneCurve is skipped: the
+/// LightCraft CameraTone owns luminance. No user Exposure (the LC slider does).
+pub fn adobe_look_linear(
+    cam: [f32; 3],
+    profile: &DngProfile,
+    settings: AdobeSettings,
+) -> [f32; 3] {
+    let (prepared, temp) = wb_and_forward(cam, profile, settings);
+    let ppr = camera_to_prophoto_settings(prepared, profile, settings, temp);
+    let flags = PipeFlags {
+        hsm: true,
+        baseline: true,
+        user_expo: false,
+        look: settings.apply_look,
+        tone: false,
+        curve: false,
+        color: false,
+    };
+    let ppr = apply_profile_stack(ppr, profile, settings, temp, flags);
+    prophoto_to_srgb_linear(ppr)
+}
+
 pub fn prophoto_to_srgb_linear(ppr: [f32; 3]) -> [f32; 3] {
     let xyz_d50 = mul3(PROPHOTO_TO_XYZ_D50, ppr);
     let xyz_d65 = mul3(BRADFORD_D50_TO_D65, xyz_d50);
@@ -2634,5 +2659,51 @@ mod tests {
         assert!((y1 - y0).abs() < 0.08, "mid grey exploded {mid:?}");
         let blue = apply_look_table(&p, [0.12, 0.16, 0.28]);
         assert!(blue[2] > blue[0], "blue should stay blue-ish {blue:?}");
+    }
+
+    fn rgb_chroma(rgb: [f32; 3]) -> f32 {
+        let y = (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]).max(1e-6);
+        ((rgb[0] / y - 1.0).powi(2) + (rgb[1] / y - 1.0).powi(2) + (rgb[2] / y - 1.0).powi(2)).sqrt()
+    }
+
+    #[test]
+    fn adobe_look_linear_keeps_hsm_and_look_chroma() {
+        let dcp = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../bench/lr-compare/datasets/dcp/a7riv-adobe_standard.dcp"
+        );
+        let look = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../bench/lr-compare/datasets/looks/adobe_landscape.xmp"
+        );
+        let Ok(bytes) = std::fs::read(dcp) else {
+            return;
+        };
+        let mut p = parse_dng_profile(&bytes).expect("dcp");
+        if Path::new(look).is_file() {
+            apply_look_xmp(&mut p, Path::new(look)).expect("landscape");
+        }
+        let settings = AdobeSettings {
+            use_as_shot: true,
+            apply_look: true,
+            ..AdobeSettings::default()
+        };
+        let cam = [0.28, 0.16, 0.08];
+        let matrix = adobe_color_only_linear(cam, &p, settings);
+        let with_look = adobe_look_linear(cam, &p, settings);
+        assert!(matrix.iter().all(|c| c.is_finite()), "{matrix:?}");
+        assert!(with_look.iter().all(|c| c.is_finite()), "{with_look:?}");
+        if p.has_hue_sat_map || p.has_look {
+            assert!(
+                (rgb_chroma(with_look) - rgb_chroma(matrix)).abs() > 1e-4
+                    || (with_look[0] - matrix[0]).abs() > 1e-4,
+                "HSM/Look must change colour vs matrix-only: {matrix:?} vs {with_look:?}"
+            );
+        }
+        // Neutrals stay near-neutral (no sat boost of grey).
+        let grey = adobe_look_linear([0.18, 0.18, 0.18], &p, settings);
+        let gmax = grey[0].max(grey[1]).max(grey[2]);
+        let gmin = grey[0].min(grey[1]).min(grey[2]);
+        assert!(gmax - gmin < 0.08, "grey went colourful {grey:?}");
     }
 }

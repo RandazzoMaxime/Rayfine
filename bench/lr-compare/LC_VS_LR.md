@@ -185,3 +185,54 @@ a bit colder still (JPEG matrix on a sky-heavy proxy).
 
 Highlight recovery: synthetic sky H−100 clip **57.2% → 0%**. a6600
 preset ciel / contre-jour / neige regenerated.
+
+## Chroma / saturation vs Adobe (Maxime: « presque du noir et blanc »)
+
+Priority is C* Lab D50, not a hardcoded sat slider. Measured on the
+ported path **before** this fix (`chroma.json`):
+
+| Split | Image | C* LR | LC | RF | RF/LR | LC/LR |
+|---|---|---:|---:|---:|---:|---:|
+| train | a6600-0046 | 9.63 | 7.37 | 8.62 | 0.90 | 0.77 |
+| train | a6600-0089 | 15.57 | 11.54 | 8.54 | **0.55** | 0.74 |
+| train | g95-0192 | 29.72 | 31.58 | 28.88 | 0.97 | 1.06 |
+| train | g95-0314 | 11.14 | 9.02 | 7.55 | **0.68** | 0.81 |
+| train | z6ii-0086 | 13.70 | 17.52 | 13.87 | 1.01 | 1.28 |
+| val | a6600-0156 | 15.91 | 17.00 | 15.62 | 0.98 | 1.07 |
+| val | a7riv-1852 | 47.28 | 40.83 | 24.82 | **0.53** | 0.86 |
+| val | g95-0273 | 5.66 | 6.82 | 14.43 | **2.55** | 1.20 |
+| val | g95-1146 | 22.99 | 21.39 | 18.22 | 0.79 | 0.93 |
+
+Train mean RF/LR **0.82** (need 0.90–1.10). Smoking guns: 0089 ice,
+a7riv foliage/warm (warm 0.34×), g95-0314 warm 0.53×. XMP `Saturation=0`
+everywhere; `Vibrance` 0 on 0046/0156/0192/z6ii — sliders are not the
+B&W cause. Vibrance/Saturation were already mapped 1:1 into LC JSON
+and `LcSliders`.
+
+### Where C* was lost (step vs LightCraft / Adobe)
+
+1. **HueSatMap + Landscape LookTable not on the default path.** Adobe
+   sat on Linear + Vib 0 is HSM + Look, not the point curve.
+   `adobe_color_only_linear` was matrix-only (comment: no HSM/Look).
+2. **JPEG 3×3 chromaticity** (`fit_matrix`) pulls toward the camera
+   JPEG, which is less colourful than Adobe Landscape. Applying it on
+   top of Adobe colour would fight the LookTable.
+3. **Luma CameraTone without `chroma_scale`.** LightCraft finish is
+   `d = c*(o/yl)` then `d = o + (d−o)*k` (`tone.rs` / `finish.rs`).
+   A luma curve desaturates vs Adobe’s hue-preserving RGB curve.
+   RF sat below LC on 0089 / a7riv / 0314 is this missing `k`.
+4. **Not** a double LookTable, not unmapped XMP Vib/Sat, not HL
+   recovery (`highlight_desat` only when `max > 1`).
+
+### Root fix (no global sat boost)
+
+- When a DCP has HSM or a Look sidecar: start from `adobe_look_linear`
+  (WB + ForwardMatrix + HSM + BE + Look → linear sRGB). Skip the JPEG
+  3×3. CameraTone stays luma-only.
+- Port LightCraft’s 8-node `chroma_scale` (CPU + the same wgpu shader
+  preview/export). JPEG path: Nadaraya–Watson `fit_chroma` toward the
+  embedded JPEG, held-out gate. Adobe path: `k(o)` is the
+  per-channel / luma-scale chroma ratio of *this* CameraTone — Adobe’s
+  hue-preserving RGB behaviour, not a constant.
+- Vibrance / Saturation XMP still go through `LcSliders::from_ui` →
+  OkLab (`apply_vibrance_sat`).

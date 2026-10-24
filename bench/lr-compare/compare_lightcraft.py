@@ -281,9 +281,29 @@ def _sheet(
         f"{notes}"
     )
     sheet = _stack_v([_banner(caption, top.width, (20, 32, 48), height=96), top, heat_row])
-    sheet = _draw_inset(sheet, _neutral_inset(lr, lc, rf, rf_old))
+    sheet = _draw_inset(
+        sheet,
+        _chroma_inset(lr, lc, rf, rf_old) + "\n" + _neutral_inset(lr, lc, rf, rf_old),
+    )
     dest.parent.mkdir(parents=True, exist_ok=True)
     sheet.save(dest)
+
+
+def _cstar(srgb: np.ndarray) -> float:
+    lab = srgb_to_lab_d50(srgb)
+    return float(np.hypot(lab[..., 1], lab[..., 2]).mean())
+
+
+def _chroma_inset(lr: np.ndarray, lc: np.ndarray, rf: np.ndarray, before: np.ndarray | None) -> str:
+    rows = [("LR", _cstar(lr)), ("LC", _cstar(lc)), ("RF", _cstar(rf))]
+    if before is not None:
+        rows.append(("avant", _cstar(before)))
+    lr_c = rows[0][1]
+    parts = []
+    for name, c in rows:
+        ratio = f"  {c / lr_c:.2f}×LR" if lr_c > 1e-6 and name != "LR" else ""
+        parts.append(f"{name} C*{c:.2f}{ratio}")
+    return "C* Lab D50  " + "  |  ".join(parts)
 
 
 def _neutral_inset(lr: np.ndarray, lc: np.ndarray, rf: np.ndarray, before: np.ndarray | None) -> str:
@@ -306,14 +326,32 @@ def _neutral_inset(lr: np.ndarray, lc: np.ndarray, rf: np.ndarray, before: np.nd
 
 
 def _draw_inset(sheet: Image.Image, text: str) -> Image.Image:
+    return _draw_inset_at(sheet, text, corner="bl")
+
+
+def _draw_inset_at(sheet: Image.Image, text: str, corner: str = "bl") -> Image.Image:
     draw = ImageDraw.Draw(sheet)
     font = _font(11)
     pad = 8
-    lines = [text[i : i + 110] for i in range(0, len(text), 110)] or [text]
+    lines: list[str] = []
+    for raw in text.splitlines() or [text]:
+        if len(raw) <= 120:
+            lines.append(raw)
+            continue
+        for i in range(0, len(raw), 120):
+            lines.append(raw[i : i + 120])
     w = max(draw.textlength(line, font=font) for line in lines)
     h = 14 * len(lines) + pad * 2
-    x0, y0 = 10, sheet.height - int(h) - 10
-    draw.rectangle((x0, y0, x0 + int(w) + pad * 2, y0 + h), fill=(16, 22, 32))
+    box_w = int(w) + pad * 2
+    if corner == "tr":
+        x0, y0 = sheet.width - box_w - 10, 10
+    elif corner == "tl":
+        x0, y0 = 10, 10
+    elif corner == "br":
+        x0, y0 = sheet.width - box_w - 10, sheet.height - int(h) - 10
+    else:
+        x0, y0 = 10, sheet.height - int(h) - 10
+    draw.rectangle((x0, y0, x0 + box_w, y0 + h), fill=(16, 22, 32))
     for i, line in enumerate(lines):
         draw.text((x0 + pad, y0 + pad + i * 14), line, fill=(235, 230, 210), font=font)
     return sheet
@@ -479,8 +517,8 @@ def main() -> None:
         )
         notes = (
             f"LC {lc_info['version']} commit {lc_info['commit']}  "
-            f"Rayfine: WB relative 6500/0=as-shot, JPEG chromaticity + CameraTone, "
-            f"même shader preview/export  align {lc_align.method}/{rf_align.method}"
+            f"Rayfine: Adobe HSM+Look (sat) + JPEG CameraTone (luma) + chroma_scale, "
+            f"Vib/Sat XMP, même shader preview/export  align {lc_align.method}/{rf_align.method}"
         )
         _sheet(
             pair["id"],

@@ -12,7 +12,10 @@
 // Spectral / DNG camera matrices are Apache-2.0 rawtoaces-data via LightCraft
 // `spectral_table.rs`. This file does not embed Adobe profiles.
 
-use crate::lightcraft_develop::{camera_tone_apply, lum2020, srgb_to_rec2020, SONY_DRO_OFF};
+    use crate::lightcraft_develop::{
+    apply_chroma_scale, camera_tone_apply, lum2020, srgb_to_rec2020, CHROMA_N, IDENTITY3,
+    IDENTITY_CHROMA, SONY_DRO_OFF,
+};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
@@ -20,11 +23,13 @@ use std::sync::{Mutex, OnceLock};
 const MIN_TONE_RANGE: f32 = 1.2;
 const PROXY: u32 = 96;
 
-/// Fitted per-photo look: chromaticity matrix in Rec.2020 and 32-knot tone.
+/// Fitted per-photo look: chromaticity matrix in Rec.2020, 32-knot tone,
+/// and 8-node chroma-by-display-luminance (LightCraft `CameraTone.chroma`).
 #[derive(Clone, Copy, Debug)]
 pub struct CameraLook {
     pub matrix: [[f32; 3]; 3],
     pub knots: [[f32; 2]; 32],
+    pub chroma: [f32; CHROMA_N],
 }
 
 impl Default for CameraLook {
@@ -36,6 +41,7 @@ impl Default for CameraLook {
                 [0.0, 0.0, 1.0],
             ],
             knots: SONY_DRO_OFF,
+            chroma: IDENTITY_CHROMA,
         }
     }
 }
@@ -272,12 +278,201 @@ fn jpeg_to_rec2020(bytes: &[u8], long: u32) -> Option<(u32, u32, Vec<[f32; 3]>)>
     Some((w, h, linear))
 }
 
+/// Kernel width of the chroma curve's nodes (display luminance) and the weight
+/// at which a node keeps half of its estimate (LightCraft `fit_chroma`).
+const CHROMA_KERNEL: f64 = 0.08;
+const CHROMA_SHRINK: f64 = 2.0;
+
+fn pair_chroma(p: [f32; 3]) -> Option<f32> {
+    let y = lum2020(p);
+    if y <= 1e-8 {
+        return None;
+    }
+    Some(
+        (0..3)
+            .map(|i| {
+                let t = p[i] / y - 1.0;
+                t * t
+            })
+            .sum::<f32>()
+            .sqrt(),
+    )
+}
+
+fn displayed_chroma(scene: [f32; 3], knots: &[[f32; 2]; 32], chroma: &[f32; CHROMA_N]) -> [f32; 3] {
+    let y = lum2020(scene);
+    if y <= 0.0 {
+        return [0.0; 3];
+    }
+    let o = camera_tone_apply(y, knots);
+    let d = [scene[0] * o / y, scene[1] * o / y, scene[2] * o / y];
+    apply_chroma_scale(d, o, chroma)
+}
+
+/// Invert a monotone CameraTone: scene luminance whose display value is `o`.
+fn invert_camera_tone(knots: &[[f32; 2]; 32], o: f32) -> f32 {
+    let target = o.clamp(1e-4, 0.98);
+    let mut lo = knots[0][0] * 0.25;
+    let mut hi = knots[31][0] * 4.0;
+    for _ in 0..24 {
+        let mid = 0.5 * (lo + hi);
+        if camera_tone_apply(mid, knots) < target {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    0.5 * (lo + hi)
+}
+
+/// Adobe hue-preserving RGB vs luma scale, sampled on the CameraTone knots.
+/// Not a hardcoded sat boost: `k(o)` is the per-channel / luma-scale chroma
+/// ratio of *this* curve at display luminance `o`.
+pub fn chroma_from_hue_preserving(knots: &[[f32; 2]; 32]) -> [f32; CHROMA_N] {
+    let dirs: [[f32; 3]; 5] = [
+        [1.15, 0.95, 0.80],
+        [0.75, 0.90, 1.20],
+        [0.70, 1.15, 0.70],
+        [1.25, 0.80, 0.70],
+        [0.85, 0.85, 1.20],
+    ];
+    let mut out = IDENTITY_CHROMA;
+    for j in 0..CHROMA_N {
+        let target_o = j as f32 / (CHROMA_N - 1) as f32;
+        let y = invert_camera_tone(knots, target_o.max(0.04));
+        if y <= 1e-6 {
+            continue;
+        }
+        let mut wsum = 0.0f32;
+        let mut ksum = 0.0f32;
+        for dir in dirs {
+            let rgb = [dir[0] * y, dir[1] * y, dir[2] * y];
+            let yl = lum2020(rgb);
+            if yl <= 1e-6 {
+                continue;
+            }
+            let o = camera_tone_apply(yl, knots);
+            if o <= 1e-6 {
+                continue;
+            }
+            let luma_s = [rgb[0] * o / yl, rgb[1] * o / yl, rgb[2] * o / yl];
+            let per = [
+                camera_tone_apply(rgb[0], knots),
+                camera_tone_apply(rgb[1], knots),
+                camera_tone_apply(rgb[2], knots),
+            ];
+            let yp = lum2020(per);
+            if yp <= 1e-6 {
+                continue;
+            }
+            let hp = [per[0] * o / yp, per[1] * o / yp, per[2] * o / yp];
+            let Some(cl) = pair_chroma(luma_s) else {
+                continue;
+            };
+            let Some(ch) = pair_chroma(hp) else {
+                continue;
+            };
+            if cl > 1e-4 {
+                ksum += (ch / cl).clamp(0.05, 4.0);
+                wsum += 1.0;
+            }
+        }
+        if wsum > 0.0 {
+            out[j] = (ksum / wsum).clamp(0.0, 4.0);
+        }
+    }
+    out
+}
+
+/// Nadaraya–Watson chroma curve (LightCraft `fit_chroma`). Held-out every
+/// third pair; accepted only when held-out RGB error drops.
+fn fit_chroma(
+    pairs: &[([f32; 3], [f32; 3])],
+    matrix: [[f32; 3]; 3],
+    knots: &[[f32; 2]; 32],
+) -> Option<[f32; CHROMA_N]> {
+    let apply_m = |v: [f32; 3]| -> [f32; 3] {
+        [
+            matrix[0][0] * v[0] + matrix[0][1] * v[1] + matrix[0][2] * v[2],
+            matrix[1][0] * v[0] + matrix[1][1] * v[1] + matrix[1][2] * v[2],
+            matrix[2][0] * v[0] + matrix[2][1] * v[1] + matrix[2][2] * v[2],
+        ]
+    };
+    let samples: Vec<(f64, f64, f64)> = pairs
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| i % 3 != 0)
+        .filter_map(|(_, (x, y))| {
+            let p = displayed_chroma(apply_m(*x), knots, &IDENTITY_CHROMA);
+            let (cp, cy) = (pair_chroma(p)?, pair_chroma(*y)?);
+            (cp > 0.05).then(|| {
+                (
+                    lum2020(p) as f64,
+                    cp as f64,
+                    ((cy.max(1e-3) / cp) as f64).ln().clamp(0.05f64.ln(), 2.5f64.ln()),
+                )
+            })
+        })
+        .collect();
+    if samples.len() < 64 {
+        return None;
+    }
+    let mut curve = IDENTITY_CHROMA;
+    for (j, node) in curve.iter_mut().enumerate() {
+        let at = j as f64 / (CHROMA_N - 1) as f64;
+        let (mut weight, mut sum) = (0.0, 0.0);
+        for &(o, cp, log_ratio) in &samples {
+            let k = (-0.5 * ((o - at) / CHROMA_KERNEL).powi(2)).exp() * cp;
+            weight += k;
+            sum += k * log_ratio;
+        }
+        *node = (sum / (weight + CHROMA_SHRINK)).exp() as f32;
+        if !node.is_finite() || !(0.0..=4.0).contains(node) {
+            return None;
+        }
+    }
+    let error = |chroma: &[f32; CHROMA_N]| -> f64 {
+        pairs
+            .iter()
+            .step_by(3)
+            .map(|(x, y)| {
+                let p = displayed_chroma(apply_m(*x), knots, chroma);
+                (0..3).map(|c| (p[c] - y[c]).powi(2) as f64).sum::<f64>()
+            })
+            .sum()
+    };
+    let (before, after) = (error(&IDENTITY_CHROMA), error(&curve));
+    (after.is_finite() && after < before).then_some(curve)
+}
+
 /// Fit a look from the RAW's embedded JPEG onto already-developed linear sRGB pixels.
+/// `colour_locked` skips the JPEG 3×3 (Adobe HSM+Look already owns colour) and
+/// derives chroma from the CameraTone itself instead of the JPEG.
 pub fn fit_look_from_raw(
     raw_bytes: &[u8],
     developed_srgb: &[[f32; 3]],
     width: usize,
     height: usize,
+) -> Option<CameraLook> {
+    fit_look_from_raw_opts(raw_bytes, developed_srgb, width, height, false)
+}
+
+/// Tone-only JPEG fit: identity matrix, chroma from the hue-preserving CameraTone.
+pub fn fit_look_tone_only(
+    raw_bytes: &[u8],
+    developed_srgb: &[[f32; 3]],
+    width: usize,
+    height: usize,
+) -> Option<CameraLook> {
+    fit_look_from_raw_opts(raw_bytes, developed_srgb, width, height, true)
+}
+
+fn fit_look_from_raw_opts(
+    raw_bytes: &[u8],
+    developed_srgb: &[[f32; 3]],
+    width: usize,
+    height: usize,
+    colour_locked: bool,
 ) -> Option<CameraLook> {
     let jpeg = extract_embedded_jpeg(raw_bytes)?;
     let (jw, jh, jpix) = jpeg_to_rec2020(&jpeg, PROXY)?;
@@ -318,12 +513,22 @@ pub fn fit_look_from_raw(
     if raw_is_sony(raw_bytes) {
         knots = apply_sony_dro_off_ceiling(knots);
     }
-    let matrix = fit_chromaticity_matrix(&pairs).unwrap_or([
-        [1.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [0.0, 0.0, 1.0],
-    ]);
-    Some(CameraLook { matrix, knots })
+    let matrix = if colour_locked {
+        IDENTITY3
+    } else {
+        fit_chromaticity_matrix(&pairs).unwrap_or(IDENTITY3)
+    };
+    let chroma = if colour_locked {
+        // JPEG chroma would pull Adobe HSM+Look back toward the camera JPEG.
+        chroma_from_hue_preserving(&knots)
+    } else {
+        fit_chroma(&pairs, matrix, &knots).unwrap_or(IDENTITY_CHROMA)
+    };
+    Some(CameraLook {
+        matrix,
+        knots,
+        chroma,
+    })
 }
 
 /// Fit from an already-developed linear RGB32F image (preview / export load).
@@ -418,5 +623,31 @@ mod tests {
         remember_look("/tmp/cache-test.arw", look);
         let got = look_for_path("/tmp/cache-test.arw").expect("cached");
         assert_eq!(got.knots[0], look.knots[0]);
+        assert_eq!(got.chroma, IDENTITY_CHROMA);
+    }
+
+    #[test]
+    fn hue_preserving_chroma_is_finite_and_not_a_global_boost() {
+        let k = chroma_from_hue_preserving(&SONY_DRO_OFF);
+        assert!(k.iter().all(|v| v.is_finite() && (0.0..=4.0).contains(v)));
+        // A global sat slider would be a constant > 1. The curve must vary
+        // with display luminance (shadows vs highlights).
+        let span = k.iter().copied().fold(0.0f32, f32::max)
+            - k.iter().copied().fold(4.0f32, f32::min);
+        assert!(span > 0.05, "chroma nodes must depend on the tone: {k:?}");
+    }
+
+    #[test]
+    fn fit_chroma_accepts_a_more_colourful_reference() {
+        let mut pairs = Vec::new();
+        for i in 0..300 {
+            let t = 0.08 + i as f32 * 0.002;
+            let scene = [t * 1.05, t * 0.95, t * 0.80];
+            let jpeg = [t * 1.25, t * 0.90, t * 0.65];
+            pairs.push((scene, jpeg));
+        }
+        let curve = fit_chroma(&pairs, IDENTITY3, &SONY_DRO_OFF).expect("chroma");
+        let mid = curve[3];
+        assert!(mid > 1.05, "vivid JPEG must lift midtone chroma: {curve:?}");
     }
 }

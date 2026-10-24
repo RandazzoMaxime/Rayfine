@@ -10,9 +10,9 @@
 use image::{Rgb, RgbImage};
 use rapidraw_lib::{
     AdobeSettings, AdobeStage, LcDevelop, LcSliders, NamedCurve, ToneModel, ToneSliders, WbMode,
-    adobe_color_only_linear, develop_adobe_image, develop_image, develop_image_lc,
-    develop_raw_camera_linear, develop_raw_image, fit_look_from_raw, legacy_develop_pixel,
-    parse_color_profile_with_sidecars,
+    adobe_color_only_linear, adobe_look_linear, develop_adobe_image, develop_image, develop_image_lc,
+    develop_raw_camera_linear, develop_raw_image, fit_look_from_raw, fit_look_tone_only,
+    legacy_develop_pixel, parse_color_profile_with_sidecars,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -326,7 +326,7 @@ fn main() {
             parsed.vibrance,
             parsed.saturation,
         );
-        let wb = if parsed.use_as_shot || parsed.temperature_k.is_none() {
+        let mut wb = if parsed.use_as_shot || parsed.temperature_k.is_none() {
             WbMode::AsShot
         } else {
             WbMode::Custom {
@@ -360,12 +360,28 @@ fn main() {
         // scale (6500 / 0 = as-shot) is the correct Bradford source — not an
         // Adobe-DCP invert (wrong tint sign, ~8000 K), which left snow 11 b* cold.
         let as_shot = (6500.0, 0.0);
-        let linear: Vec<[f32; 3]> = if use_dcp {
+        let settings = adobe_settings(&parsed);
+        let adobe_colour = profile
+            .as_ref()
+            .map(|p| p.has_hue_sat_map || p.has_look)
+            .unwrap_or(false);
+        let linear: Vec<[f32; 3]> = if adobe_colour {
+            // Adobe Standard HSM + Landscape LookTable are the saturation
+            // Adobe actually applies (ToneCurve=Linear, Saturation=0). The
+            // JPEG 3×3 would pull that back toward the less-colourful camera
+            // JPEG, so colour is locked here and CameraTone is luma-only.
+            // WB is already in adobe_look_linear — do not Bradford twice.
+            wb = WbMode::AsShot;
+            let p = profile.as_ref().unwrap();
+            pixels
+                .iter()
+                .map(|px| adobe_look_linear(*px, p, settings))
+                .collect()
+        } else if use_dcp {
             if let Some(ref profile) = profile {
-                let settings = adobe_settings(&parsed);
                 pixels
                     .iter()
-                    .map(|p| adobe_color_only_linear(*p, profile, settings))
+                    .map(|px| adobe_color_only_linear(*px, profile, settings))
                     .collect()
             } else {
                 pixels
@@ -379,7 +395,11 @@ fn main() {
                 pixels
             }
         };
-        let look = fit_look_from_raw(&bytes, &linear, w as usize, h as usize);
+        let look = if adobe_colour {
+            fit_look_tone_only(&bytes, &linear, w as usize, h as usize)
+        } else {
+            fit_look_from_raw(&bytes, &linear, w as usize, h as usize)
+        };
         let mut dev = LcDevelop {
             sliders,
             wb,
@@ -392,6 +412,7 @@ fn main() {
             dev.tone = tone;
             dev.knots = look.knots;
             dev.colour = look.matrix;
+            dev.chroma = look.chroma;
         }
         let after = develop_image_lc(&linear, w as usize, h as usize, &dev);
         pixels_to_image(&after, w, h)
@@ -405,11 +426,20 @@ fn main() {
             "as_shot_tint": as_shot.1,
             "unique_camera_model": model,
             "dcp_color": use_dcp,
+            "adobe_hsm_look": adobe_colour,
+            "has_hue_sat_map": profile.as_ref().map(|p| p.has_hue_sat_map),
+            "has_look": profile.as_ref().map(|p| p.has_look),
             "fitted_look": look.is_some(),
+            "chroma": look.map(|l| l.chroma),
+            "vibrance": sliders.vibrance,
+            "saturation": sliders.saturation,
             "label": sliders.ui_label(tone, "as-shot/custom"),
         });
         fs::write(out.join("lightcraft_profile.json"), serde_json::to_string_pretty(&notes).unwrap())
             .expect("lc json");
+        if let Some(ref profile) = profile {
+            write_profile_notes(&out, profile, settings);
+        }
         eprintln!("{}", sliders.ui_label(tone, &path));
         return;
     }

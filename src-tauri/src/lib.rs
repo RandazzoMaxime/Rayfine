@@ -47,7 +47,7 @@ mod lightcraft_develop;
 mod lightcraft_camera;
 mod tonemap;
 pub use adobe_color::{
-    AdobeSettings, AdobeStage, DngProfile, NamedCurve, adobe_color_only_linear,
+    AdobeSettings, AdobeStage, DngProfile, NamedCurve, adobe_color_only_linear, adobe_look_linear,
     develop_adobe_image, dcp_slug_for, find_dcp_file, load_dcp_file, merge_dcp_onto_raw,
     parse_color_profile, parse_color_profile_with_dcp, parse_color_profile_with_sidecars,
     parse_dng_profile, temp_tint_from_neutral,
@@ -60,7 +60,8 @@ pub use lightcraft_develop::{
     DevelopPath, LcDevelop, LcSliders, ToneModel, WbMode, develop_image_lc, develop_pixel_lc,
 };
 pub use lightcraft_camera::{
-    CameraLook, fit_look_from_raw, fit_look_from_rgb32f, look_for_path, remember_look,
+    CameraLook, fit_look_from_raw, fit_look_from_rgb32f, fit_look_tone_only, look_for_path,
+    remember_look,
 };
 mod tagging;
 mod tagging_utils;

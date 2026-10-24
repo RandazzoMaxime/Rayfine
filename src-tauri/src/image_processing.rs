@@ -1615,6 +1615,8 @@ pub struct GlobalAdjustments {
     pub gray_mixer: [f32; 8],
     /// LightCraft CameraTone knots (scene, display). vec2 stride 16 in WGSL uniforms.
     pub lc_tone_knots: [Point; 32],
+    /// 8 chroma-by-display-luminance nodes (two vec4 in WGSL).
+    pub lc_chroma: [f32; 8],
 }
 
 impl GlobalAdjustments {
@@ -2289,6 +2291,7 @@ fn get_global_adjustments_from_json(
             .or_else(|| js_adjustments["make"].as_str()),
     );
     let mut lc_tone_knots = knots_to_points(crate::lightcraft_develop::SONY_DRO_OFF);
+    let mut lc_chroma = crate::lightcraft_develop::IDENTITY_CHROMA;
     if develop_path == crate::lightcraft_develop::DevelopPath::LightCraft {
         let as_shot = (
             js_adjustments["asShotTemp"].as_f64().unwrap_or(6500.0),
@@ -2320,6 +2323,7 @@ fn get_global_adjustments_from_json(
         };
         let mut colour = crate::lightcraft_develop::IDENTITY3;
         let mut knots = crate::lightcraft_develop::SONY_DRO_OFF;
+        let mut chroma = crate::lightcraft_develop::IDENTITY_CHROMA;
         if let Some(raw_path) = js_adjustments["sourcePath"]
             .as_str()
             .or_else(|| js_adjustments["path"].as_str())
@@ -2328,7 +2332,9 @@ fn get_global_adjustments_from_json(
                 camera_tone = crate::lightcraft_develop::ToneModel::CameraFitted;
                 knots = look.knots;
                 colour = look.matrix;
+                chroma = look.chroma;
                 lc_tone_knots = knots_to_points(look.knots);
+                lc_chroma = look.chroma;
             }
         }
         let dev = crate::lightcraft_develop::LcDevelop {
@@ -2338,6 +2344,7 @@ fn get_global_adjustments_from_json(
             tone: camera_tone,
             colour,
             knots,
+            chroma,
         };
         // Colour (JPEG chromaticity) then relative WB, same as the CPU twin.
         pipe_to_rendering =
@@ -2546,6 +2553,7 @@ fn get_global_adjustments_from_json(
             std::array::from_fn(|i| mixer[keys[i]].as_f64().unwrap_or(0.0) as f32 / 100.0)
         },
         lc_tone_knots,
+        lc_chroma,
     }
 }
 

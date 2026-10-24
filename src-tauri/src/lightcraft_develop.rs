@@ -48,6 +48,11 @@ pub const CAMERA_TONE_HDR: u32 = 0;
 pub const CAMERA_TONE_SONY_DRO_OFF: u32 = 1;
 /// Per-photo JPEG-fitted CameraTone (`lightcraft_camera::fit_tone_quantiles`).
 pub const CAMERA_TONE_FITTED: u32 = 2;
+/// Nodes of a camera chroma curve, evenly spaced over display luminance 0..=1
+/// (LightCraft `tone::CHROMA_N`).
+pub const CHROMA_N: usize = 8;
+/// Identity chroma (luma tone only — desaturates vs a hue-preserving RGB curve).
+pub const IDENTITY_CHROMA: [f32; CHROMA_N] = [1.0; CHROMA_N];
 
 /// Bradford cone matrix (XYZ → sharpened cones).
 const BRADFORD: [[f64; 3]; 3] = [
@@ -287,6 +292,8 @@ pub struct LcDevelop {
     pub colour: [[f32; 3]; 3],
     /// 32-knot camera tone when `tone == CameraFitted`.
     pub knots: [[f32; 2]; 32],
+    /// Chroma-by-display-luminance after the luma tone (`ToneMap::chroma_scale`).
+    pub chroma: [f32; CHROMA_N],
 }
 
 impl Default for LcDevelop {
@@ -298,6 +305,7 @@ impl Default for LcDevelop {
             tone: ToneModel::Hdr,
             colour: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
             knots: SONY_DRO_OFF,
+            chroma: IDENTITY_CHROMA,
         }
     }
 }
@@ -784,6 +792,37 @@ pub fn tone_apply_knots(y: f32, sliders: LcSliders, tone: ToneModel, knots: &[[f
     }
 }
 
+/// Chroma scale at display luminance `o` (exactly 1 everywhere unless a look sets it).
+#[inline]
+pub fn chroma_scale(o: f32, chroma: &[f32; CHROMA_N]) -> f32 {
+    if !o.is_finite() {
+        return 1.0;
+    }
+    let f = o.clamp(0.0, 1.0) * (CHROMA_N - 1) as f32;
+    let i = (f as usize).min(CHROMA_N - 2);
+    let t = f - i as f32;
+    let (a, b) = (chroma[i], chroma[i + 1]);
+    if a == b {
+        a
+    } else {
+        a + (b - a) * t
+    }
+}
+
+/// LightCraft finish: `d = o + (d − o) * k` after the luma tone.
+#[inline]
+pub fn apply_chroma_scale(d: [f32; 3], o: f32, chroma: &[f32; CHROMA_N]) -> [f32; 3] {
+    let k = chroma_scale(o, chroma);
+    if (k - 1.0).abs() < 1e-6 {
+        return d;
+    }
+    [
+        o + (d[0] - o) * k,
+        o + (d[1] - o) * k,
+        o + (d[2] - o) * k,
+    ]
+}
+
 /// Highlight desaturation after the tone map (`finish.wgsl`).
 pub fn highlight_desat(d: [f32; 3], o: f32) -> [f32; 3] {
     let mx = d[0].max(d[1]).max(d[2]);
@@ -884,6 +923,7 @@ pub fn develop_pixel_lc(rgb_srgb: [f32; 3], mask_luma_srgb: f32, dev: &LcDevelop
     } else {
         [0.0; 3]
     };
+    d = apply_chroma_scale(d, o, &dev.chroma);
     d = highlight_desat(d, o);
     d = apply_vibrance_sat(d, dev.sliders.vibrance, dev.sliders.saturation);
     let s = rec2020_to_srgb(d);
@@ -917,6 +957,7 @@ pub fn develop_pixel_rec2020(rgb: [f32; 3], mask_luma: f32, dev: &LcDevelop) -> 
     } else {
         [0.0; 3]
     };
+    d = apply_chroma_scale(d, o, &dev.chroma);
     d = highlight_desat(d, o);
     d = apply_vibrance_sat(d, dev.sliders.vibrance, dev.sliders.saturation);
     let s = rec2020_to_srgb(d);
@@ -979,6 +1020,7 @@ pub fn develop_image_lc(
             } else {
                 [0.0; 3]
             };
+            d = apply_chroma_scale(d, o, &dev.chroma);
             d = highlight_desat(d, o);
             d = apply_vibrance_sat(d, dev.sliders.vibrance, dev.sliders.saturation);
             let s = rec2020_to_srgb(d);
@@ -1034,6 +1076,7 @@ pub fn develop_image_rec2020(
             } else {
                 [0.0; 3]
             };
+            d = apply_chroma_scale(d, o, &dev.chroma);
             d = highlight_desat(d, o);
             d = apply_vibrance_sat(d, dev.sliders.vibrance, dev.sliders.saturation);
             let s = rec2020_to_srgb(d);
@@ -1069,6 +1112,7 @@ pub fn develop_linear_rec2020(rgb: [f32; 3], mask_luma: f32, dev: &LcDevelop) ->
     } else {
         [0.0; 3]
     };
+    d = apply_chroma_scale(d, o, &dev.chroma);
     d = highlight_desat(d, o);
     apply_vibrance_sat(d, dev.sliders.vibrance, dev.sliders.saturation)
 }
@@ -1233,6 +1277,14 @@ mod tests {
             src.contains("camera == 1u || camera == 2u"),
             "WGSL must apply uploaded knots for Sony and JPEG-fitted CameraTone"
         );
+        assert!(
+            src.contains("fn lc_chroma_scale"),
+            "WGSL twin missing chroma_scale"
+        );
+        assert!(
+            src.contains("LC_CHROMA"),
+            "WGSL twin missing uploaded chroma nodes"
+        );
         let finish = include_str!("shaders/shader.wgsl");
         assert!(
             finish.contains("lc_tone_knots"),
@@ -1241,6 +1293,14 @@ mod tests {
         assert!(
             finish.contains("LC_KNOTS"),
             "preview/export must copy knots into the LightCraft twin"
+        );
+        assert!(
+            finish.contains("lc_chroma"),
+            "preview/export shader must upload chroma nodes"
+        );
+        assert!(
+            finish.contains("LC_CHROMA"),
+            "preview/export must copy chroma into the LightCraft twin"
         );
         let combined = format!("{src}\n{finish}");
         let device = pollster::block_on(adapter.unwrap().request_device(&Default::default()));
@@ -1286,5 +1346,65 @@ mod tests {
         }
         let c = tone_apply_knots(0.22, sliders, ToneModel::CameraFitted, &lifted);
         assert!(c > b, "lifted JPEG curve must raise midtones: {c} vs {b}");
+    }
+
+    #[test]
+    fn identity_chroma_matches_luma_scale() {
+        let rgb = [0.42, 0.28, 0.18];
+        let y = lum2020(rgb);
+        let o = 0.35;
+        let d = [rgb[0] * o / y, rgb[1] * o / y, rgb[2] * o / y];
+        let out = apply_chroma_scale(d, o, &IDENTITY_CHROMA);
+        for i in 0..3 {
+            assert!((out[i] - d[i]).abs() < 1e-6, "{out:?} vs {d:?}");
+        }
+        assert!((chroma_scale(0.5, &IDENTITY_CHROMA) - 1.0).abs() < 1e-6);
+        assert_eq!(chroma_scale(f32::NAN, &[1.4; CHROMA_N]), 1.0);
+    }
+
+    #[test]
+    fn chroma_k_gt_one_lifts_midtone_colourfulness() {
+        let mut chroma = IDENTITY_CHROMA;
+        chroma[3] = 1.45;
+        chroma[4] = 1.45;
+        let rgb = [0.50, 0.22, 0.16];
+        let y = lum2020(rgb);
+        let o = 0.5;
+        let d = [rgb[0] * o / y, rgb[1] * o / y, rgb[2] * o / y];
+        let boosted = apply_chroma_scale(d, o, &chroma);
+        let dist = |p: [f32; 3]| {
+            (0..3)
+                .map(|i| {
+                    let t = p[i] / o - 1.0;
+                    t * t
+                })
+                .sum::<f32>()
+                .sqrt()
+        };
+        assert!(
+            dist(boosted) > dist(d) * 1.2,
+            "k>1 must lift chroma: {boosted:?} vs {d:?}"
+        );
+        // Grey stays grey.
+        let grey = apply_chroma_scale([o, o, o], o, &chroma);
+        assert!((grey[0] - o).abs() < 1e-6 && (grey[1] - o).abs() < 1e-6);
+    }
+
+    #[test]
+    fn vibrance_and_saturation_sliders_scale_oklab_chroma() {
+        let muted = [0.22, 0.20, 0.18];
+        let sat = apply_vibrance_sat(muted, 0.0, 25.0);
+        let vib = apply_vibrance_sat(muted, 30.0, 0.0);
+        let both = apply_vibrance_sat(muted, 30.0, 25.0);
+        let c = |p: [f32; 3]| {
+            let lab = oklab_from_2020(p);
+            (lab[1] * lab[1] + lab[2] * lab[2]).sqrt()
+        };
+        assert!(c(sat) > c(muted), "Saturation XMP must raise OkLab C");
+        assert!(c(vib) > c(muted), "Vibrance XMP must raise OkLab C");
+        assert!(c(both) > c(sat) && c(both) > c(vib));
+        let sliders = LcSliders::from_ui(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 18.0, 12.0);
+        assert!((sliders.vibrance - 18.0).abs() < 1e-6);
+        assert!((sliders.saturation - 12.0).abs() < 1e-6);
     }
 }

@@ -65,10 +65,11 @@ const SONY_DRO_OFF: array<vec2<f32>, 32> = array<vec2<f32>, 32>(
     vec2<f32>(0.38682, 0.74143), vec2<f32>(0.52622, 0.80307)
 );
 
-// Per-invocation CameraTone knots. Preview/export copies the uniform here
-// before `lc_develop_linear` so this file (concatenated first) can stay
-// independent of `GlobalAdjustments`.
+// Per-invocation CameraTone knots + chroma nodes. Preview/export copies
+// the uniforms here before `lc_develop_linear` so this file (concatenated
+// first) can stay independent of `GlobalAdjustments`.
 var<private> LC_KNOTS: array<vec2<f32>, 32> = SONY_DRO_OFF;
+var<private> LC_CHROMA: array<f32, 8> = array<f32, 8>(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0);
 
 fn lc_sstep(e0: f32, e1: f32, x: f32) -> f32 {
     let t = clamp((x - e0) / (e1 - e0), 0.0, 1.0);
@@ -209,6 +210,32 @@ fn lc_tone_apply(y: f32, contrast: f32, whites: f32, blacks: f32, camera: u32) -
     return lc_tone_hdr(y, contrast, whites, blacks);
 }
 
+fn lc_chroma_scale(o: f32) -> f32 {
+    // Uninitialized uniforms are 0; identity is 1. A fitted curve is never all-zero.
+    let sum = LC_CHROMA[0] + LC_CHROMA[1] + LC_CHROMA[2] + LC_CHROMA[3]
+        + LC_CHROMA[4] + LC_CHROMA[5] + LC_CHROMA[6] + LC_CHROMA[7];
+    if (sum < 1e-4) {
+        return 1.0;
+    }
+    let f = clamp(o, 0.0, 1.0) * 7.0;
+    let i = min(u32(f), 6u);
+    let t = f - f32(i);
+    let a = LC_CHROMA[i];
+    let b = LC_CHROMA[i + 1u];
+    if (a == b) {
+        return a;
+    }
+    return a + (b - a) * t;
+}
+
+fn lc_apply_chroma(d: vec3<f32>, o: f32) -> vec3<f32> {
+    let k = lc_chroma_scale(o);
+    if (abs(k - 1.0) < 1e-6) {
+        return d;
+    }
+    return vec3<f32>(o) + (d - vec3<f32>(o)) * k;
+}
+
 fn lc_highlight_desat(d: vec3<f32>, o: f32) -> vec3<f32> {
     let mx = max(d.x, max(d.y, d.z));
     if (mx > 1.0) {
@@ -290,6 +317,7 @@ fn lc_develop_linear(
     if (yl > 1e-9) {
         d = c * (o / yl);
     }
+    d = lc_apply_chroma(d, o);
     d = lc_highlight_desat(d, o);
     d = lc_vibrance_sat(d, vibrance, saturation);
     return lc_rec_to_srgb(d);
