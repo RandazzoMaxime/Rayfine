@@ -13,6 +13,7 @@ from metrics import (
     delta_e2000,
     delta_e_map,
     downsample_blur,
+    median_ev_delta,
     robust_compare,
     sky_lab_stats,
     srgb_to_lab,
@@ -85,6 +86,12 @@ class MetricsTests(unittest.TestCase):
         self.assertGreater(robust["de_mean"], 1.0)
         sky = sky_lab_stats(ref)
         self.assertGreater(sky["b"], 0.0)  # yellow-orange
+        self.assertIsNotNone(zones["horizon"])
+
+    def test_median_ev_delta_is_one_stop(self) -> None:
+        ref = np.full((16, 16, 3), 0.25, dtype=np.float64)
+        pred = np.full((16, 16, 3), 0.5, dtype=np.float64)
+        self.assertAlmostEqual(median_ev_delta(pred, ref) or 0.0, 1.0, places=2)
 
 
 if __name__ == "__main__":

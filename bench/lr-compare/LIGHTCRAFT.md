@@ -49,6 +49,52 @@ Process V2 (`docs/parity-checklist.md`): Highlights/Shadows share an edge-aware 
 - Spectral ILCE-7RM4 matrices are **not** baked in: the real Adobe Standard DCP (when fetched) supersedes them. They remain a documented Apache-2.0 fallback if DCP extraction fails.
 - LightCraft JPEG-fit `NIKON_Z_6_2.json` is **not** used as the IR oracle (wrong look).
 
+## Headless render (this comparison)
+
+LightCraft **0.13.x**, cloned at `/tmp/lightcraft` for the bench
+(commit recorded in `out/lc-vs-lr/lightcraft_version.json`). CLI:
+
+```
+lightcraft-cli render IN.RAW -o OUT.jpg --settings settings.json --size 1280 \
+  --opt colorSpace=srgb
+```
+
+IR JPEG sidecars are `crs:AlreadyApplied="True"`. LightCraft skips every
+`crs:` field on those packets (`crates/engine/src/crs.rs`), so the XMP is
+**never** passed as `--settings`. `crs_map.ToneMapping.lightcraft_json()`
+writes a partial `DevelopSettings` object instead.
+
+### XMP → LightCraft mapping
+
+| LR / `crs:` | LightCraft | Notes |
+|---|---|---|
+| `Exposure2012` | `light.exposure` | EV, 1:1 |
+| `Contrast2012` / `Highlights2012` / `Shadows2012` / `Whites2012` / `Blacks2012` | `light.*` | −100..100, 1:1. Look extras (Landscape H −12 / S +12) are **added** first, same as Rayfine. |
+| `Vibrance` / `Saturation` | `color.vibrance` / `color.saturation` | 1:1 |
+| `Texture` / `Clarity2012` / `Dehaze` | `effects.*` | Look Clarity +10 is added |
+| `ToneCurvePV2012` (Look S-curve) | `curve.master` | `"x,y"` 0..255 → `{x,y}` 0..1 |
+| `Parametric*` | `curve.shadows/darks/lights/highlights` + splits | 1:1 when present (IR is 0) |
+| `Hue/Sat/LumAdjustment*` | `mixer.<band>.*` | only non-zero bands |
+| `WhiteBalance=As Shot` | `wb.mode=asShot` | file as-shot; Kelvin is **not** forced (relative ARW/NEF/RW2 would cast) |
+| `WhiteBalance=Auto` / Custom | `wb.mode=custom` + `temp/tint` + `scale=kelvin` | replays LR’s recorded Auto result, not LightCraft Auto |
+| `LensProfileEnable` / `AutoLateralCA` | `optics.lens_profile` / `optics.remove_ca` | LC uses the file’s own corrections, not Adobe lens profiles |
+| `ColorNoiseReduction` / `LuminanceSmoothing` / `Sharpness` | `detail.nr_*` / `sharpen_amount` | defaults 25 / 0 / 40 |
+| process | `process: 2` | LightCraft V2 (edge-aware H/S). `crs:ProcessVersion` is Adobe’s and ignored. |
+| export | `colorSpace=srgb` | same encoding as the IR JPEG |
+
+### No LightCraft equivalent (documented gaps)
+
+| LR | Why it is dropped |
+|---|---|
+| Adobe Standard DCP (matrices + HueSatMap + BaselineExposure) | LightCraft never ships Adobe profiles. Z 6II uses bundled JPEG-fit `NIKON_Z_6_2.json`; A7R IV uses spectral matrices; A6600 / G95 have **no** camera profile. |
+| Adobe Landscape **LookTable** HSV 36×16×16 (`0B3BFB5C…`) | Not read. LC’s `lc.landscape` is a *different* recipe (Contrast +10, Vibrance +10, green/aqua/blue sat, Clarity +6) and is **not** selected, so it is not stacked on the numeric Look extras. |
+| Look `Parameters` as a named profile | LightCraft does not read Look Parameters; we already folded H/S/Clarity + curve into sliders. |
+| `crs:AlreadyApplied` sidecars | Skipped by LC if passed as XMP. |
+| Preview-fitted tone (~0.8 EV) | Only when a DNG carries an Adobe preview. Vendor RAW has none. |
+
+Harness: `compare_lightcraft.py`. Planches 4 colonnes dans
+`out/lc-vs-lr/sheets/` et `/opt/cursor/artifacts/lr-compare/lc-vs-lr/`.
+
 ## Gaps that remain vs LightCraft / Lightroom
 
 | Topic | LightCraft | Rayfine now |

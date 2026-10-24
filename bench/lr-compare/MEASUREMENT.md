@@ -19,6 +19,11 @@ aspect then resized — no squash when the RAW crop differs.
 | `z6ii-0086` | train | 5595×2798 | 1 | sRGB IEC61966-2.1 | 13.1 / 11.0 | Adobe Standard / Adobe Landscape | 0.231 | JPEG already has lens distortion/CA |
 
 - `crs:HasCrop` is False on every complete triple. EXIF orientation is 1.
+- LightCraft vs Rayfine (`compare_lightcraft.py`) **geometrically aligns**
+  each develop onto the LR JPEG (ORB + homography + ECC, then a common crop)
+  before ΔE. The IR JPEG already has lens/CA + a light crop; without this
+  the metric scores shifted edges. Zones include **horizon** (rows 28–55 %)
+  and a median exposure ΔEV.
 - Nested `crs:CorrectionRangeMask crs:Version="+2"` must not overwrite root
   `crs:Version` (first-wins in `parse_crs_attrs`).
 - Default ACR NR on this set: `ColorNoiseReduction` 25, `Sharpness` 40.

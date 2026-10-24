@@ -134,6 +134,40 @@ class CrsMapTests(unittest.TestCase):
         self.assertFalse(neutral["apply_look"])
         self.assertAlmostEqual(neutral["temperature_k"], 5250.0)
 
+    def test_lightcraft_json_is_one_to_one(self) -> None:
+        mapped = map_xmp_path(FIXTURES / "look_landscape.xmp")
+        lc = mapped.lightcraft_json()
+        self.assertEqual(lc["process"], 2)
+        self.assertEqual(lc["profile"]["id"], "lc.color")
+        self.assertAlmostEqual(lc["light"]["exposure"], 0.05)
+        self.assertAlmostEqual(lc["light"]["highlights"], -53.0)
+        self.assertAlmostEqual(lc["light"]["shadows"], 70.0)
+        self.assertAlmostEqual(lc["effects"]["clarity"], 10.0)
+        self.assertEqual(lc["wb"]["mode"], "asShot")
+        self.assertEqual(
+            lc["curve"]["master"],
+            [
+                {"x": 0.0, "y": 0.0},
+                {"x": 64.0 / 255.0, "y": 60.0 / 255.0},
+                {"x": 128.0 / 255.0, "y": 128.0 / 255.0},
+                {"x": 192.0 / 255.0, "y": 196.0 / 255.0},
+                {"x": 1.0, "y": 1.0},
+            ],
+        )
+
+    def test_lightcraft_auto_wb_replays_kelvin(self) -> None:
+        mapped = map_xmp_text(
+            """<rdf:Description crs:ProcessVersion="11.0" crs:WhiteBalance="Auto"
+               crs:Temperature="7500" crs:Tint="0"
+               crs:Exposure2012="+0.30" crs:Highlights2012="0" crs:Shadows2012="+56"
+               crs:Whites2012="0" crs:Blacks2012="-26" crs:Contrast2012="0"/>"""
+        )
+        lc = mapped.lightcraft_json()
+        self.assertEqual(lc["wb"]["mode"], "custom")
+        self.assertEqual(lc["wb"]["scale"], "kelvin")
+        self.assertAlmostEqual(lc["wb"]["temp"], 7500.0)
+        self.assertAlmostEqual(lc["light"]["exposure"], 0.30)
+
 
 if __name__ == "__main__":
     unittest.main()

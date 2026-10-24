@@ -267,14 +267,25 @@ def downsample_blur(img: np.ndarray, width: int = 512, radius: float = 1.1) -> n
 
 
 def zone_masks(ref: np.ndarray) -> dict[str, np.ndarray]:
-    """Sky = upper third + not-dark; mids / shadows from luma. Position-aware for outdoor IR."""
+    """Sky / horizon / mids / shadows. Position-aware for outdoor IR."""
     y = luma(ref)
     h = ref.shape[0]
     row = np.linspace(0.0, 1.0, h, dtype=np.float64)[:, None]
     sky = (row < 0.38) & (y > 0.16)
+    horizon = ((row >= 0.28) & (row < 0.55)) & np.ones_like(y, dtype=bool)
     shadows = y < 0.12
     mids = (y >= 0.12) & (y <= 0.75) & ~sky
-    return {"sky": sky, "mids": mids, "shadows": shadows}
+    return {"sky": sky, "horizon": horizon, "mids": mids, "shadows": shadows}
+
+
+def median_ev_delta(pred: np.ndarray, ref: np.ndarray) -> float | None:
+    """Median log2(Y_pred / Y_ref) in EV. Positive = prediction brighter."""
+    yp = luma(pred)
+    yr = luma(ref)
+    mask = (yp > 1e-4) & (yr > 1e-4)
+    if not np.any(mask):
+        return None
+    return nan_safe(float(np.median(np.log2(yp[mask] / yr[mask]))))
 
 
 def zone_delta_e(pred: np.ndarray, ref: np.ndarray) -> dict[str, float | None]:
@@ -300,6 +311,7 @@ def robust_compare(
     payload["de_mean"] = m.de_mean
     payload["de_p95"] = m.de_p95
     payload["zones"] = zone_delta_e(a, b)
+    payload["ev_median"] = median_ev_delta(a, b)
     return payload
 
 

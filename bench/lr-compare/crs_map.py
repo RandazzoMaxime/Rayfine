@@ -57,6 +57,8 @@ class ToneMapping:
     unused: dict[str, Any] = field(default_factory=dict)
     limits: list[str] = field(default_factory=list)
     source: str = "empty"
+    lens_profile: bool = False
+    remove_ca: bool = False
 
     def sliders_json(self) -> dict[str, float]:
         return {
@@ -154,6 +156,103 @@ class ToneMapping:
         payload["calibration"] = {}
         payload["apply_look"] = False
         return payload
+
+    def lightcraft_json(self) -> dict[str, Any]:
+        """Partial LightCraft `DevelopSettings` JSON (`develop.merge` / `render --settings`).
+
+        Numeric PV2012 sliders are 1:1 (`docs/xmp-interop.md`). Look extras already
+        folded into this mapping (H/S/Clarity + Look ToneCurvePV2012) are applied as
+        sliders/curve. Adobe Landscape HSV LookTable has no LightCraft equivalent —
+        `lc.landscape` is a different slider recipe and is *not* selected, to avoid
+        stacking it on those extras. IR JPEG sidecars are `AlreadyApplied=True` and
+        must not be passed as `--settings` XMP (LightCraft would skip every field).
+        """
+        adobe = self.adobe_json()
+        wb_name = (self.white_balance or "As Shot").replace(" ", "")
+        as_shot = wb_name.lower() in {"asshot", ""}
+        settings: dict[str, Any] = {
+            "process": 2,
+            "profile": {"id": "lc.color", "amount": 100.0},
+            "light": {
+                "exposure": adobe["exposure"],
+                "contrast": adobe["contrast"],
+                "highlights": adobe["highlights"],
+                "shadows": adobe["shadows"],
+                "whites": adobe["whites"],
+                "blacks": adobe["blacks"],
+            },
+            "color": {
+                "vibrance": adobe["vibrance"],
+                "saturation": adobe["saturation"],
+            },
+            "effects": {
+                "texture": adobe["texture"],
+                "clarity": adobe["clarity"],
+                "dehaze": adobe["dehaze"],
+            },
+            "detail": {
+                "sharpen_amount": self.sharpness,
+                "nr_luminance": self.luma_nr,
+                "nr_color": self.color_nr,
+            },
+            "optics": {
+                "lens_profile": self.lens_profile,
+                "remove_ca": self.remove_ca,
+            },
+        }
+        if as_shot:
+            settings["wb"] = {"mode": "asShot"}
+        elif self.temperature_k is not None:
+            # Auto / Custom: replay Lightroom's recorded Kelvin, not LightCraft Auto.
+            settings["wb"] = {
+                "mode": "custom",
+                "temp": self.temperature_k,
+                "tint": self.tint if self.tint is not None else 0.0,
+                "scale": "kelvin",
+            }
+        else:
+            settings["wb"] = {"mode": "auto" if wb_name.lower() == "auto" else "asShot"}
+        curve = adobe.get("tone_curve_pv2012") or []
+        identity = curve in ([], [(0.0, 0.0), (255.0, 255.0)])
+        if not identity:
+            settings["curve"] = {
+                "master": [{"x": x / 255.0, "y": y / 255.0} for x, y in curve]
+            }
+        parametric = adobe.get("parametric") or {}
+        if parametric:
+            settings.setdefault("curve", {})
+            key_map = {
+                "ParametricShadows": "shadows",
+                "ParametricDarks": "darks",
+                "ParametricLights": "lights",
+                "ParametricHighlights": "highlights",
+                "ParametricShadowSplit": "split_shadows",
+                "ParametricMidtoneSplit": "split_mid",
+                "ParametricHighlightSplit": "split_highlights",
+            }
+            for src, dest in key_map.items():
+                if src in parametric:
+                    settings["curve"][dest] = parametric[src]
+        mixer: dict[str, dict[str, float]] = {}
+        band_map = {
+            "Red": "red",
+            "Orange": "orange",
+            "Yellow": "yellow",
+            "Green": "green",
+            "Aqua": "aqua",
+            "Blue": "blue",
+            "Purple": "purple",
+            "Magenta": "magenta",
+        }
+        for band, dest in band_map.items():
+            hue = (self.hsl or {}).get(f"HueAdjustment{band}", 0.0)
+            sat = (self.hsl or {}).get(f"SaturationAdjustment{band}", 0.0)
+            lum = (self.hsl or {}).get(f"LuminanceAdjustment{band}", 0.0)
+            if hue or sat or lum:
+                mixer[dest] = {"hue": hue, "sat": sat, "lum": lum}
+        if mixer:
+            settings["mixer"] = mixer
+        return settings
 
 
 def _num(raw: str) -> float | None:
@@ -421,6 +520,8 @@ def map_xmp_text(xmp: str) -> ToneMapping:
         mapped.luma_nr = _num(attrs["LuminanceSmoothing"]) or 0.0
     if "Sharpness" in attrs:
         mapped.sharpness = _num(attrs["Sharpness"]) or 0.0
+    mapped.lens_profile = attrs.get("LensProfileEnable") in {"1", "True", "true"}
+    mapped.remove_ca = attrs.get("AutoLateralCA") in {"1", "True", "true"}
     if look:
         mapped.highlights += _num(look.get("Highlights2012", "0")) or 0.0
         mapped.shadows += _num(look.get("Shadows2012", "0")) or 0.0
@@ -474,6 +575,7 @@ def mapping_to_json(mapped: ToneMapping) -> dict[str, Any]:
     payload = asdict(mapped)
     payload["sliders"] = mapped.sliders_json()
     payload["adobe"] = mapped.adobe_json()
+    payload["lightcraft"] = mapped.lightcraft_json()
     payload["banner"] = mapped.banner()
     return payload
 
