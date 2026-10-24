@@ -1699,7 +1699,13 @@ pub fn load_dcp_file(path: &Path) -> Result<DngProfile> {
 /// IR / EXIF model → `slug` used by `fetch_adobe_dcp.py` (`{slug}-adobe_standard.dcp`).
 pub fn dcp_slug_for(hint: &str) -> Option<&'static str> {
     let t = hint.to_ascii_lowercase();
-    if t.contains("g95") || t.contains("dc-g95") || t.contains("dmc-g95") {
+    if t.contains("g95")
+        || t.contains("g99")
+        || t.contains("g90")
+        || t.contains("dc-g95")
+        || t.contains("dc-g99")
+        || t.contains("dmc-g95")
+    {
         Some("g95")
     } else if t.contains("a6600") || t.contains("ilce-6600") || t.contains("ilce_6600") {
         Some("a6600")
@@ -1970,6 +1976,27 @@ mod tests {
         assert!((merged.baseline_exposure - 0.35).abs() < 1e-6);
         assert_eq!(dcp_slug_for("z6ii-0086"), Some("z6ii"));
         assert_eq!(dcp_slug_for("Sony ILCE-7RM4"), Some("a7riv"));
+        assert_eq!(dcp_slug_for("g95-0192"), Some("g95"));
+        assert_eq!(dcp_slug_for("Panasonic DC-G99"), Some("g95"));
+    }
+
+    #[test]
+    fn parse_local_adobe_standard_dcp_when_fetched() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../bench/lr-compare/datasets/dcp/z6ii-adobe_standard.dcp"
+        );
+        let Ok(bytes) = std::fs::read(path) else {
+            return;
+        };
+        let p = parse_dng_profile(&bytes).expect("dcp");
+        assert!(p.has_forward, "notes={:?}", p.notes);
+        assert!(p.has_hue_sat_map);
+        assert_eq!(p.hue_sat_dims, [90, 30, 1]);
+        assert!(p.has_look);
+        assert_eq!(p.look_dims, [36, 8, 16]);
+        assert_eq!(p.profile_name, "Adobe Standard");
+        assert!(p.tone_curve.is_empty());
     }
 
     #[test]

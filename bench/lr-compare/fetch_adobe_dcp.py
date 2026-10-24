@@ -37,14 +37,20 @@ INSTALLERS = [
 ]
 
 # Imaging Resource bodies used by the Rayfine oracle.
-WANTED = {
-    "Panasonic DC-G95": ["g95", "dc-g95", "dmc-g95"],
-    "Sony ILCE-6600": ["a6600", "ilce-6600"],
-    "Nikon Z 6_2": ["z6ii", "z 6_2", "z 6ii", "nikon z 6_2"],
-    "Sony ILCE-7RM4": ["a7riv", "ilce-7rm4", "a7r iv", "a7r4"],
+# Exact Adobe Standard filenames (DNG Converter 16.3). G95 is sold as G90/G91/G99;
+# Adobe ships "Panasonic DC-G99 Adobe Standard.dcp".
+EXACT_STANDARD = {
+    "g95": "Panasonic DC-G99 Adobe Standard.dcp",
+    "a6600": "Sony ILCE-6600 Adobe Standard.dcp",
+    "z6ii": "Nikon Z 6 2 Adobe Standard.dcp",
+    "a7riv": "Sony ILCE-7RM4 Adobe Standard.dcp",
 }
-
-STYLES = ("Adobe Standard", "Adobe Color", "Adobe Landscape")
+BODY_LABEL = {
+    "g95": "Panasonic DC-G95 / DC-G99",
+    "a6600": "Sony ILCE-6600",
+    "z6ii": "Nikon Z 6_2",
+    "a7riv": "Sony ILCE-7RM4",
+}
 
 LICENSE = """Adobe DNG Camera Profiles (.dcp)
 
@@ -93,36 +99,6 @@ def _extract(installer: Path, work: Path) -> Path:
     return work
 
 
-def _norm(name: str) -> str:
-    return "".join(ch.lower() if ch.isalnum() else " " for ch in name)
-
-
-def _match_body(path: Path) -> str | None:
-    text = _norm(path.stem)
-    for body, aliases in WANTED.items():
-        body_n = _norm(body)
-        if body_n in text:
-            return body
-        if all(part in text for part in body_n.split()):
-            return body
-        for alias in aliases:
-            if _norm(alias) in text and "adobe" in text:
-                return body
-    return None
-
-
-def _match_style(path: Path) -> str | None:
-    text = _norm(path.stem)
-    parent = _norm(path.parent.name)
-    for style in STYLES:
-        sn = _norm(style)
-        if text.endswith(sn) or text == sn or parent == sn:
-            return style
-    if "adobe standard" in text or path.parent.name == "Adobe Standard":
-        return "Adobe Standard"
-    return None
-
-
 def _sha256(path: Path) -> str:
     h = hashlib.sha256()
     with path.open("rb") as fh:
@@ -135,33 +111,35 @@ def copy_wanted(extracted: Path, out: Path) -> list[dict]:
     out.mkdir(parents=True, exist_ok=True)
     (out / "LICENSE-ADOBE-DCP.txt").write_text(LICENSE, encoding="utf-8")
     found: list[dict] = []
-    for dcp in extracted.rglob("*.dcp"):
-        body = _match_body(dcp)
-        style = _match_style(dcp)
-        if body is None or style is None:
+    standard_root = None
+    for cand in extracted.rglob("Adobe Standard"):
+        if cand.is_dir():
+            standard_root = cand
+            break
+    if standard_root is None:
+        print("no CameraProfiles/Adobe Standard directory", file=sys.stderr)
+        return found
+    for slug, filename in EXACT_STANDARD.items():
+        src = standard_root / filename
+        if not src.is_file():
+            print(f"missing {filename}", file=sys.stderr)
             continue
-        slug = {
-            "Panasonic DC-G95": "g95",
-            "Sony ILCE-6600": "a6600",
-            "Nikon Z 6_2": "z6ii",
-            "Sony ILCE-7RM4": "a7riv",
-        }[body]
-        dest_name = f"{slug}-{style.replace(' ', '_').lower()}.dcp"
+        dest_name = f"{slug}-adobe_standard.dcp"
         dest = out / dest_name
-        shutil.copy2(dcp, dest)
+        shutil.copy2(src, dest)
         rec = {
-            "body": body,
-            "style": style,
+            "body": BODY_LABEL[slug],
+            "style": "Adobe Standard",
             "slug": slug,
             "file": dest_name,
             "bytes": dest.stat().st_size,
             "sha256": _sha256(dest),
-            "extracted_from": str(dcp.relative_to(extracted)),
+            "extracted_from": str(src.relative_to(extracted)),
             "license": "Adobe copyright; local use only, not redistributable",
         }
         found.append(rec)
-        print(f"copied {dest_name}  {rec['bytes']} bytes")
-    found.sort(key=lambda r: (r["slug"], r["style"]))
+        print(f"copied {dest_name}  {rec['bytes']} bytes  from {filename}")
+    found.sort(key=lambda r: r["slug"])
     (out / "MANIFEST.json").write_text(json.dumps(found, indent=2) + "\n", encoding="utf-8")
     return found
 
