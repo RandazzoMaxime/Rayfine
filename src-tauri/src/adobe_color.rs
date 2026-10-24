@@ -443,6 +443,20 @@ pub fn camera_to_prophoto(wb_cam: [f32; 3], forward: [f32; 9]) -> [f32; 3] {
     mul3(inv, xyz_d50)
 }
 
+fn vendor_single_illuminant(profile: &DngProfile) -> bool {
+    !profile.has_forward
+        && (0..9).all(|i| (profile.color_matrix1[i] - profile.color_matrix2[i]).abs() < 1e-6)
+}
+
+fn color_matrix_for_xyz(profile: &DngProfile, temp: f32) -> [f32; 9] {
+    let cm = interpolated_color_matrix(profile, temp);
+    if vendor_single_illuminant(profile) {
+        normalize_xyz2cam(cm, xy_to_xyz(cct_to_xy(ILLUMINANT_D65_K)))
+    } else {
+        cm
+    }
+}
+
 fn camera_to_prophoto_settings(
     prepared: [f32; 3],
     profile: &DngProfile,
@@ -451,9 +465,16 @@ fn camera_to_prophoto_settings(
 ) -> [f32; 3] {
     let xyz_d50 = if settings.use_forward_matrix && profile.has_forward {
         mul3(interpolated_forward(profile, temp), prepared)
-    } else if let Some(inv) = invert3(interpolated_color_matrix(profile, temp)) {
+    } else if let Some(inv) = invert3(color_matrix_for_xyz(profile, temp)) {
         let xyz_illum = mul3(inv, prepared);
-        let cat = bradford_to_d50(xy_to_xyz(cct_to_xy(temp)));
+        // A single rawler D65 ColorMatrix already yields XYZ D65. CAT from the
+        // user's CCT would double-adapt and destroy chroma (measured IR ΔE +10–20).
+        let src_white = if vendor_single_illuminant(profile) {
+            xy_to_xyz(cct_to_xy(ILLUMINANT_D65_K))
+        } else {
+            xy_to_xyz(cct_to_xy(temp))
+        };
+        let cat = bradford_to_d50(src_white);
         mul3(cat, xyz_illum)
     } else {
         prepared
@@ -1076,6 +1097,18 @@ fn read_rational_n(raw: &[u8], le: bool, n: usize) -> [f32; 3] {
     o
 }
 
+fn normalize_xyz2cam(cm: [f32; 9], white_xyz: [f32; 3]) -> [f32; 9] {
+    let cam = mul3(cm, white_xyz);
+    let mut out = cm;
+    for row in 0..3 {
+        let s = cam[row].abs().max(1e-8);
+        out[row * 3] = cm[row * 3] / s;
+        out[row * 3 + 1] = cm[row * 3 + 1] / s;
+        out[row * 3 + 2] = cm[row * 3 + 2] / s;
+    }
+    out
+}
+
 fn matrix_looks_valid(m: [f32; 9]) -> bool {
     let s0 = (m[0] + m[1] + m[2]).abs();
     let s1 = (m[3] + m[4] + m[5]).abs();
@@ -1105,8 +1138,10 @@ fn profile_from_vendor_raw(data: &[u8]) -> Result<DngProfile> {
     if let Some((_, color_matrix)) = mat {
         let mut m = identity3();
         for i in 0..9.min(color_matrix.len()) {
-            m[i] = color_matrix[i];
+            m[i] = color_matrix[i] as f32;
         }
+        // Keep the rawler matrix for NeutralToCamera (Temperature/Tint).
+        // XYZ invert uses a D65-normalized copy — see color_matrix_for_xyz.
         out.color_matrix1 = m;
         out.color_matrix2 = m;
     }
@@ -1271,5 +1306,18 @@ mod tests {
     fn adobe_stage_parse_includes_color() {
         assert_eq!(AdobeStage::parse("color").unwrap(), AdobeStage::Color);
         assert_eq!(AdobeStage::all().len(), 6);
+    }
+
+    #[test]
+    fn vendor_xyz2cam_normalize_maps_d65_to_neutral() {
+        let raw = [1.2, 0.1, 0.05, 0.2, 0.9, 0.05, 0.05, 0.15, 0.8];
+        let white = xy_to_xyz(cct_to_xy(ILLUMINANT_D65_K));
+        let cm = normalize_xyz2cam(raw, white);
+        let cam = mul3(cm, white);
+        assert!((cam[0] - 1.0).abs() < 1e-5, "{cam:?}");
+        assert!((cam[1] - 1.0).abs() < 1e-5, "{cam:?}");
+        assert!((cam[2] - 1.0).abs() < 1e-5, "{cam:?}");
+        let xyz = mul3(invert3(cm).unwrap(), [1.0, 1.0, 1.0]);
+        assert!((xyz[1] - white[1]).abs() < 1e-4, "{xyz:?} white={white:?}");
     }
 }
