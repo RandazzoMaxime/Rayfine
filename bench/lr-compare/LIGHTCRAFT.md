@@ -94,6 +94,11 @@ writes a partial `DevelopSettings` object instead.
 
 Harness: `compare_lightcraft.py`. Planches 4 colonnes dans
 `out/lc-vs-lr/sheets/` et `/opt/cursor/artifacts/lr-compare/lc-vs-lr/`.
+Measured table: [LC_VS_LR.md](LC_VS_LR.md).
+
+LightCraft 0.13.0 / `38f8d2508` rendered all 9 IR RAWs (NEF, ARW, RW2)
+on CPU. Train reduced ΔE LC **9.72** vs Rayfine **14.90** after the
+process-tone port (`DEFAULT_PROCESS_EV` 0.28 → 0.62).
 
 ## Gaps that remain vs LightCraft / Lightroom
 

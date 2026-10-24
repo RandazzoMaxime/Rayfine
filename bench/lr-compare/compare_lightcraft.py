@@ -25,7 +25,6 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from align import align_pair
-from compare_adobe_match import _run_adobe
 from compare_public_pairs import (
     _find_pairs,
     _font,
@@ -121,6 +120,58 @@ def _lc_version(cli: Path) -> dict[str, str]:
         except (OSError, subprocess.CalledProcessError):
             pass
     return info
+
+
+def _render_rayfine(raw: Path, sliders: dict, out_dir: Path, long_edge: int, dcp_dir: Path | None, look_dir: Path | None) -> None:
+    sliders_path = out_dir / "adobe_sliders.json"
+    sliders_path.write_text(json.dumps(sliders, indent=2) + "\n", encoding="utf-8")
+    binary = REPO / "src-tauri" / "target" / "release" / "lr_public_compare"
+    if binary.is_file():
+        cmd = [
+            str(binary),
+            "--raw",
+            str(raw.resolve()),
+            "--sliders",
+            str(sliders_path.resolve()),
+            "--out",
+            str(out_dir.resolve()),
+            "--long-edge",
+            str(long_edge),
+            "--path",
+            "adobe",
+            "--stage",
+            "all",
+        ]
+    else:
+        cmd = [
+            "cargo",
+            "run",
+            "--quiet",
+            "--release",
+            "-p",
+            "Rayfine",
+            "--bin",
+            "lr_public_compare",
+            "--",
+            "--raw",
+            str(raw.resolve()),
+            "--sliders",
+            str(sliders_path.resolve()),
+            "--out",
+            str(out_dir.resolve()),
+            "--long-edge",
+            str(long_edge),
+            "--path",
+            "adobe",
+            "--stage",
+            "all",
+        ]
+    if dcp_dir is not None and dcp_dir.is_dir():
+        cmd.extend(["--dcp-dir", str(dcp_dir.resolve())])
+    if look_dir is not None and look_dir.is_dir():
+        cmd.extend(["--look-dir", str(look_dir.resolve())])
+    print(" ".join(cmd))
+    subprocess.run(cmd, cwd=str(REPO / "src-tauri"), check=True)
 
 
 def _render_lightcraft(cli: Path, raw: Path, settings: dict, dest: Path, long_edge: int) -> None:
@@ -310,7 +361,7 @@ def main() -> None:
             continue
         rf_png = work / "adobe_hs.png"
         if not (args.skip_rayfine_render and rf_png.exists()):
-            _run_adobe(pair["raw"], mapped.adobe_json(), work, args.long_edge, args.dcp_dir, args.look_dir)
+            _render_rayfine(pair["raw"], mapped.adobe_json(), work, args.long_edge, args.dcp_dir, args.look_dir)
         lr_full = _load_srgb(pair["reference"], args.long_edge, pair["reference_space"])
         lc_raw = _load_png_srgb(lc_jpg, None)
         rf_raw = _load_png_srgb(rf_png, None)

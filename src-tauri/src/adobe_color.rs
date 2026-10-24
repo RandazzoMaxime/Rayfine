@@ -1241,10 +1241,12 @@ pub fn eval_profile_tone(points: &[[f32; 2]], x: f32) -> f32 {
 }
 
 /// Adobe Standard DCP has no ProfileToneCurve. Lightroom still applies a
-/// process-version midtone (LightCraft measured ~0.8 EV too dark vs a
-/// preview-fitted tone). Vendor RAW has no Adobe preview to fit, so we use a
-/// midtone-weighted lift that fades in the highlights.
-const DEFAULT_PROCESS_EV: f32 = 0.28;
+/// process-version midtone. LightCraft places that midtone with a grey-centered
+/// camera / Reinhard curve (or a JPEG-fitted `CameraTone`); against the IR
+/// JPEG, Rayfine was ~0.39 EV too dark at 0.28. This lift is midtone-weighted
+/// and fades in the highlights — not LightCraft's per-photo JPEG fitter
+/// (`camera_preview.rs`), which would pull vendor RAW toward the camera JPEG.
+const DEFAULT_PROCESS_EV: f32 = 0.62;
 
 pub fn apply_profile_tone_curve(profile: &DngProfile, rgb: [f32; 3]) -> [f32; 3] {
     if profile.tone_curve.len() >= 2 {
@@ -2321,7 +2323,7 @@ mod tests {
             },
             AdobeStage::Exposure,
         );
-        assert!(mid[0] > 0.0 && mid[0] < 1.0, "{mid:?}");
+        assert!(mid[0] > 0.0 && mid[0] <= 1.0, "{mid:?}");
     }
 
     #[test]
@@ -2437,8 +2439,8 @@ mod tests {
         let p = DngProfile::default();
         let rgb = [0.18, 0.18, 0.18];
         let out = apply_profile_tone_curve(&p, rgb);
-        assert!(out[1] > rgb[1] * 1.05, "{out:?}");
-        assert!(out[1] < rgb[1] * 1.35, "{out:?}");
+        assert!(out[1] > rgb[1] * 1.15, "{out:?}");
+        assert!(out[1] < rgb[1] * 1.55, "{out:?}");
     }
 
     #[test]
