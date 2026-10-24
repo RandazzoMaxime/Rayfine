@@ -574,10 +574,17 @@ fn fit_look_from_raw_opts(
     } else {
         fit_chromaticity_matrix(&pairs).unwrap_or(IDENTITY3)
     };
-    let chroma = if colour_locked {
-        // HSM + Look already own Adobe saturation. A CameraTone-derived
-        // hue-preserving curve is the *camera JPEG* per-channel look
-        // (shadow sat / highlight bleach) and stacks on top of Landscape.
+    // Daylight Adobe path: HSM+Look already owns saturation. A night / dusk
+    // camera JPEG (mean Y < 0.08) is near-black: Landscape at the lifted
+    // CameraTone luma reads as neon (g95-0273 C* 3.5× LR). LightCraft's
+    // fit_chroma toward that JPEG is the available chroma reference — not a
+    // global sat slider, and not applied on the daylight IR set.
+    let jpeg_mean_y = if jpix.is_empty() {
+        1.0
+    } else {
+        jpix.iter().map(|p| lum2020(*p)).sum::<f32>() / jpix.len() as f32
+    };
+    let chroma = if colour_locked && jpeg_mean_y >= 0.08 {
         IDENTITY_CHROMA
     } else {
         fit_chroma(&pairs, matrix, &knots).unwrap_or(IDENTITY_CHROMA)
@@ -784,5 +791,19 @@ mod tests {
         let curve = fit_chroma(&pairs, IDENTITY3, &SONY_DRO_OFF).expect("chroma");
         let mid = curve[3];
         assert!(mid > 1.05, "vivid JPEG must lift midtone chroma: {curve:?}");
+    }
+
+    #[test]
+    fn fit_chroma_pulls_toward_a_muted_night_jpeg() {
+        let mut pairs = Vec::new();
+        for i in 0..300 {
+            let t = 0.04 + i as f32 * 0.0015;
+            let scene = [t * 1.35, t * 0.85, t * 0.55];
+            let jpeg = [t * 1.05, t * 0.98, t * 0.90];
+            pairs.push((scene, jpeg));
+        }
+        let curve = fit_chroma(&pairs, IDENTITY3, &SONY_DRO_OFF).expect("chroma");
+        let mid = curve[3];
+        assert!(mid < 0.95, "muted JPEG must drop midtone chroma: {curve:?}");
     }
 }
