@@ -36,24 +36,44 @@ FiveK was retouched in Lightroom 3.4. Expert C TIFFs embed the develop packet
 | `crs:Brightness` | folded into `exposure` | `exposure += Brightness / 100` (FiveK 0-base). LR3 UI default 50/25 is treated as identity. |
 | `crs:Contrast` | `contrast` | 1:1 from the FiveK 0-base. |
 | Parametric 4-point + Medium Contrast | unused | FiveK often uses these; they inflate residual ΔE. |
-| ACR 4.4 / Adobe Standard | unused | Demosaic + camera matrix stay Rayfine/rawler. |
+| ACR 4.4 / Adobe Standard | unused on the **legacy** path | The Adobe-match path reads DNG ColorMatrix / ForwardMatrix / LookTable. |
 
-## Exposure baseline (why +EV pairs look pink/white)
+## Adobe colour / light path (`--path adobe`)
 
-`develop_raw_image` normalizes sensor white to 1.0. Lightroom’s `crs:Exposure`
-is relative to Adobe’s hidden baseline (often a negative offset so Exposure 0
-already looks right). Adding Expert C’s `+2.81` EV on top of Rayfine’s
-normalized linear therefore blows midtones that Adobe still had in reserve.
-This is **not** fitted away. Judge those IDs on highlight MAE / clip, not on
-absolute ΔE.
+Used by `compare_adobe_match.py` / `lr_public_compare --path adobe`. This is **not**
+the library GPU preview. Stages are cumulative:
+
+| Stage | What is applied |
+|---|---|
+| `wb` | `crs:Temperature` / `Tint` → Planckian xy + CIE 1960 tint (`kTintScale = −3000`), illuminant mix A↔D65 by inverse CCT, camera ÷ Neutral, Inverse(CameraCalibration). No matrix. |
+| `profile` | + ForwardMatrix (or inverse ColorMatrix) → XYZ D50 → ProPhoto linear + 36×8×16 LookTable. |
+| `exposure` | + `BaselineExposure` + `crs:Exposure` (`2^EV`). Brightness still off. |
+| `curve` | + PV2010 Brightness, named ToneCurve (`Linear` / `Medium Contrast`), Contrast. |
+| `hs` | + Highlights / Shadows / Whites / Blacks (guided log masks). |
+
+Working space is ProPhoto linear, then the same ProPhoto→sRGB matrix as the
+FiveK TIFF loader (`metrics.prophoto_to_srgb`). `crs:Brightness` is **not**
+folded into Exposure on this path.
+
+**HueSatMap is missing** on these FiveK DNGs (no tag 50937). Only the embedded
+LookTable is public. That gap is reported with the measured ΔE, not hidden.
+
+## Exposure baseline (legacy path only)
+
+`develop_raw_image` (legacy) normalizes sensor white to 1.0 **and** applies
+rawler/custom cam→sRGB + as-shot WB. Lightroom’s `crs:Exposure` is relative to
+Adobe’s hidden baseline. Adding Expert C’s `+2.81` EV on top of that already
+bright linear blows midtones. The Adobe path starts from camera-native linear
+and adds `BaselineExposure` first, so the same EV is in the right units.
 
 ## Limits that will show up in ΔE
 
-1. **Color**: as-shot WB vs expert custom Kelvin/tint; no DCP; ProPhoto TIFF → sRGB is a matrix, not Adobe ACE.
-2. **PV2010 ≠ PV2012**: Highlight Recovery is not Highlights 2012. Mapping is signed-magnitude only.
-3. **Unmapped looks**: parametric curve, point curve, vibrance, saturation, clarity, profile.
-4. **Headroom**: Rayfine keeps scene-linear overrange and a soft shoulder; Lightroom 3 used a different highlight compressor.
-5. **Identity**: all mapped sliders at 0 leave `ToneSliders::is_identity()` true. Do not “fix” residual look by adding a default curve.
+1. **HueSatMap / proprietary DCP**: not in the FiveK DNG; Adobe Standard’s full HSB table is unavailable.
+2. **WB locus**: Kang CCT→xy, not Adobe’s unpublished Planckian table.
+3. **PV2010 ≠ PV2012**: Highlight Recovery is not Highlights 2012. Mapping is signed-magnitude only.
+4. **Unmapped looks**: parametric curve, point ToneCurve, vibrance, saturation, clarity.
+5. **Expert C TIFF already includes HR**: the `curve` column is colour+light without our H/S, so full-frame ΔE vs the TIFF is inflated by that missing recovery.
+6. **Identity**: all mapped sliders at 0 leave `ToneSliders::is_identity()` true on the legacy path.
 
 ## Calibration knobs (CPU + WGSL must stay in lockstep)
 

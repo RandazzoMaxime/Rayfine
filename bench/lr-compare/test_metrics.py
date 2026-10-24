@@ -7,7 +7,7 @@ import unittest
 
 import numpy as np
 
-from metrics import compare_srgb, delta_e2000, srgb_to_lab, ssim
+from metrics import compare_srgb, de_heatmap_srgb, delta_e2000, delta_e_map, srgb_to_lab, ssim
 
 
 class MetricsTests(unittest.TestCase):
@@ -43,6 +43,15 @@ class MetricsTests(unittest.TestCase):
         b = np.clip(a + rng.normal(0.0, 0.2, a.shape), 0.0, 1.0)
         self.assertGreater(ssim(a, a), 0.99)
         self.assertLess(ssim(a, b), 0.9)
+
+    def test_delta_e_map_and_heatmap_shape(self) -> None:
+        a = np.full((4, 6, 3), 0.2)
+        b = np.full((4, 6, 3), 0.8)
+        de = delta_e_map(a, b)
+        self.assertEqual(de.shape, (4, 6))
+        self.assertTrue(np.all(de > 10.0))
+        heat = de_heatmap_srgb(de, 20.0)
+        self.assertEqual(heat.shape, (4, 6, 3))
 
 
 if __name__ == "__main__":

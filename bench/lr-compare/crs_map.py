@@ -30,6 +30,7 @@ class ToneMapping:
     whites: float = 0.0
     blacks: float = 0.0
     contrast: float = 0.0
+    brightness: float = 0.0
     temperature_k: float | None = None
     tint: float | None = None
     white_balance: str | None = None
@@ -49,11 +50,40 @@ class ToneMapping:
             "contrast": self.contrast,
         }
 
+    def adobe_json(self) -> dict[str, Any]:
+        """Sliders for the Adobe colour/light path. Exposure is the XMP EV,
+        brightness stays separate (not folded), WB is Temperature/Tint."""
+        exposure = self.exposure
+        if self.source == "pv2010":
+            exposure = self.exposure - self.brightness / 100.0
+        use_as_shot = self.white_balance in {None, "As Shot", "AsShot"}
+        return {
+            "exposure": exposure,
+            "brightness": self.brightness,
+            "contrast": self.contrast,
+            "highlights": self.highlights,
+            "shadows": self.shadows,
+            "whites": self.whites,
+            "blacks": self.blacks,
+            "temperature_k": self.temperature_k,
+            "tint": self.tint,
+            "use_as_shot": use_as_shot,
+            "tone_curve": self.tone_curve_name or "Linear",
+        }
+
+    def raw_exposure(self) -> float:
+        if self.source == "pv2010":
+            return self.exposure - self.brightness / 100.0
+        return self.exposure
+
     def banner(self) -> str:
+        temp = f"{self.temperature_k:.0f}" if self.temperature_k is not None else "?"
+        tint = f"{self.tint:+.0f}" if self.tint is not None else "?"
         return (
-            f"Exp {self.exposure:+.2f}  H {self.highlights:+.0f}  "
-            f"S {self.shadows:+.0f}  W {self.whites:+.0f}  "
-            f"B {self.blacks:+.0f}  C {self.contrast:+.0f}  "
+            f"Exp {self.raw_exposure():+.2f}  Br {self.brightness:+.0f}  "
+            f"H {self.highlights:+.0f}  S {self.shadows:+.0f}  "
+            f"W {self.whites:+.0f}  B {self.blacks:+.0f}  C {self.contrast:+.0f}  "
+            f"Temp {temp} Tint {tint}  curve={self.tone_curve_name or 'Linear'}  "
             f"pv={self.process_version or '?'}  src={self.source}"
         )
 
@@ -156,6 +186,7 @@ def map_crs_to_rayfine(attrs: dict[str, str]) -> ToneMapping:
         mapped.blacks = max(-100.0, min(100.0, -(shadows_pv2010 - 5.0) * 2.0))
         mapped.whites = 0.0
         mapped.contrast = contrast
+        mapped.brightness = brightness
         mapped.exposure += brightness / 100.0
         mapped.unused["pv2010"] = {
             "HighlightRecovery": highlight_recovery,
@@ -202,7 +233,7 @@ def map_crs_to_rayfine(attrs: dict[str, str]) -> ToneMapping:
         mapped.limits.append(f"Tone curve {mapped.tone_curve_name!r} is not applied.")
     if mapped.white_balance and mapped.white_balance not in {"As Shot", "AsShot"}:
         mapped.limits.append(
-            f"White balance {mapped.white_balance!r} is recorded but the CPU develop path keeps as-shot WB."
+            f"White balance {mapped.white_balance!r} is recorded; the Adobe path applies Temperature/Tint."
         )
     return mapped
 
@@ -230,6 +261,7 @@ def inflate_lrcat_xmp_blob(blob: bytes) -> str:
 def mapping_to_json(mapped: ToneMapping) -> dict[str, Any]:
     payload = asdict(mapped)
     payload["sliders"] = mapped.sliders_json()
+    payload["adobe"] = mapped.adobe_json()
     payload["banner"] = mapped.banner()
     return payload
 

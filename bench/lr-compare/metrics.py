@@ -211,6 +211,20 @@ class PairMetrics:
         return asdict(self)
 
 
+def delta_e_map(pred: np.ndarray, ref: np.ndarray) -> np.ndarray:
+    """Per-pixel ΔE2000 on sRGB pairs."""
+    return delta_e2000(srgb_to_lab(pred), srgb_to_lab(ref))
+
+
+def de_heatmap_srgb(de: np.ndarray, scale: float = 20.0) -> np.ndarray:
+    """Visible 0..scale ΔE map: blue (0) → yellow → red (scale+)."""
+    t = np.clip(de / scale, 0.0, 1.0)
+    r = np.clip(1.5 * t, 0.0, 1.0)
+    g = np.clip(1.0 - np.abs(t - 0.45) * 2.2, 0.0, 1.0)
+    b = np.clip(1.3 * (1.0 - t), 0.0, 1.0)
+    return np.stack([r, g, b], axis=-1)
+
+
 def compare_srgb(pred: np.ndarray, ref: np.ndarray) -> PairMetrics:
     if pred.shape != ref.shape:
         raise ValueError(f"shape mismatch {pred.shape} vs {ref.shape}")

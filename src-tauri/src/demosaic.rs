@@ -35,6 +35,15 @@ pub fn is_supported(raw: &RawImage) -> bool {
 /// Rescale + Demosaic + CropActiveArea + WhiteBalance + Calibrate + CropDefault (no sRGB gamma).
 /// Caller must check `is_supported` first. Mutates `raw` (scaling in place, no clone).
 pub fn develop_bayer(raw: &mut RawImage) -> anyhow::Result<Intermediate> {
+    develop_bayer_inner(raw, true)
+}
+
+/// Demosaic to camera-native linear RGB (black/white scaled). No WB, no color matrix.
+pub fn develop_bayer_camera(raw: &mut RawImage) -> anyhow::Result<Intermediate> {
+    develop_bayer_inner(raw, false)
+}
+
+fn develop_bayer_inner(raw: &mut RawImage, apply_color: bool) -> anyhow::Result<Intermediate> {
     let cfa = match &raw.photometric {
         RawPhotometricInterpretation::Cfa(config) => config.cfa.clone(),
         _ => anyhow::bail!("not a CFA image"),
@@ -62,8 +71,10 @@ pub fn develop_bayer(raw: &mut RawImage) -> anyhow::Result<Intermediate> {
         }
     }
 
-    let cam2rgb = camera_to_srgb(raw);
-    let wb = if raw.wb_coeffs[0].is_nan() {
+    let cam2rgb = if apply_color { camera_to_srgb(raw) } else { None };
+    let wb = if !apply_color {
+        [1.0, 1.0, 1.0, 1.0]
+    } else if raw.wb_coeffs[0].is_nan() {
         [1.0, 1.0, 1.0, 1.0]
     } else {
         raw.wb_coeffs

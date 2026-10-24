@@ -39,11 +39,15 @@ mod negative_conversion;
 mod panorama_stitching;
 mod panorama_utils;
 mod preset_converter;
+mod adobe_color;
 mod raw_processing;
 mod raw_tone;
 mod scene_tone;
 mod tonemap;
-pub use raw_processing::develop_raw_image;
+pub use adobe_color::{
+    AdobeSettings, AdobeStage, DngProfile, NamedCurve, develop_adobe_image, parse_dng_profile,
+};
+pub use raw_processing::{develop_raw_camera_linear, develop_raw_image};
 pub use scene_tone::{
     ToneSliders, develop_image, develop_pixel, legacy_develop_pixel, lightcraft_like_pixel,
 };

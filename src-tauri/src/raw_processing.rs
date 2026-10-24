@@ -30,6 +30,13 @@ pub fn develop_raw_image(
     Ok(apply_orientation(developed_image, orientation))
 }
 
+/// Demosaic to camera-native linear RGB (sensor white = 1). No WB, no colour
+/// matrix, no reconstruct, no RapidRAW display curve. Used by the Adobe-match path.
+pub fn develop_raw_camera_linear(file_bytes: &[u8]) -> Result<DynamicImage> {
+    let (developed_image, orientation) = develop_camera_internal(file_bytes)?;
+    Ok(apply_orientation(developed_image, orientation))
+}
+
 fn is_linear_raw_format(raw_image: &RawImage) -> bool {
     matches!(
         raw_image.photometric,
@@ -238,6 +245,105 @@ fn develop_internal(
         }
     };
 
+    Ok((dynamic_image, orientation))
+}
+
+fn develop_camera_internal(file_bytes: &[u8]) -> Result<(DynamicImage, Orientation)> {
+    let source = RawSource::new_from_slice(file_bytes);
+    let decoder = rawler::get_decoder(&source)?;
+    let mut raw_image: RawImage = decoder.raw_image(&source, &RawDecodeParams::default(), false)?;
+    let metadata = decoder.raw_metadata(&source, &RawDecodeParams::default())?;
+    let orientation = metadata
+        .exif
+        .orientation
+        .map(Orientation::from_u16)
+        .unwrap_or(Orientation::Normal);
+
+    let original_white_level = raw_image
+        .whitelevel
+        .0
+        .first()
+        .cloned()
+        .unwrap_or(u16::MAX as u32) as f32;
+    let original_black_level = raw_image
+        .blacklevel
+        .levels
+        .first()
+        .map(|r| r.as_f32())
+        .unwrap_or(0.0);
+
+    // Keep overrange so later H/S can see sensor values above white.
+    for level in raw_image.whitelevel.0.iter_mut() {
+        *level = u32::MAX;
+    }
+
+    let use_custom = crate::demosaic::is_supported(&raw_image)
+        && std::env::var("RUSTROOM_DEMOSAIC")
+            .map(|v| v != "ppg")
+            .unwrap_or(true);
+    let mut developed_intermediate = if use_custom {
+        crate::demosaic::develop_bayer_camera(&mut raw_image)?
+    } else {
+        let mut developer = RawDevelop::default();
+        developer.steps.retain(|&step| {
+            step != ProcessingStep::SRgb
+                && step != ProcessingStep::WhiteBalance
+                && step != ProcessingStep::Calibrate
+        });
+        developer.develop_intermediate(&raw_image)?
+    };
+    drop(raw_image);
+
+    let denominator = (original_white_level - original_black_level).max(1.0);
+    let rescale_factor = (u32::MAX as f32 - original_black_level) / denominator;
+    let clamp_limit = crate::scene_tone::SCENE_HEADROOM;
+    match &mut developed_intermediate {
+        Intermediate::ThreeColor(pixels) => {
+            pixels.data.par_iter_mut().for_each(|p| {
+                p[0] = (p[0] * rescale_factor).max(0.0).min(clamp_limit);
+                p[1] = (p[1] * rescale_factor).max(0.0).min(clamp_limit);
+                p[2] = (p[2] * rescale_factor).max(0.0).min(clamp_limit);
+            });
+        }
+        Intermediate::Monochrome(pixels) => {
+            pixels.data.par_iter_mut().for_each(|p| {
+                *p = (*p * rescale_factor).max(0.0).min(clamp_limit);
+            });
+        }
+        Intermediate::FourColor(pixels) => {
+            pixels.data.par_iter_mut().for_each(|p| {
+                p.iter_mut().for_each(|c| {
+                    *c = (*c * rescale_factor).max(0.0).min(clamp_limit);
+                });
+            });
+        }
+    }
+
+    let (width, height) = {
+        let dim = developed_intermediate.dim();
+        (dim.w as u32, dim.h as u32)
+    };
+    let dynamic_image = match developed_intermediate {
+        Intermediate::ThreeColor(pixels) => {
+            let mut raw = vec![0f32; pixels.data.len() * 3];
+            raw.par_chunks_mut(3)
+                .zip(pixels.data.par_iter())
+                .for_each(|(dst, p)| dst.copy_from_slice(p));
+            let buffer = ImageBuffer::<Rgb<f32>, _>::from_raw(width, height, raw)
+                .ok_or_else(|| anyhow!("Failed to build RGB buffer"))?;
+            DynamicImage::ImageRgb32F(buffer)
+        }
+        Intermediate::Monochrome(pixels) => {
+            let mut raw = vec![0f32; pixels.data.len() * 3];
+            raw.par_chunks_mut(3)
+                .zip(pixels.data.par_iter())
+                .for_each(|(dst, &p)| dst.copy_from_slice(&[p, p, p]));
+            let buffer = ImageBuffer::<Rgb<f32>, _>::from_raw(width, height, raw)
+                .ok_or_else(|| anyhow!("Failed to build RGB buffer"))?;
+            DynamicImage::ImageRgb32F(buffer)
+        }
+        _ => return Err(anyhow!("Unsupported intermediate format for camera-linear develop")),
+    };
     Ok((dynamic_image, orientation))
 }
 

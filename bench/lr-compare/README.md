@@ -11,6 +11,8 @@ python bench/lr-compare/test_metrics.py
 python bench/lr-compare/download_public_pairs.py --accept-research-license --source fivek
 python bench/lr-compare/compare_public_pairs.py \
   --datasets bench/lr-compare/datasets --out bench/lr-compare/out/public
+python bench/lr-compare/compare_adobe_match.py \
+  --datasets bench/lr-compare/datasets --out bench/lr-compare/out/adobe
 ```
 
 - Mapping and limits: [MAPPING.md](MAPPING.md)

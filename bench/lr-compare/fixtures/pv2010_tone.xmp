@@ -8,6 +8,7 @@
    <crs:Shadows>5</crs:Shadows>
    <crs:Brightness>-13</crs:Brightness>
    <crs:Contrast>-15</crs:Contrast>
+   <crs:WhiteBalance>Custom</crs:WhiteBalance>
    <crs:Temperature>4000</crs:Temperature>
    <crs:Tint>-31</crs:Tint>
    <crs:ToneCurveName>Linear</crs:ToneCurveName>

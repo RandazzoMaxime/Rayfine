@@ -32,6 +32,13 @@ class CrsMapTests(unittest.TestCase):
         self.assertAlmostEqual(mapped.blacks, 0.0)
         self.assertAlmostEqual(mapped.whites, 0.0)
         self.assertAlmostEqual(mapped.contrast, -15.0)
+        self.assertAlmostEqual(mapped.brightness, -13.0)
+        adobe = mapped.adobe_json()
+        self.assertAlmostEqual(adobe["exposure"], 2.81)
+        self.assertAlmostEqual(adobe["brightness"], -13.0)
+        self.assertAlmostEqual(adobe["temperature_k"], 4000.0)
+        self.assertAlmostEqual(adobe["tint"], -31.0)
+        self.assertFalse(adobe["use_as_shot"])
 
     def test_pv2010_shadows_scale_is_mild(self) -> None:
         mapped = map_xmp_text(
