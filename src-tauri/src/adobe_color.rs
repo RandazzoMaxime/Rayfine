@@ -2,16 +2,18 @@
 //!
 //! Camera-native linear RGB → CameraCalibration → WB (AsShotNeutral or
 //! Temperature/Tint via ColorMatrix interpolation) → ForwardMatrix → XYZ D50 →
-//! ProPhoto linear → optional LookTable → BaselineExposure + Exposure →
-//! PV2010 Brightness/Contrast / named curve → sRGB display.
+//! ProPhoto linear → HueSatMap → BaselineExposure + Exposure → LookTable →
+//! ProfileToneCurve → PV2012 curves / HSL → Highlights/Shadows → sRGB.
 //!
-//! Algorithms follow the DNG spec (illuminant interpolation, ForwardMatrix) and
-//! the public DNG SDK temperature/tint model (Planckian + CIE 1960 tint).
-//! HueSatMap is not present as a numeric table in the FiveK DNGs (tag 50932 is
-//! a string); the 36×8×16 LookTable is applied when parsed.
+//! HSV tables follow DNG spec ch. 6 / LightCraft's public algorithm (MIT/Apache-2.0
+//! approach, original Rayfine code): value-major, hue-middle, sat-minor; encoding 1
+//! indexes value through the sRGB transfer; HueSatMap is interpolated with the
+//! same illuminant weight as the matrices. Sidecar `.dcp` from Adobe DNG Converter
+//! is merged when present (not shipped; see `bench/lr-compare/fetch_adobe_dcp.py`).
 
 use anyhow::{Result, anyhow};
 use rayon::prelude::*;
+use std::path::{Path, PathBuf};
 
 use crate::scene_tone::{
     ToneSliders, apply_contrast, apply_local_tone, log_grey, luma, multi_scale_guided_luma,
@@ -41,22 +43,41 @@ const TINT_SCALE: f32 = -3000.0;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AdobeStage {
     Wb,
+    /// ColorMatrix / ForwardMatrix only (no HueSatMap / Look / tone / BE).
+    Matrix,
+    /// + interpolated ProfileHueSatMap.
+    HueSat,
+    /// + BaselineExposure (no user Exposure).
+    Baseline,
+    /// + ProfileLookTable after BaselineExposure (DNG ch. 6 order).
+    Look,
+    /// + ProfileToneCurve (linear 0..1, Fritsch–Carlson).
+    Tone,
+    /// Legacy alias: matrix + HueSatMap + Look + ProfileToneCurve (BE skipped).
     Profile,
     Exposure,
     Curve,
     Color,
     Hs,
+    /// Full user sliders after the profile stack (same as [`Self::Hs`]).
+    Sliders,
 }
 
 impl AdobeStage {
     pub fn parse(s: &str) -> Result<Self> {
         match s {
             "wb" => Ok(Self::Wb),
+            "matrix" => Ok(Self::Matrix),
+            "huesat" | "huesatmap" => Ok(Self::HueSat),
+            "baseline" => Ok(Self::Baseline),
+            "look" => Ok(Self::Look),
+            "tone" => Ok(Self::Tone),
             "profile" => Ok(Self::Profile),
             "exposure" => Ok(Self::Exposure),
             "curve" => Ok(Self::Curve),
             "color" => Ok(Self::Color),
             "hs" => Ok(Self::Hs),
+            "sliders" => Ok(Self::Sliders),
             other => Err(anyhow!("unknown stage {other}")),
         }
     }
@@ -64,11 +85,17 @@ impl AdobeStage {
     pub fn label(self) -> &'static str {
         match self {
             Self::Wb => "wb",
+            Self::Matrix => "matrix",
+            Self::HueSat => "huesat",
+            Self::Baseline => "baseline",
+            Self::Look => "look",
+            Self::Tone => "tone",
             Self::Profile => "profile",
             Self::Exposure => "exposure",
             Self::Curve => "curve",
             Self::Color => "color",
             Self::Hs => "hs",
+            Self::Sliders => "sliders",
         }
     }
 
@@ -80,6 +107,19 @@ impl AdobeStage {
             Self::Curve,
             Self::Color,
             Self::Hs,
+        ]
+    }
+
+    /// Profile-layer ablation: matrix, +HueSatMap, +BaselineExposure, +LookTable,
+    /// +ProfileToneCurve, +curseurs. Look follows BaselineExposure (DNG / LightCraft).
+    pub fn profile_layers() -> [Self; 6] {
+        [
+            Self::Matrix,
+            Self::HueSat,
+            Self::Baseline,
+            Self::Look,
+            Self::Tone,
+            Self::Sliders,
         ]
     }
 }
@@ -95,10 +135,20 @@ pub struct DngProfile {
     pub as_shot_neutral: [f32; 3],
     pub analog_balance: [f32; 3],
     pub baseline_exposure: f32,
+    pub baseline_exposure_offset: f32,
     pub illuminant1_k: f32,
     pub illuminant2_k: f32,
     pub look_dims: [u32; 3],
     pub look_data: Vec<f32>,
+    pub look_encoding: u32,
+    pub hue_sat_dims: [u32; 3],
+    pub hue_sat_data1: Vec<f32>,
+    pub hue_sat_data2: Vec<f32>,
+    pub hue_sat_encoding: u32,
+    pub tone_curve: Vec<[f32; 2]>,
+    pub profile_name: String,
+    pub unique_camera_model: String,
+    pub dcp_source: String,
     pub has_forward: bool,
     pub has_look: bool,
     pub has_hue_sat_map: bool,
@@ -117,15 +167,31 @@ impl Default for DngProfile {
             as_shot_neutral: [1.0, 1.0, 1.0],
             analog_balance: [1.0, 1.0, 1.0],
             baseline_exposure: 0.0,
+            baseline_exposure_offset: 0.0,
             illuminant1_k: ILLUMINANT_A_K,
             illuminant2_k: ILLUMINANT_D65_K,
             look_dims: [0, 0, 0],
             look_data: Vec::new(),
+            look_encoding: 0,
+            hue_sat_dims: [0, 0, 0],
+            hue_sat_data1: Vec::new(),
+            hue_sat_data2: Vec::new(),
+            hue_sat_encoding: 0,
+            tone_curve: Vec::new(),
+            profile_name: String::new(),
+            unique_camera_model: String::new(),
+            dcp_source: String::new(),
             has_forward: false,
             has_look: false,
             has_hue_sat_map: false,
             notes: Vec::new(),
         }
+    }
+}
+
+impl DngProfile {
+    pub fn total_baseline_ev(&self) -> f32 {
+        self.baseline_exposure + self.baseline_exposure_offset
     }
 }
 
@@ -480,12 +546,7 @@ fn camera_to_prophoto_settings(
         prepared
     };
     let inv = invert3(PROPHOTO_TO_XYZ_D50).unwrap_or(identity3());
-    let ppr = mul3(inv, xyz_d50);
-    if settings.apply_look {
-        apply_look_table(profile, ppr)
-    } else {
-        ppr
-    }
+    mul3(inv, xyz_d50)
 }
 
 pub fn prophoto_to_srgb_linear(ppr: [f32; 3]) -> [f32; 3] {
@@ -567,50 +628,198 @@ fn hsv_to_rgb(hsv: [f32; 3]) -> [f32; 3] {
     [r + m, g + m, b + m]
 }
 
-fn sample_look(profile: &DngProfile, hsv: [f32; 3]) -> [f32; 3] {
-    let hd = profile.look_dims[0].max(1) as i32;
-    let sd = profile.look_dims[1].max(1) as i32;
-    let vd = profile.look_dims[2].max(1) as i32;
-    if profile.look_data.len() < (hd * sd * vd * 3) as usize {
+/// DNG ch. 6: value-major, hue-middle, saturation-minor.
+fn hsv_entry(dims: [u32; 3], data: &[f32], h: usize, s: usize, v: usize) -> [f32; 3] {
+    let hd = dims[0] as usize;
+    let sd = dims[1] as usize;
+    let idx = ((v * hd + h) * sd + s) * 3;
+    if idx + 2 >= data.len() {
         return [0.0, 1.0, 1.0];
     }
-    let hf = (hsv[0] / 360.0) * hd as f32;
-    let sf = hsv[1].clamp(0.0, 1.0) * (sd - 1) as f32;
-    let vf = hsv[2].clamp(0.0, 1.0) * (vd - 1) as f32;
-    let h0 = hf.floor() as i32;
-    let s0 = sf.floor() as i32;
-    let v0 = vf.floor() as i32;
-    let th = hf - h0 as f32;
-    let ts = sf - s0 as f32;
-    let tv = vf - v0 as f32;
-    let mut acc = [0.0f32; 3];
-    for (ih, wh) in [(0, 1.0 - th), (1, th)] {
-        for (is, ws) in [(0, 1.0 - ts), (1, ts)] {
-            for (iv, wv) in [(0, 1.0 - tv), (1, tv)] {
-                let w = wh * ws * wv;
-                if w <= 0.0 {
-                    continue;
-                }
-                let hi = (h0 + ih).rem_euclid(hd);
-                let si = (s0 + is).clamp(0, sd - 1);
-                let vi = (v0 + iv).clamp(0, vd - 1);
-                let idx = (((hi * sd + si) * vd + vi) * 3) as usize;
-                acc[0] += profile.look_data[idx] * w;
-                acc[1] += profile.look_data[idx + 1] * w;
-                acc[2] += profile.look_data[idx + 2] * w;
-            }
-        }
+    [data[idx], data[idx + 1], data[idx + 2]]
+}
+
+fn lerp3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
+    [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+    ]
+}
+
+fn sample_hsv_table(dims: [u32; 3], data: &[f32], h: f32, s: f32, v: f32) -> [f32; 3] {
+    let hd = dims[0].max(1) as usize;
+    let sd = dims[1].max(2) as usize;
+    let vd = dims[2].max(1) as usize;
+    if data.len() < hd * sd * vd * 3 {
+        return [0.0, 1.0, 1.0];
     }
-    acc
+    let hf = (h.rem_euclid(360.0) / 360.0 * hd as f32).clamp(0.0, hd as f32);
+    let h0 = (hf as usize).min(hd - 1);
+    let h1 = (h0 + 1) % hd;
+    let th = (hf - h0 as f32).clamp(0.0, 1.0);
+    let axis = |x: f32, n: usize| {
+        let f = x.clamp(0.0, 1.0) * (n.saturating_sub(1)) as f32;
+        let i0 = (f as usize).min(n.saturating_sub(2));
+        let i1 = (i0 + 1).min(n - 1);
+        (i0, i1, (f - i0 as f32).clamp(0.0, 1.0))
+    };
+    let (s0, s1, ts) = axis(s, sd);
+    let (v0, v1, tv) = if vd > 1 {
+        axis(v, vd)
+    } else {
+        (0, 0, 0.0)
+    };
+    let plane = |vi: usize| {
+        let lo = lerp3(hsv_entry(dims, data, h0, s0, vi), hsv_entry(dims, data, h0, s1, vi), ts);
+        let hi = lerp3(hsv_entry(dims, data, h1, s0, vi), hsv_entry(dims, data, h1, s1, vi), ts);
+        lerp3(lo, hi, th)
+    };
+    if v0 == v1 {
+        plane(v0)
+    } else {
+        lerp3(plane(v0), plane(v1), tv)
+    }
+}
+
+/// Scale that never raises a value already above 1 (highlight headroom).
+fn limited_scale(x: f32, scale: f32) -> f32 {
+    if x <= 1.0 {
+        (x * scale).min(1.0)
+    } else {
+        x * scale.min(1.0)
+    }
+}
+
+/// Apply a DNG HSV table in linear ProPhoto. Encoding 1 indexes value via sRGB.
+pub fn apply_hsv_table(dims: [u32; 3], data: &[f32], encoding: u32, rgb: [f32; 3]) -> [f32; 3] {
+    let max = rgb[0].max(rgb[1]).max(rgb[2]);
+    if !max.is_finite() || max <= 0.0 {
+        return rgb;
+    }
+    let min = rgb[0].min(rgb[1]).min(rgb[2]);
+    let d = max - min;
+    let hsv = rgb_to_hsv(rgb);
+    let srgb_value = encoding == 1 && dims[2] > 1;
+    let v_index = if srgb_value {
+        linear_to_srgb(max.min(1.0))
+    } else {
+        max
+    };
+    let lut = sample_hsv_table(dims, data, hsv[0], if max > 1e-8 { d / max } else { 0.0 }, v_index);
+    let s2 = limited_scale(if max > 1e-8 { d / max } else { 0.0 }, lut[1].max(0.0));
+    let v2 = if srgb_value && max <= 1.0 {
+        if (lut[2] - 1.0).abs() < 1e-6 {
+            max
+        } else {
+            srgb_to_linear((v_index * lut[2]).min(1.0))
+        }
+    } else if srgb_value {
+        max * srgb_to_linear(lut[2].min(1.0)).min(1.0)
+    } else {
+        limited_scale(max, lut[2].max(0.0))
+    };
+    hsv_to_rgb([hsv[0] + lut[0], s2, v2])
+}
+
+fn srgb_to_linear(x: f32) -> f32 {
+    if x <= 0.04045 {
+        x / 12.92
+    } else {
+        ((x + 0.055) / 1.055).powf(2.4)
+    }
 }
 
 pub fn apply_look_table(profile: &DngProfile, rgb: [f32; 3]) -> [f32; 3] {
     if !profile.has_look {
         return rgb;
     }
-    let hsv = rgb_to_hsv(rgb);
-    let lut = sample_look(profile, hsv);
-    hsv_to_rgb([hsv[0] + lut[0], hsv[1] * lut[1], hsv[2] * lut[2]])
+    apply_hsv_table(profile.look_dims, &profile.look_data, profile.look_encoding, rgb)
+}
+
+fn blend_hsv_data(a: &[f32], b: &[f32], g: f32) -> Vec<f32> {
+    let n = a.len().min(b.len());
+    let mut out = vec![0.0f32; n];
+    for i in 0..n {
+        out[i] = g * a[i] + (1.0 - g) * b[i];
+    }
+    out
+}
+
+fn interpolated_hue_sat(profile: &DngProfile, temp: f32) -> Option<( [u32; 3], Vec<f32>, u32 )> {
+    if !profile.has_hue_sat_map {
+        return None;
+    }
+    let dims = profile.hue_sat_dims;
+    let g = illuminant_mix(temp, profile.illuminant1_k, profile.illuminant2_k);
+    let data = if !profile.hue_sat_data1.is_empty() && !profile.hue_sat_data2.is_empty() {
+        blend_hsv_data(&profile.hue_sat_data1, &profile.hue_sat_data2, g)
+    } else if !profile.hue_sat_data1.is_empty() {
+        profile.hue_sat_data1.clone()
+    } else if !profile.hue_sat_data2.is_empty() {
+        profile.hue_sat_data2.clone()
+    } else {
+        return None;
+    };
+    Some((dims, data, profile.hue_sat_encoding))
+}
+
+pub fn apply_hue_sat_map(profile: &DngProfile, rgb: [f32; 3], temp: f32) -> [f32; 3] {
+    match interpolated_hue_sat(profile, temp) {
+        Some((dims, data, enc)) => apply_hsv_table(dims, &data, enc, rgb),
+        None => rgb,
+    }
+}
+
+/// Monotone cubic (Fritsch–Carlson) through linear 0..1 ProfileToneCurve knots.
+pub fn eval_profile_tone(points: &[[f32; 2]], x: f32) -> f32 {
+    let n = points.len();
+    if n < 2 {
+        return x;
+    }
+    let x = x.clamp(points[0][0], points[n - 1][0]);
+    let mut i = 0;
+    for k in 0..n - 1 {
+        if points[k + 1][0] >= x {
+            i = k;
+            break;
+        }
+        i = k;
+    }
+    let slope = |k: usize| (points[k + 1][1] - points[k][1]) / (points[k + 1][0] - points[k][0]).max(1e-8);
+    let tangent = |k: usize| -> f32 {
+        if k == 0 {
+            return slope(0);
+        }
+        if k == n - 1 {
+            return slope(n - 2);
+        }
+        let (a, b) = (slope(k - 1), slope(k));
+        if a * b <= 0.0 {
+            0.0
+        } else {
+            2.0 / (1.0 / a + 1.0 / b)
+        }
+    };
+    let (x0, x1) = (points[i][0], points[i + 1][0]);
+    let h = (x1 - x0).max(1e-8);
+    let t = (x - x0) / h;
+    let (t2, t3) = (t * t, t * t * t);
+    let y = (2.0 * t3 - 3.0 * t2 + 1.0) * points[i][1]
+        + (t3 - 2.0 * t2 + t) * h * tangent(i)
+        + (-2.0 * t3 + 3.0 * t2) * points[i + 1][1]
+        + (t3 - t2) * h * tangent(i + 1);
+    y.clamp(0.0, 1.0)
+}
+
+pub fn apply_profile_tone_curve(profile: &DngProfile, rgb: [f32; 3]) -> [f32; 3] {
+    if profile.tone_curve.len() < 2 {
+        return rgb;
+    }
+    let y = luma(rgb).max(1e-8);
+    let mapped = eval_profile_tone(&profile.tone_curve, y.clamp(0.0, 1.0));
+    let gain = mapped.max(1e-8) / y.clamp(0.0, 1.0).max(1e-8);
+    [rgb[0] * gain, rgb[1] * gain, rgb[2] * gain]
 }
 
 /// Named Adobe curve. Medium Contrast is a mild S around 0.18 (PV2010 default).
@@ -805,6 +1014,153 @@ fn tone_sliders(settings: AdobeSettings) -> ToneSliders {
     )
 }
 
+#[derive(Clone, Copy)]
+struct PipeFlags {
+    hsm: bool,
+    baseline: bool,
+    user_expo: bool,
+    look: bool,
+    tone: bool,
+    curve: bool,
+    color: bool,
+}
+
+fn flags_for(stage: AdobeStage, settings: AdobeSettings) -> PipeFlags {
+    let look = settings.apply_look;
+    match stage {
+        AdobeStage::Wb => PipeFlags {
+            hsm: false,
+            baseline: false,
+            user_expo: false,
+            look: false,
+            tone: false,
+            curve: false,
+            color: false,
+        },
+        AdobeStage::Matrix => PipeFlags {
+            hsm: false,
+            baseline: false,
+            user_expo: false,
+            look: false,
+            tone: false,
+            curve: false,
+            color: false,
+        },
+        AdobeStage::HueSat => PipeFlags {
+            hsm: true,
+            baseline: false,
+            user_expo: false,
+            look: false,
+            tone: false,
+            curve: false,
+            color: false,
+        },
+        AdobeStage::Baseline => PipeFlags {
+            hsm: true,
+            baseline: true,
+            user_expo: false,
+            look: false,
+            tone: false,
+            curve: false,
+            color: false,
+        },
+        AdobeStage::Look => PipeFlags {
+            hsm: true,
+            baseline: true,
+            user_expo: false,
+            look,
+            tone: false,
+            curve: false,
+            color: false,
+        },
+        AdobeStage::Tone => PipeFlags {
+            hsm: true,
+            baseline: true,
+            user_expo: false,
+            look,
+            tone: true,
+            curve: false,
+            color: false,
+        },
+        // Legacy “profile”: colour science without exposure (Look at BE = 0).
+        AdobeStage::Profile => PipeFlags {
+            hsm: true,
+            baseline: false,
+            user_expo: false,
+            look,
+            tone: true,
+            curve: false,
+            color: false,
+        },
+        AdobeStage::Exposure => PipeFlags {
+            hsm: true,
+            baseline: true,
+            user_expo: true,
+            look,
+            tone: true,
+            curve: false,
+            color: false,
+        },
+        AdobeStage::Curve => PipeFlags {
+            hsm: true,
+            baseline: true,
+            user_expo: true,
+            look,
+            tone: true,
+            curve: true,
+            color: false,
+        },
+        AdobeStage::Color => PipeFlags {
+            hsm: true,
+            baseline: true,
+            user_expo: true,
+            look,
+            tone: true,
+            curve: true,
+            color: true,
+        },
+        AdobeStage::Hs | AdobeStage::Sliders => PipeFlags {
+            hsm: true,
+            baseline: true,
+            user_expo: true,
+            look,
+            tone: true,
+            curve: true,
+            color: true,
+        },
+    }
+}
+
+fn apply_profile_stack(
+    mut ppr: [f32; 3],
+    profile: &DngProfile,
+    settings: AdobeSettings,
+    temp: f32,
+    flags: PipeFlags,
+) -> [f32; 3] {
+    if flags.hsm {
+        ppr = apply_hue_sat_map(profile, ppr, temp);
+    }
+    let mut ev = 0.0;
+    if flags.baseline {
+        ev += profile.total_baseline_ev();
+    }
+    if flags.user_expo {
+        ev += settings.exposure;
+    }
+    if ev.abs() > 1e-8 {
+        let g = 2f32.powf(ev);
+        ppr = [ppr[0] * g, ppr[1] * g, ppr[2] * g];
+    }
+    if flags.look {
+        ppr = apply_look_table(profile, ppr);
+    }
+    if flags.tone {
+        ppr = apply_profile_tone_curve(profile, ppr);
+    }
+    ppr
+}
+
 pub fn apply_adobe_pixel(
     cam: [f32; 3],
     profile: &DngProfile,
@@ -813,31 +1169,38 @@ pub fn apply_adobe_pixel(
 ) -> [f32; 3] {
     let (prepared, temp) = wb_and_forward(cam, profile, settings);
     if matches!(stage, AdobeStage::Wb) {
-        // Honest “WB only”: white-balanced camera RGB shown as sRGB (no matrix).
         return encode_srgb(prepared);
     }
+    let flags = flags_for(stage, settings);
     let mut ppr = camera_to_prophoto_settings(prepared, profile, settings, temp);
-    if matches!(stage, AdobeStage::Profile) {
+    if matches!(stage, AdobeStage::Matrix) {
         return to_display(ppr);
     }
-    let ev = profile.baseline_exposure + settings.exposure;
-    ppr = [
-        ppr[0] * 2f32.powf(ev),
-        ppr[1] * 2f32.powf(ev),
-        ppr[2] * 2f32.powf(ev),
-    ];
-    if matches!(stage, AdobeStage::Exposure) {
+    ppr = apply_profile_stack(ppr, profile, settings, temp, flags);
+    if matches!(
+        stage,
+        AdobeStage::HueSat
+            | AdobeStage::Baseline
+            | AdobeStage::Look
+            | AdobeStage::Tone
+            | AdobeStage::Profile
+            | AdobeStage::Exposure
+    ) {
         return to_display(ppr);
     }
-    ppr = apply_pv2010_brightness(ppr, settings.brightness);
-    ppr = apply_named_curve(ppr, settings.tone_curve);
-    ppr = apply_contrast(ppr, settings.contrast / 100.0);
-    ppr = apply_parametric(ppr, settings);
-    ppr = apply_point_curve(ppr, settings);
+    if flags.curve {
+        ppr = apply_pv2010_brightness(ppr, settings.brightness);
+        ppr = apply_named_curve(ppr, settings.tone_curve);
+        ppr = apply_contrast(ppr, settings.contrast / 100.0);
+        ppr = apply_parametric(ppr, settings);
+        ppr = apply_point_curve(ppr, settings);
+    }
     if matches!(stage, AdobeStage::Curve) {
         return to_display(ppr);
     }
-    ppr = apply_color_ops(ppr, settings);
+    if flags.color {
+        ppr = apply_color_ops(ppr, settings);
+    }
     if matches!(stage, AdobeStage::Color) {
         return to_display(ppr);
     }
@@ -866,34 +1229,42 @@ pub fn develop_adobe_image(
             .map(|p| apply_adobe_pixel(*p, profile, settings, AdobeStage::Wb))
             .collect();
     }
-    let ev = profile.baseline_exposure + settings.exposure;
+    let flags = flags_for(stage, settings);
     let mut ppr: Vec<[f32; 3]> = camera[..n]
         .par_iter()
         .map(|cam| {
             let (prepared, temp) = wb_and_forward(*cam, profile, settings);
-            camera_to_prophoto_settings(prepared, profile, settings, temp)
+            let rgb = camera_to_prophoto_settings(prepared, profile, settings, temp);
+            apply_profile_stack(rgb, profile, settings, temp, flags)
         })
         .collect();
-    if matches!(stage, AdobeStage::Profile) {
+    if matches!(
+        stage,
+        AdobeStage::Matrix
+            | AdobeStage::HueSat
+            | AdobeStage::Baseline
+            | AdobeStage::Look
+            | AdobeStage::Tone
+            | AdobeStage::Profile
+            | AdobeStage::Exposure
+    ) {
         return ppr.par_iter().map(|p| to_display(*p)).collect();
     }
-    ppr.par_iter_mut().for_each(|p| {
-        *p = [p[0] * 2f32.powf(ev), p[1] * 2f32.powf(ev), p[2] * 2f32.powf(ev)];
-    });
-    if matches!(stage, AdobeStage::Exposure) {
-        return ppr.par_iter().map(|p| to_display(*p)).collect();
+    if flags.curve {
+        ppr.par_iter_mut().for_each(|p| {
+            *p = apply_pv2010_brightness(*p, settings.brightness);
+            *p = apply_named_curve(*p, settings.tone_curve);
+            *p = apply_contrast(*p, settings.contrast / 100.0);
+            *p = apply_parametric(*p, settings);
+            *p = apply_point_curve(*p, settings);
+        });
     }
-    ppr.par_iter_mut().for_each(|p| {
-        *p = apply_pv2010_brightness(*p, settings.brightness);
-        *p = apply_named_curve(*p, settings.tone_curve);
-        *p = apply_contrast(*p, settings.contrast / 100.0);
-        *p = apply_parametric(*p, settings);
-        *p = apply_point_curve(*p, settings);
-    });
     if matches!(stage, AdobeStage::Curve) {
         return ppr.par_iter().map(|p| to_display(*p)).collect();
     }
-    ppr.par_iter_mut().for_each(|p| *p = apply_color_ops(*p, settings));
+    if flags.color {
+        ppr.par_iter_mut().for_each(|p| *p = apply_color_ops(*p, settings));
+    }
     if matches!(stage, AdobeStage::Color) {
         return ppr.par_iter().map(|p| to_display(*p)).collect();
     }
@@ -960,10 +1331,10 @@ fn parse_ifd(data: &[u8], offset: usize, le: bool, seen: &mut Vec<usize>, out: &
                     parse_ifd(data, o as usize, le, seen, out);
                 }
             }
-            50721 => out.color_matrix1 = read_srat9(raw, le),
-            50722 => out.color_matrix2 = read_srat9(raw, le),
-            50723 => out.camera_cal1 = read_srat9(raw, le),
-            50724 => out.camera_cal2 = read_srat9(raw, le),
+            50721 => out.color_matrix1 = read_matrix9(raw, le, typ),
+            50722 => out.color_matrix2 = read_matrix9(raw, le, typ),
+            50723 => out.camera_cal1 = read_matrix9(raw, le, typ),
+            50724 => out.camera_cal2 = read_matrix9(raw, le, typ),
             50727 => {
                 let n = read_rational_n(raw, le, 3);
                 out.analog_balance = [n[0], n[1], n[2]];
@@ -975,30 +1346,64 @@ fn parse_ifd(data: &[u8], offset: usize, le: bool, seen: &mut Vec<usize>, out: &
             50706 => {
                 out.notes.push("DNGVersion present".into());
             }
+            50708 => {
+                out.unique_camera_model = read_ascii(raw);
+            }
             50730 => out.baseline_exposure = read_srat1(raw, le),
             50778 => out.illuminant1_k = illuminant_k(val as u16),
             50779 => out.illuminant2_k = illuminant_k(val as u16),
+            50936 => {
+                out.profile_name = read_ascii(raw);
+            }
             50964 => {
-                out.forward_matrix1 = read_srat9(raw, le);
-                out.has_forward = true;
+                out.forward_matrix1 = read_matrix9(raw, le, typ);
+                out.has_forward = matrix_looks_valid(out.forward_matrix1);
             }
             50965 => {
-                out.forward_matrix2 = read_srat9(raw, le);
-                out.has_forward = true;
+                out.forward_matrix2 = read_matrix9(raw, le, typ);
+                out.has_forward = out.has_forward || matrix_looks_valid(out.forward_matrix2);
             }
-            50937 if typ == 4 && cnt >= 3 => {
-                out.has_hue_sat_map = true;
+            50937 if (typ == 3 || typ == 4) && cnt >= 3 => {
+                let d = if typ == 3 {
+                    read_u16_list(raw, le).into_iter().map(u32::from).collect()
+                } else {
+                    read_u32_list(raw, le)
+                };
+                if d.len() >= 3 {
+                    out.hue_sat_dims = [d[0], d[1], d[2]];
+                }
             }
-            50981 if typ == 4 && cnt >= 3 => {
-                let d = read_u32_list(raw, le);
+            50938 if typ == 11 || typ == 12 => {
+                out.hue_sat_data1 = read_float_list(raw, le, typ);
+            }
+            50939 if typ == 11 || typ == 12 => {
+                out.hue_sat_data2 = read_float_list(raw, le, typ);
+            }
+            50940 if typ == 11 || typ == 12 => {
+                let flats = read_float_list(raw, le, typ);
+                out.tone_curve = flats
+                    .chunks(2)
+                    .filter(|c| c.len() == 2 && c[0].is_finite() && c[1].is_finite())
+                    .map(|c| [c[0], c[1]])
+                    .collect();
+            }
+            50981 if (typ == 3 || typ == 4) && cnt >= 3 => {
+                let d = if typ == 3 {
+                    read_u16_list(raw, le).into_iter().map(u32::from).collect()
+                } else {
+                    read_u32_list(raw, le)
+                };
                 if d.len() >= 3 {
                     out.look_dims = [d[0], d[1], d[2]];
                 }
             }
-            50982 if typ == 11 => {
-                out.look_data = read_f32_list(raw, le);
+            50982 if typ == 11 || typ == 12 => {
+                out.look_data = read_float_list(raw, le, typ);
                 out.has_look = out.look_data.len() >= 6;
             }
+            51107 => out.hue_sat_encoding = val,
+            51108 => out.look_encoding = val,
+            51109 => out.baseline_exposure_offset = read_srat1(raw, le),
             _ => {}
         }
         p += 12;
@@ -1062,6 +1467,34 @@ fn read_f32_list(raw: &[u8], le: bool) -> Vec<f32> {
         .collect()
 }
 
+fn read_u16_list(raw: &[u8], le: bool) -> Vec<u16> {
+    (0..raw.len() / 2).map(|i| read_u16(raw, i * 2, le)).collect()
+}
+
+fn read_float_list(raw: &[u8], le: bool, typ: u16) -> Vec<f32> {
+    if typ == 12 {
+        (0..raw.len() / 8)
+            .map(|i| {
+                let mut b = [0u8; 8];
+                b.copy_from_slice(&raw[i * 8..i * 8 + 8]);
+                let v = if le {
+                    f64::from_le_bytes(b)
+                } else {
+                    f64::from_be_bytes(b)
+                };
+                v as f32
+            })
+            .collect()
+    } else {
+        read_f32_list(raw, le)
+    }
+}
+
+fn read_ascii(raw: &[u8]) -> String {
+    let end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
+    String::from_utf8_lossy(&raw[..end]).trim().to_string()
+}
+
 fn read_srat1(raw: &[u8], le: bool) -> f32 {
     if raw.len() < 8 {
         return 0.0;
@@ -1069,6 +1502,19 @@ fn read_srat1(raw: &[u8], le: bool) -> f32 {
     let a = read_i32(raw, 0, le) as f64;
     let b = read_i32(raw, 4, le) as f64;
     if b.abs() < 1e-12 { 0.0 } else { (a / b) as f32 }
+}
+
+fn read_matrix9(raw: &[u8], le: bool, typ: u16) -> [f32; 9] {
+    if typ == 11 || typ == 12 {
+        let f = read_float_list(raw, le, typ);
+        let mut m = identity3();
+        for i in 0..9.min(f.len()) {
+            m[i] = f[i];
+        }
+        m
+    } else {
+        read_srat9(raw, le)
+    }
 }
 
 fn read_srat9(raw: &[u8], le: bool) -> [f32; 9] {
@@ -1165,14 +1611,9 @@ fn profile_from_vendor_raw(data: &[u8]) -> Result<DngProfile> {
     Ok(out)
 }
 
-pub fn parse_dng_profile(data: &[u8]) -> Result<DngProfile> {
-    if data.len() < 8 {
-        return Err(anyhow!("DNG too small"));
-    }
-    let le = data[0] == b'I';
-    let off = read_u32(data, 4, le) as usize;
-    let mut out = DngProfile::default();
-    parse_ifd(data, off, le, &mut Vec::new(), &mut out);
+fn finalize_profile(out: &mut DngProfile) {
+    out.has_hue_sat_map = !out.hue_sat_data1.is_empty() || !out.hue_sat_data2.is_empty();
+    out.has_look = out.look_data.len() >= 6;
     if !out.has_forward {
         out.notes
             .push("No ForwardMatrix; falling back to inverse ColorMatrix.".into());
@@ -1183,12 +1624,154 @@ pub fn parse_dng_profile(data: &[u8]) -> Result<DngProfile> {
     }
     if !out.has_hue_sat_map {
         out.notes.push(
-            "No numeric ProfileHueSatMap (DNG 50937/50938). FiveK Adobe Standard DNGs omit it; \
-             only the 36×8×16 LookTable is applied. Residual colour error is expected."
+            "No numeric ProfileHueSatMap (DNG 50937/50938). FiveK Adobe Standard DNGs omit it."
                 .into(),
         );
     }
+    if out.tone_curve.len() >= 2 {
+        out.notes.push(format!(
+            "ProfileToneCurve {} knots.",
+            out.tone_curve.len()
+        ));
+    }
+    if out.total_baseline_ev().abs() > 1e-6 {
+        out.notes.push(format!(
+            "BaselineExposure {:.3} + offset {:.3}.",
+            out.baseline_exposure, out.baseline_exposure_offset
+        ));
+    }
+}
+
+pub fn parse_dng_profile(data: &[u8]) -> Result<DngProfile> {
+    if data.len() < 8 {
+        return Err(anyhow!("DNG too small"));
+    }
+    let le = data[0] == b'I' || data[0] == b'i';
+    if data[0] != b'I' && data[0] != b'M' {
+        return Err(anyhow!("not a TIFF/DNG/DCP"));
+    }
+    let off = read_u32(data, 4, le) as usize;
+    let mut out = DngProfile::default();
+    parse_ifd(data, off, le, &mut Vec::new(), &mut out);
+    finalize_profile(&mut out);
     Ok(out)
+}
+
+/// Overlay a sidecar DCP onto a vendor-RAW profile, keeping AsShotNeutral.
+pub fn merge_dcp_onto_raw(raw: &DngProfile, dcp: &DngProfile) -> DngProfile {
+    let as_shot = raw.as_shot_neutral;
+    let analog = raw.analog_balance;
+    let mut out = dcp.clone();
+    out.as_shot_neutral = as_shot;
+    if analog[0] > 0.0 {
+        out.analog_balance = analog;
+    }
+    if out.dcp_source.is_empty() {
+        out.dcp_source = dcp.profile_name.clone();
+    }
+    out.notes.push(format!(
+        "Merged DCP '{}' ({}) onto vendor AsShotNeutral.",
+        if dcp.profile_name.is_empty() {
+            "unnamed"
+        } else {
+            dcp.profile_name.as_str()
+        },
+        dcp.dcp_source
+    ));
+    out
+}
+
+pub fn load_dcp_file(path: &Path) -> Result<DngProfile> {
+    let bytes = std::fs::read(path)?;
+    let mut p = parse_dng_profile(&bytes)?;
+    p.dcp_source = path.display().to_string();
+    if p.profile_name.is_empty() {
+        p.profile_name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("dcp")
+            .to_string();
+    }
+    p.notes.push(format!("Loaded sidecar DCP {}", path.display()));
+    Ok(p)
+}
+
+/// IR / EXIF model → `slug` used by `fetch_adobe_dcp.py` (`{slug}-adobe_standard.dcp`).
+pub fn dcp_slug_for(hint: &str) -> Option<&'static str> {
+    let t = hint.to_ascii_lowercase();
+    if t.contains("g95") || t.contains("dc-g95") || t.contains("dmc-g95") {
+        Some("g95")
+    } else if t.contains("a6600") || t.contains("ilce-6600") || t.contains("ilce_6600") {
+        Some("a6600")
+    } else if t.contains("z6ii")
+        || t.contains("z 6_2")
+        || t.contains("z_6_2")
+        || t.contains("z 6ii")
+        || t.contains("nikon z 6_2")
+    {
+        Some("z6ii")
+    } else if t.contains("a7riv")
+        || t.contains("a7r iv")
+        || t.contains("ilce-7rm4")
+        || t.contains("ilce_7rm4")
+        || t.contains("a7r4")
+    {
+        Some("a7riv")
+    } else {
+        None
+    }
+}
+
+pub fn find_dcp_file(dcp_dir: &Path, hint: &str, style: &str) -> Option<PathBuf> {
+    let slug = dcp_slug_for(hint)?;
+    let style_slug = style.replace(' ', "_").to_ascii_lowercase();
+    let named = dcp_dir.join(format!("{slug}-{style_slug}.dcp"));
+    if named.is_file() {
+        return Some(named);
+    }
+    for cand in std::fs::read_dir(dcp_dir).ok()?.flatten() {
+        let p = cand.path();
+        if p.extension().and_then(|e| e.to_str()) != Some("dcp") {
+            continue;
+        }
+        let stem = p.file_stem()?.to_string_lossy().to_ascii_lowercase();
+        if stem.contains(slug) && stem.contains(&style_slug) {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// Vendor RAW + optional Adobe Standard DCP from `dcp_dir` / `RAYFINE_DCP_DIR`.
+pub fn parse_color_profile_with_dcp(
+    data: &[u8],
+    hint: Option<&str>,
+    dcp_path: Option<&Path>,
+    dcp_dir: Option<&Path>,
+) -> Result<DngProfile> {
+    let mut raw = parse_color_profile(data)?;
+    if let Some(path) = dcp_path {
+        let dcp = load_dcp_file(path)?;
+        return Ok(merge_dcp_onto_raw(&raw, &dcp));
+    }
+    let dir = dcp_dir
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("RAYFINE_DCP_DIR").map(PathBuf::from));
+    let hint = hint.unwrap_or("");
+    if let Some(dir) = dir {
+        if let Some(path) = find_dcp_file(&dir, hint, "Adobe Standard") {
+            match load_dcp_file(&path) {
+                Ok(dcp) => return Ok(merge_dcp_onto_raw(&raw, &dcp)),
+                Err(e) => raw.notes.push(format!("DCP load failed {}: {e}", path.display())),
+            }
+        } else {
+            raw.notes.push(format!(
+                "No Adobe Standard DCP for '{hint}' under {}.",
+                dir.display()
+            ));
+        }
+    }
+    Ok(raw)
 }
 
 #[cfg(test)]
@@ -1306,6 +1889,87 @@ mod tests {
     fn adobe_stage_parse_includes_color() {
         assert_eq!(AdobeStage::parse("color").unwrap(), AdobeStage::Color);
         assert_eq!(AdobeStage::all().len(), 6);
+        assert_eq!(AdobeStage::parse("huesat").unwrap(), AdobeStage::HueSat);
+        assert_eq!(AdobeStage::parse("baseline").unwrap(), AdobeStage::Baseline);
+        assert_eq!(AdobeStage::parse("sliders").unwrap(), AdobeStage::Sliders);
+        assert_eq!(AdobeStage::profile_layers().len(), 6);
+        let _ = match AdobeStage::parse("tone").unwrap() {
+            AdobeStage::Tone => (),
+            other => {
+                let _: () = match other {
+                    AdobeStage::Wb
+                    | AdobeStage::Matrix
+                    | AdobeStage::HueSat
+                    | AdobeStage::Baseline
+                    | AdobeStage::Look
+                    | AdobeStage::Tone
+                    | AdobeStage::Profile
+                    | AdobeStage::Exposure
+                    | AdobeStage::Curve
+                    | AdobeStage::Color
+                    | AdobeStage::Hs
+                    | AdobeStage::Sliders => (),
+                };
+            }
+        };
+    }
+
+    #[test]
+    fn hsv_identity_table_is_noop() {
+        let dims = [2, 2, 1];
+        let data = vec![0.0, 1.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0];
+        let rgb = [0.42, 0.31, 0.18];
+        let out = apply_hsv_table(dims, &data, 0, rgb);
+        assert!((out[0] - rgb[0]).abs() < 0.02, "{out:?}");
+        assert!((out[1] - rgb[1]).abs() < 0.02, "{out:?}");
+    }
+
+    #[test]
+    fn hsv_value_major_desaturates_only_high_v() {
+        // 2×2×2 identity except the high-value plane scales saturation by 0.2.
+        let dims = [2, 2, 2];
+        let mut data = vec![0.0, 1.0, 1.0];
+        data.resize(2 * 2 * 2 * 3, 0.0);
+        for v in 0..2 {
+            for h in 0..2 {
+                for s in 0..2 {
+                    let idx = ((v * 2 + h) * 2 + s) * 3;
+                    data[idx] = 0.0;
+                    data[idx + 1] = if v == 1 { 0.2 } else { 1.0 };
+                    data[idx + 2] = 1.0;
+                }
+            }
+        }
+        let dark = apply_hsv_table(dims, &data, 0, [0.08, 0.02, 0.02]);
+        let bright = apply_hsv_table(dims, &data, 0, [0.9, 0.2, 0.2]);
+        let dark_s = rgb_to_hsv(dark)[1];
+        let bright_s = rgb_to_hsv(bright)[1];
+        assert!(bright_s < dark_s * 0.7, "dark_s={dark_s} bright_s={bright_s}");
+    }
+
+    #[test]
+    fn profile_tone_identity_is_noop() {
+        let mut p = DngProfile::default();
+        p.tone_curve = vec![[0.0, 0.0], [1.0, 1.0]];
+        let rgb = [0.2, 0.18, 0.16];
+        let out = apply_profile_tone_curve(&p, rgb);
+        assert!((out[0] - rgb[0]).abs() < 1e-4);
+    }
+
+    #[test]
+    fn merge_dcp_keeps_as_shot() {
+        let mut raw = DngProfile::default();
+        raw.as_shot_neutral = [0.7, 1.0, 1.4];
+        let mut dcp = DngProfile::default();
+        dcp.baseline_exposure = 0.35;
+        dcp.profile_name = "Adobe Standard".into();
+        dcp.has_forward = true;
+        dcp.forward_matrix1 = [0.7, 0.2, 0.1, 0.2, 0.8, 0.0, 0.0, 0.1, 0.9];
+        let merged = merge_dcp_onto_raw(&raw, &dcp);
+        assert!((merged.as_shot_neutral[0] - 0.7).abs() < 1e-6);
+        assert!((merged.baseline_exposure - 0.35).abs() < 1e-6);
+        assert_eq!(dcp_slug_for("z6ii-0086"), Some("z6ii"));
+        assert_eq!(dcp_slug_for("Sony ILCE-7RM4"), Some("a7riv"));
     }
 
     #[test]

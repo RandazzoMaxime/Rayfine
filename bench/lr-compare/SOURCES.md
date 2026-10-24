@@ -47,6 +47,13 @@ committed** — the download scripts write `datasets/` (gitignored).
 
 - CC0 RAWs, no Lightroom catalog, no expert JPEG. Not a full triple.
 
+## Adobe DCP (local only)
+
+- Adobe DNG Converter Windows installer ships Camera Raw `.dcp` (Adobe Standard,
+  Adobe Color, Adobe Landscape). See [DCP.md](DCP.md). **Copyright Adobe — not
+  committed.** `fetch_adobe_dcp.py` extracts the four IR bodies.
+- LightCraft does **not** ship Adobe profiles ([LIGHTCRAFT.md](LIGHTCRAFT.md)).
+
 ## Rejected / not used
 
 - FiveK Expert C as the colour/light oracle (ACR 4.4 + already-tonemapped

@@ -3,13 +3,14 @@
 //! Usage:
 //!   cargo run -p Rayfine --bin lr_public_compare -- \
 //!     --raw FILE --sliders sliders.json --out DIR [--long-edge 640] \
-//!     [--path legacy|adobe] [--stage wb|profile|exposure|curve|color|hs|all]
+//!     [--path legacy|adobe] [--stage wb|profile|exposure|curve|color|hs|all|layers]
+//!     [--dcp FILE] [--dcp-dir DIR]
 
 use image::{Rgb, RgbImage};
 use rapidraw_lib::{
     AdobeSettings, AdobeStage, NamedCurve, ToneSliders, develop_adobe_image,
     develop_image, develop_raw_camera_linear, develop_raw_image, legacy_develop_pixel,
-    parse_color_profile,
+    parse_color_profile_with_dcp,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -127,13 +128,15 @@ fn load_camera_linear(path: &Path, long_edge: u32) -> (u32, u32, Vec<[f32; 3]>, 
     (w, h, pixels, bytes)
 }
 
-fn parse_args() -> (PathBuf, PathBuf, PathBuf, u32, String, String) {
+fn parse_args() -> (PathBuf, PathBuf, PathBuf, u32, String, String, Option<PathBuf>, Option<PathBuf>) {
     let mut raw = None;
     let mut sliders = None;
     let mut out = None;
     let mut long_edge = 640u32;
     let mut path = "legacy".to_string();
     let mut stage = "hs".to_string();
+    let mut dcp = None;
+    let mut dcp_dir = None;
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -145,6 +148,8 @@ fn parse_args() -> (PathBuf, PathBuf, PathBuf, u32, String, String) {
             }
             "--path" => path = args.next().unwrap_or_else(|| "legacy".into()),
             "--stage" => stage = args.next().unwrap_or_else(|| "hs".into()),
+            "--dcp" => dcp = args.next().map(PathBuf::from),
+            "--dcp-dir" => dcp_dir = args.next().map(PathBuf::from),
             other => panic!("unknown arg {other}"),
         }
     }
@@ -155,6 +160,8 @@ fn parse_args() -> (PathBuf, PathBuf, PathBuf, u32, String, String) {
         long_edge,
         path,
         stage,
+        dcp,
+        dcp_dir,
     )
 }
 
@@ -243,12 +250,19 @@ fn adobe_settings(parsed: &SliderFile) -> AdobeSettings {
 fn write_profile_notes(out: &Path, profile: &rapidraw_lib::DngProfile, settings: AdobeSettings) {
     let notes = serde_json::json!({
         "baseline_exposure": profile.baseline_exposure,
+        "baseline_exposure_offset": profile.baseline_exposure_offset,
         "as_shot_neutral": profile.as_shot_neutral,
         "analog_balance": profile.analog_balance,
         "has_forward": profile.has_forward,
         "has_look": profile.has_look,
         "has_hue_sat_map": profile.has_hue_sat_map,
         "look_dims": profile.look_dims,
+        "hue_sat_dims": profile.hue_sat_dims,
+        "look_encoding": profile.look_encoding,
+        "hue_sat_encoding": profile.hue_sat_encoding,
+        "tone_curve_knots": profile.tone_curve.len(),
+        "profile_name": profile.profile_name,
+        "dcp_source": profile.dcp_source,
         "illuminant1_k": profile.illuminant1_k,
         "illuminant2_k": profile.illuminant2_k,
         "temperature_k": settings.temperature_k,
@@ -266,7 +280,7 @@ fn write_profile_notes(out: &Path, profile: &rapidraw_lib::DngProfile, settings:
 }
 
 fn main() {
-    let (raw, sliders_path, out, long_edge, path, stage_arg) = parse_args();
+    let (raw, sliders_path, out, long_edge, path, stage_arg, dcp, dcp_dir) = parse_args();
     fs::create_dir_all(&out).expect("mkdir");
     let parsed: SliderFile =
         serde_json::from_str(&fs::read_to_string(&sliders_path).expect("sliders")).expect("json");
@@ -274,10 +288,26 @@ fn main() {
     if path == "adobe" {
         let settings = adobe_settings(&parsed);
         let (w, h, camera, bytes) = load_camera_linear(&raw, long_edge);
-        let profile = parse_color_profile(&bytes).expect("color profile");
+        let hint = raw.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        let parent = raw
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|s| s.to_str())
+            .unwrap_or(hint);
+        let profile = parse_color_profile_with_dcp(
+            &bytes,
+            Some(parent),
+            dcp.as_deref(),
+            dcp_dir.as_deref(),
+        )
+        .expect("color profile");
         write_profile_notes(&out, &profile, settings);
         let stages: Vec<AdobeStage> = if stage_arg == "all" {
-            AdobeStage::all().to_vec()
+            let mut v = AdobeStage::all().to_vec();
+            v.extend(AdobeStage::profile_layers());
+            v
+        } else if stage_arg == "layers" {
+            AdobeStage::profile_layers().to_vec()
         } else {
             vec![AdobeStage::parse(&stage_arg).unwrap_or_else(|e| panic!("{e}"))]
         };

@@ -3,11 +3,14 @@
 
 Stages (each includes the previous):
   wb        Temperature/Tint (or As Shot) only — camera RGB, no matrix
-  profile   + ColorMatrix/ForwardMatrix + LookTable → ProPhoto → sRGB
-  exposure  + BaselineExposure + Exposure (Brightness still off)
+  profile   + ColorMatrix/ForwardMatrix + HueSatMap + Look + ProfileToneCurve (BE skipped)
+  exposure  + BaselineExposure + Exposure
   curve     + named ToneCurve / Contrast / parametric / ToneCurvePV2012
   color     + HSL + Calibration + Vibrance/Saturation
   hs        + Dehaze / Clarity / Texture + Highlights/Shadows/Whites/Blacks
+
+Profile-layer ablation (DNG ch. 6 / LightCraft order):
+  matrix, huesat, baseline, look, tone, sliders
 
 Usage:
   python bench/lr-compare/compare_adobe_match.py \\
@@ -42,7 +45,9 @@ from metrics import compare_srgb, de_heatmap_srgb, delta_e_map, luma, nan_safe
 ROOT = Path(__file__).resolve().parent
 REPO = ROOT.parents[1]
 STAGES = ("wb", "profile", "exposure", "curve", "color", "hs")
+PROFILE_LAYERS = ("matrix", "huesat", "baseline", "look", "tone", "sliders")
 DE_SCALE = 20.0
+DEFAULT_DCP_DIR = ROOT / "datasets" / "dcp"
 
 
 def _fmt(value: float | None, digits: int = 2) -> str:
@@ -51,7 +56,7 @@ def _fmt(value: float | None, digits: int = 2) -> str:
     return f"{value:.{digits}f}"
 
 
-def _run_adobe(raw: Path, sliders: dict, out_dir: Path, long_edge: int) -> None:
+def _run_adobe(raw: Path, sliders: dict, out_dir: Path, long_edge: int, dcp_dir: Path | None) -> None:
     sliders_path = out_dir / "adobe_sliders.json"
     sliders_path.write_text(json.dumps(sliders, indent=2) + "\n", encoding="utf-8")
     cargo = [
@@ -76,6 +81,8 @@ def _run_adobe(raw: Path, sliders: dict, out_dir: Path, long_edge: int) -> None:
         "--stage",
         "all",
     ]
+    if dcp_dir is not None and dcp_dir.is_dir():
+        cargo.extend(["--dcp-dir", str(dcp_dir.resolve())])
     print(" ".join(cargo))
     subprocess.run(cargo, cwd=str(REPO / "src-tauri"), check=True)
 
@@ -161,6 +168,31 @@ def _sheet(
     sheet.save(dest)
 
 
+def _layer_table(rows: list[dict]) -> str:
+    header = (
+        "| Split | Image | matrice | +HueSatMap | +BaselineExposure | +LookTable | "
+        "+ProfileToneCurve | +curseurs | profil |\n"
+        "|---|---|---:|---:|---:|---:|---:|---:|:---|\n"
+    )
+    lines = [header]
+    for row in rows:
+        st = row["stages"]
+        lines.append(
+            "| {split} | `{ident}` | {m} | {h} | {b} | {l} | {t} | {s} | {prof} |\n".format(
+                split=row["split"],
+                ident=row["id"],
+                m=_fmt((st.get("matrix") or {}).get("de_mean")),
+                h=_fmt((st.get("huesat") or {}).get("de_mean")),
+                b=_fmt((st.get("baseline") or {}).get("de_mean")),
+                l=_fmt((st.get("look") or {}).get("de_mean")),
+                t=_fmt((st.get("tone") or {}).get("de_mean")),
+                s=_fmt((st.get("sliders") or st.get("hs") or {}).get("de_mean")),
+                prof=row.get("profile_name") or "rawler",
+            )
+        )
+    return "".join(lines)
+
+
 def _ablation_table(rows: list[dict]) -> str:
     header = (
         "| Split | Image | WB | +profil | +expo | +courbe | +couleur | +H/S | "
@@ -199,6 +231,7 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=ROOT / "out" / "adobe")
     parser.add_argument("--long-edge", type=int, default=640)
     parser.add_argument("--skip-render", action="store_true")
+    parser.add_argument("--dcp-dir", type=Path, default=DEFAULT_DCP_DIR)
     args = parser.parse_args()
     pairs = [p for p in _find_pairs(args.datasets) if p.get("source") != "fivek"]
     pairs.sort(key=lambda p: (0 if p["split"] == "train" else 1, p["id"]))
@@ -216,24 +249,36 @@ def main() -> None:
         adobe = mapped.adobe_json()
         print(f"== {pair['id']} {mapped.banner()}")
         if not (args.skip_render and (work / "adobe_hs.png").exists()):
-            _run_adobe(pair["raw"], adobe, work, args.long_edge)
+            _run_adobe(pair["raw"], adobe, work, args.long_edge, args.dcp_dir)
         lr = _load_srgb(pair["reference"], args.long_edge, pair["reference_space"])
         profile_notes = []
+        profile_name = "rawler ColorMatrix"
         notes_path = work / "adobe_profile.json"
         if notes_path.exists():
             profile = json.loads(notes_path.read_text(encoding="utf-8"))
             profile_notes = list(profile.get("notes") or [])
+            if profile.get("profile_name"):
+                profile_name = str(profile["profile_name"])
+            elif profile.get("dcp_source"):
+                profile_name = str(profile["dcp_source"])
             if not profile.get("has_forward"):
                 profile_notes.append("No ForwardMatrix — inverse ColorMatrix + Bradford CAT.")
             if not profile.get("has_look"):
-                profile_notes.append("No ProfileLookTable (Adobe Landscape LUT is proprietary).")
+                profile_notes.append("No ProfileLookTable.")
+            if profile.get("has_hue_sat_map"):
+                profile_notes.append(f"HueSatMap {profile.get('hue_sat_dims')}")
+            if profile.get("tone_curve_knots"):
+                profile_notes.append(f"ProfileToneCurve {profile.get('tone_curve_knots')} knots")
+            be = profile.get("baseline_exposure")
+            if be:
+                profile_notes.append(f"BaselineExposure {be}")
         provenance = (
-            f"{pair['source']}  license={pair['license']}  "
+            f"{pair['source']}  license={pair['license']}  profile={profile_name}  "
             f"{pair['meta'].get('page') or pair['meta'].get('jpeg_url') or ''}"
         )
         notes = " | ".join([provenance] + profile_notes + mapped.limits[:4])
         stage_metrics: dict[str, dict] = {}
-        for stage in STAGES:
+        for stage in (*STAGES, *PROFILE_LAYERS):
             png = work / f"adobe_{stage}.png"
             pred = _align_pred_to_ref(_load_png_srgb(png, None), lr)
             m = compare_srgb(pred, lr)
@@ -266,12 +311,14 @@ def main() -> None:
             "adobe": adobe,
             "strong_hs": _strong_hs(mapped),
             "notes": profile_notes,
+            "profile_name": profile_name,
             "stages": stage_metrics,
         }
         (work / "adobe_metrics.json").write_text(json.dumps(row, indent=2) + "\n", encoding="utf-8")
         summary.append(row)
     (args.out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     table = _ablation_table(summary)
+    layers = _layer_table(summary)
     weak = [r for r in summary if not r["strong_hs"]]
     val = [r for r in summary if r["split"] == "val"]
     train = [r for r in summary if r["split"] == "train"]
@@ -301,16 +348,18 @@ def main() -> None:
     body = (
         "# Adobe colour / light match (Imaging Resource ACR JPEG, PV 11.0)\n\n"
         "Pipeline: camera-linear demosaic → Temperature/Tint WB (DNG SDK Planckian + CIE 1960 tint) "
-        "→ Inverse(CameraCalibration) → ColorMatrix (vendor RAW) or ForwardMatrix (DNG) "
-        "→ XYZ D50 → ProPhoto linear → BaselineExposure + Exposure → Contrast / parametric / "
-        "ToneCurvePV2012 → HSL / Calibration / Vibrance / Saturation → Dehaze / Clarity / Texture "
-        "→ Highlights/Shadows/Whites/Blacks → ProPhoto→sRGB (Bradford D50→D65).\n\n"
+        "→ Inverse(CameraCalibration) → ColorMatrix / ForwardMatrix (Adobe Standard DCP when "
+        "fetched) → XYZ D50 → ProPhoto linear → HueSatMap → BaselineExposure + Exposure → "
+        "LookTable → ProfileToneCurve → Contrast / parametric / ToneCurvePV2012 → HSL / "
+        "Calibration → Highlights/Shadows/Whites/Blacks → ProPhoto→sRGB (Bradford D50→D65).\n\n"
         "Reference: Imaging Resource `-MOD.JPG` (sRGB IEC61966-2.1, Camera Raw 11.3–13.2, "
         "`ProcessVersion` 11.0, `CameraProfile` Adobe Standard). "
         "Pixels are not committed (IR evaluation license). Hold-out rows use `split=val`.\n"
         "FiveK Expert C is **not** the oracle (ACR 4.4 + already-tonemapped ProPhoto TIFF).\n\n"
         "## Ablation (mean ΔE2000)\n\n"
         + table
+        + "\n## Profile layers (DNG order: Look after BaselineExposure)\n\n"
+        + layers
         + "\n### Means\n\n"
         f"- Train color / hs: {_mean(train, 'color')} / {_mean(train, 'hs')}\n"
         f"- Train midtones (color): {_mean(train, 'color', 'de_mid')}\n"
@@ -320,11 +369,10 @@ def main() -> None:
         f"**{verdict}** (train color={_fmt(train_color)}, train hs={_fmt(train_hs)}, "
         f"val color={_fmt(val_color)}, val hs={_fmt(val_hs)}).\n\n"
         "## Gaps that stay open\n\n"
-        "- **Adobe Standard DCP / Adobe Landscape LookTable** are not in vendor RAW "
-        "(RW2/ARW/NEF). ColorMatrix comes from rawler, not the CameraProfileDigest in the XMP. "
-        "Look.Parameters H/S/Clarity extras and the Look ToneCurvePV2012 are applied; the "
-        "proprietary 3D LookTable is not.\n"
-        "- **BaselineExposure** is 0 on vendor RAW (DNG tag 50730 missing).\n"
+        "- Adobe Standard `.dcp` is fetched locally by `fetch_adobe_dcp.py` (Adobe copyright, "
+        "not committed). Without it, ColorMatrix stays rawler's vendor matrix.\n"
+        "- **Adobe Landscape** is a Look on Adobe Standard: Look.Parameters sliders are applied; "
+        "a separate Landscape DCP LookTable is used only if extracted beside Standard.\n"
         "- **Lens distortion / CA** are already applied in the IR JPEG "
         "(`aux:DistortionCorrectionAlreadyApplied`). Geometry residual is expected.\n"
         "- WB uses Kang CCT→xy + CIE 1960 tint (`kTintScale = −3000`), not Adobe’s unpublished "
