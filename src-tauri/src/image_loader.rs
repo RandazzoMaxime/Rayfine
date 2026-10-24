@@ -141,6 +141,8 @@ pub(crate) fn load_base_image_inner(
             )
         }) {
             Ok(Ok(mut image)) => {
+                crate::lightcraft_camera::fit_look_from_rgb32f(bytes, &image.to_rgb32f())
+                    .map(|look| crate::lightcraft_camera::remember_look(path_for_ext_check, look));
                 let wants_enhance =
                     !use_fast_raw_dev && (color_nr_amount > 0.0 || sharpening_amount > 0.0);
                 if wants_enhance && defer_enhance {

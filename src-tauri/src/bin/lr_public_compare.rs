@@ -11,8 +11,8 @@ use image::{Rgb, RgbImage};
 use rapidraw_lib::{
     AdobeSettings, AdobeStage, LcDevelop, LcSliders, NamedCurve, ToneModel, ToneSliders, WbMode,
     adobe_color_only_linear, develop_adobe_image, develop_image, develop_image_lc,
-    develop_raw_camera_linear, develop_raw_image, legacy_develop_pixel,
-    parse_color_profile_with_sidecars, temp_tint_from_neutral,
+    develop_raw_camera_linear, develop_raw_image, fit_look_from_raw, legacy_develop_pixel,
+    parse_color_profile_with_sidecars,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -355,20 +355,11 @@ fn main() {
             .as_ref()
             .map(|p| p.unique_camera_model.as_str())
             .unwrap_or("");
-        let tone = ToneModel::for_hints(&[parent, hint, model]);
-        // rawler pixels are already as-shot balanced. Invert AsShotNeutral so a
-        // custom Kelvin is Bradford(as-shot → target), not 6500 → target.
-        let as_shot = profile
-            .as_ref()
-            .map(temp_tint_from_neutral)
-            .map(|(t, tint)| (t as f64, tint as f64))
-            .unwrap_or((6500.0, 0.0));
-        let dev = LcDevelop {
-            sliders,
-            wb,
-            as_shot,
-            tone,
-        };
+        let mut tone = ToneModel::for_hints(&[parent, hint, model]);
+        // rawler pixels are already as-shot balanced. LightCraft's relative
+        // scale (6500 / 0 = as-shot) is the correct Bradford source — not an
+        // Adobe-DCP invert (wrong tint sign, ~8000 K), which left snow 11 b* cold.
+        let as_shot = (6500.0, 0.0);
         let linear: Vec<[f32; 3]> = if use_dcp {
             if let Some(ref profile) = profile {
                 let settings = adobe_settings(&parsed);
@@ -388,6 +379,20 @@ fn main() {
                 pixels
             }
         };
+        let look = fit_look_from_raw(&bytes, &linear, w as usize, h as usize);
+        let mut dev = LcDevelop {
+            sliders,
+            wb,
+            as_shot,
+            tone,
+            ..LcDevelop::default()
+        };
+        if let Some(look) = look {
+            tone = ToneModel::CameraFitted;
+            dev.tone = tone;
+            dev.knots = look.knots;
+            dev.colour = look.matrix;
+        }
         let after = develop_image_lc(&linear, w as usize, h as usize, &dev);
         pixels_to_image(&after, w, h)
             .save(out.join("lightcraft_hs.png"))
@@ -400,6 +405,7 @@ fn main() {
             "as_shot_tint": as_shot.1,
             "unique_camera_model": model,
             "dcp_color": use_dcp,
+            "fitted_look": look.is_some(),
             "label": sliders.ui_label(tone, "as-shot/custom"),
         });
         fs::write(out.join("lightcraft_profile.json"), serde_json::to_string_pretty(&notes).unwrap())

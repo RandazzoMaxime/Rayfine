@@ -44,6 +44,7 @@ mod raw_processing;
 mod raw_tone;
 mod scene_tone;
 mod lightcraft_develop;
+mod lightcraft_camera;
 mod tonemap;
 pub use adobe_color::{
     AdobeSettings, AdobeStage, DngProfile, NamedCurve, adobe_color_only_linear,
@@ -57,6 +58,9 @@ pub use scene_tone::{
 };
 pub use lightcraft_develop::{
     DevelopPath, LcDevelop, LcSliders, ToneModel, WbMode, develop_image_lc, develop_pixel_lc,
+};
+pub use lightcraft_camera::{
+    CameraLook, fit_look_from_raw, fit_look_from_rgb32f, look_for_path, remember_look,
 };
 mod tagging;
 mod tagging_utils;

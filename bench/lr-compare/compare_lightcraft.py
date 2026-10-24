@@ -35,6 +35,7 @@ from compare_public_pairs import (
     _to_image,
 )
 from crs_map import map_xmp_path, mapping_to_json
+from diagnose_cast import neutral_mask, srgb_to_lab_d50, stats as cast_stats
 from metrics import (
     compare_srgb,
     de_heatmap_srgb,
@@ -249,7 +250,7 @@ def _sheet(
         _panel("Rayfine (porté LC)", rf, rf_line),
     ]
     if rf_old is not None:
-        panels.append(_panel("Rayfine (ancien)", rf_old, rf_old_line))
+        panels.append(_panel("Rayfine (avant ce fix)", rf_old, rf_old_line))
     top = _stack_h(panels)
     heat_panels = [
         _panel("ΔE LightCraft vs LR", heat_lc, f"plein {_fmt(lc_m.get('de_mean'))}  réduit {_fmt((lc_m.get('robust') or {}).get('de_mean'))}"),
@@ -259,7 +260,7 @@ def _sheet(
         heat_old = de_heatmap_srgb(delta_e_map(rf_old, lr), DE_SCALE)
         heat_panels.append(
             _panel(
-                "ΔE Rayfine ancien vs LR",
+                "ΔE Rayfine avant ce fix vs LR",
                 heat_old,
                 f"plein {_fmt((rf_old_m or {}).get('de_mean'))}  réduit {_fmt(((rf_old_m or {}).get('robust') or {}).get('de_mean'))}",
             )
@@ -280,8 +281,42 @@ def _sheet(
         f"{notes}"
     )
     sheet = _stack_v([_banner(caption, top.width, (20, 32, 48), height=96), top, heat_row])
+    sheet = _draw_inset(sheet, _neutral_inset(lr, lc, rf, rf_old))
     dest.parent.mkdir(parents=True, exist_ok=True)
     sheet.save(dest)
+
+
+def _neutral_inset(lr: np.ndarray, lc: np.ndarray, rf: np.ndarray, before: np.ndarray | None) -> str:
+    mask = neutral_mask(srgb_to_lab_d50(lr))
+    rows = [
+        ("LR", cast_stats(lr, mask)),
+        ("LC", cast_stats(lc, mask)),
+        ("RF", cast_stats(rf, mask)),
+    ]
+    if before is not None:
+        rows.append(("avant", cast_stats(before, mask)))
+    parts = []
+    for name, s in rows:
+        if not s or not s.get("n"):
+            parts.append(f"{name} —")
+            continue
+        parts.append(f"{name} a*{s['a']:+.2f} b*{s['b']:+.2f} R/B {s['rb']:.3f}")
+    n = rows[0][1].get("n") or 0
+    return "neutres (Lab D50)  " + "  |  ".join(parts) + f"  n={n}"
+
+
+def _draw_inset(sheet: Image.Image, text: str) -> Image.Image:
+    draw = ImageDraw.Draw(sheet)
+    font = _font(11)
+    pad = 8
+    lines = [text[i : i + 110] for i in range(0, len(text), 110)] or [text]
+    w = max(draw.textlength(line, font=font) for line in lines)
+    h = 14 * len(lines) + pad * 2
+    x0, y0 = 10, sheet.height - int(h) - 10
+    draw.rectangle((x0, y0, x0 + int(w) + pad * 2, y0 + h), fill=(16, 22, 32))
+    for i, line in enumerate(lines):
+        draw.text((x0 + pad, y0 + pad + i * 14), line, fill=(235, 230, 210), font=font)
+    return sheet
 
 
 def _mean(rows: list[dict], engine: str, *keys: str) -> float | None:
@@ -302,8 +337,8 @@ def _mean(rows: list[dict], engine: str, *keys: str) -> float | None:
 
 def _table(rows: list[dict]) -> str:
     header = (
-        "| Split | Image | LC ΔE | RF porté ΔE | RF ancien ΔE | LC ciel | RF ciel | "
-        "LC ΔEV | RF porté ΔEV | RF ancien ΔEV |\n"
+        "| Split | Image | LC ΔE | RF porté ΔE | RF avant ΔE | LC ciel | RF ciel | "
+        "LC ΔEV | RF porté ΔEV | RF avant ΔEV |\n"
         "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|\n"
     )
     lines = [header]
@@ -377,7 +412,8 @@ def main() -> None:
             print(f"   LightCraft FAILED: {exc}")
             continue
         rf_png = work / "rayfine_lc.png"
-        rf_old_png = work / "adobe_hs.png"
+        rf_before_png = work / "rayfine_before.png"
+        rf_old_png = rf_before_png if rf_before_png.exists() else work / "adobe_hs.png"
         if not (args.skip_rayfine_render and rf_png.exists()):
             _render_rayfine(
                 pair["raw"], mapped.adobe_json(), work, args.long_edge, args.dcp_dir, args.look_dir, "lightcraft"
@@ -438,14 +474,13 @@ def main() -> None:
             f"WB {mapped.white_balance}  E {mapped.raw_exposure():+.2f}  sRGB"
         )
         rf_old_line = (
-            f"Rayfine ancien Adobe  {profile_name}  Look {mapped.look_name or '-'}  "
+            f"Rayfine avant ce fix  {rf_old_png.name}  "
             f"E {mapped.raw_exposure():+.2f}  sRGB"
         )
         notes = (
             f"LC {lc_info['version']} commit {lc_info['commit']}  "
-            f"Rayfine porte lightcraft-gpu/pipeline (WB, expo, base_tone/camera_tone, H/S, vib)  "
-            f"export sRGB  align {lc_align.method}/{rf_align.method}  "
-            f"DCP optionnel couleur seule (off sur le porté)"
+            f"Rayfine: WB relative 6500/0=as-shot, JPEG chromaticity + CameraTone, "
+            f"même shader preview/export  align {lc_align.method}/{rf_align.method}"
         )
         _sheet(
             pair["id"],
@@ -511,10 +546,10 @@ def main() -> None:
         "ΔE2000 ~512 px + flou, zones ciel / horizon / milieux / ombres, ΔEV médian.\n\n"
         + _table(summary)
         + "\n### Moyennes (ΔE réduit)\n\n"
-        f"- Train LC / RF porté / RF ancien : {_fmt(_mean(train, 'lightcraft', 'robust', 'de_mean'))} / "
+        f"- Train LC / RF porté / RF avant ce fix : {_fmt(_mean(train, 'lightcraft', 'robust', 'de_mean'))} / "
         f"{_fmt(_mean(train, 'rayfine', 'robust', 'de_mean'))} / "
         f"{_fmt(_mean(train, 'rayfine_old', 'robust', 'de_mean'))}\n"
-        f"- Val LC / RF porté / RF ancien : {_fmt(_mean(val, 'lightcraft', 'robust', 'de_mean'))} / "
+        f"- Val LC / RF porté / RF avant ce fix : {_fmt(_mean(val, 'lightcraft', 'robust', 'de_mean'))} / "
         f"{_fmt(_mean(val, 'rayfine', 'robust', 'de_mean'))} / "
         f"{_fmt(_mean(val, 'rayfine_old', 'robust', 'de_mean'))}\n"
         f"- Train LC / RF ciel : {_fmt(_mean(train, 'lightcraft', 'robust', 'zones', 'sky'))} / "

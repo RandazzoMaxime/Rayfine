@@ -46,6 +46,8 @@ pub const DEVELOP_PATH_LEGACY: u32 = 2;
 /// Camera-tone selector uploaded to the GPU (`camera_tone` uniform).
 pub const CAMERA_TONE_HDR: u32 = 0;
 pub const CAMERA_TONE_SONY_DRO_OFF: u32 = 1;
+/// Per-photo JPEG-fitted CameraTone (`lightcraft_camera::fit_tone_quantiles`).
+pub const CAMERA_TONE_FITTED: u32 = 2;
 
 /// Bradford cone matrix (XYZ → sharpened cones).
 const BRADFORD: [[f64; 3]; 3] = [
@@ -171,6 +173,7 @@ pub enum WbMode {
 pub enum ToneModel {
     Hdr,
     CameraSonyDroOff,
+    CameraFitted,
     Display,
 }
 
@@ -193,6 +196,7 @@ impl ToneModel {
     pub fn as_u32(self) -> u32 {
         match self {
             Self::CameraSonyDroOff => CAMERA_TONE_SONY_DRO_OFF,
+            Self::CameraFitted => CAMERA_TONE_FITTED,
             Self::Hdr | Self::Display => CAMERA_TONE_HDR,
         }
     }
@@ -279,6 +283,10 @@ pub struct LcDevelop {
     pub wb: WbMode,
     pub as_shot: (f64, f64),
     pub tone: ToneModel,
+    /// Rec.2020 chromaticity matrix after WB (identity when unused).
+    pub colour: [[f32; 3]; 3],
+    /// 32-knot camera tone when `tone == CameraFitted`.
+    pub knots: [[f32; 2]; 32],
 }
 
 impl Default for LcDevelop {
@@ -288,6 +296,8 @@ impl Default for LcDevelop {
             wb: WbMode::AsShot,
             as_shot: (6500.0, 0.0),
             tone: ToneModel::Hdr,
+            colour: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            knots: SONY_DRO_OFF,
         }
     }
 }
@@ -300,6 +310,26 @@ pub fn lum2020(c: [f32; 3]) -> f32 {
 #[inline]
 pub fn log_lum(c: [f32; 3]) -> f32 {
     (lum2020(c).max(1e-7) / GREY).log2()
+}
+
+/// Identity 3×3 (Rec.2020 / chromaticity).
+pub const IDENTITY3: [[f32; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+
+#[inline]
+pub fn mul3x3(a: [[f32; 3]; 3], b: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
+    let mut o = [[0.0f32; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            o[i][j] = a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j];
+        }
+    }
+    o
+}
+
+/// Colour (JPEG chromaticity) then relative WB, baked for the GPU (`M * v`).
+pub fn colour_then_wb_matrix(dev: &LcDevelop) -> [[f32; 3]; 3] {
+    let wb = wb_matrix_for(dev.as_shot, effective_wb(dev)).unwrap_or(IDENTITY3);
+    mul3x3(wb, dev.colour)
 }
 
 #[inline]
@@ -488,13 +518,14 @@ fn mat_mul_d(a: [[f64; 3]; 3], b: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
 }
 
 /// Linear Rec.2020 WB matrix (as-shot → target), luminance-preserving.
+/// `as_shot` and `target` are Kelvin + tint (LightCraft scale +3000), not xy.
 /// `None` when the as-shot white is kept.
 pub fn wb_matrix_for(as_shot: (f64, f64), target: (f64, f64)) -> Option<[[f32; 3]; 3]> {
     if (target.0 - as_shot.0).abs() < 1e-6 && (target.1 - as_shot.1).abs() < 1e-6 {
         return None;
     }
-    let adapt_set = bradford_to_d65(target);
-    let adapt_shot = bradford_to_d65(as_shot);
+    let adapt_set = bradford_to_d65(temp_tint_to_xy(target.0, target.1));
+    let adapt_shot = bradford_to_d65(temp_tint_to_xy(as_shot.0, as_shot.1));
     // space.from_xyz * adapt * space.to_xyz
     let set = mat_mul_d(XYZ_TO_REC2020, mat_mul_d(adapt_set, REC2020_TO_XYZ));
     let shot = mat_mul_d(XYZ_TO_REC2020, mat_mul_d(adapt_shot, REC2020_TO_XYZ));
@@ -502,7 +533,7 @@ pub fn wb_matrix_for(as_shot: (f64, f64), target: (f64, f64)) -> Option<[[f32; 3
     let det = shot[0][0] * (shot[1][1] * shot[2][2] - shot[1][2] * shot[2][1])
         - shot[0][1] * (shot[1][0] * shot[2][2] - shot[1][2] * shot[2][0])
         + shot[0][2] * (shot[1][0] * shot[2][1] - shot[1][1] * shot[2][0]);
-    if det.abs() < 1e-12 {
+    if !det.is_finite() || det.abs() < 1e-12 {
         return None;
     }
     let inv_shot = [
@@ -737,10 +768,17 @@ pub fn tone_camera(y: f32, knots: &[[f32; 2]; 32], contrast: f32, whites: f32, b
 }
 
 pub fn tone_apply(y: f32, sliders: LcSliders, tone: ToneModel) -> f32 {
+    tone_apply_knots(y, sliders, tone, &SONY_DRO_OFF)
+}
+
+pub fn tone_apply_knots(y: f32, sliders: LcSliders, tone: ToneModel, knots: &[[f32; 2]; 32]) -> f32 {
     match tone {
         ToneModel::Hdr => tone_hdr(y, sliders.contrast, sliders.whites, sliders.blacks),
         ToneModel::CameraSonyDroOff => {
             tone_camera(y, &SONY_DRO_OFF, sliders.contrast, sliders.whites, sliders.blacks)
+        }
+        ToneModel::CameraFitted => {
+            tone_camera(y, knots, sliders.contrast, sliders.whites, sliders.blacks)
         }
         ToneModel::Display => tone_display(y, sliders.contrast, sliders.whites, sliders.blacks),
     }
@@ -802,6 +840,14 @@ pub fn apply_vibrance_sat(rgb: [f32; 3], vibrance: f32, saturation: f32) -> [f32
     oklab_to_2020(lab)
 }
 
+pub fn srgb_to_linear_f32(v: f32) -> f32 {
+    if v <= 0.04045 {
+        v / 12.92
+    } else {
+        ((v + 0.055) / 1.055).powf(2.4)
+    }
+}
+
 pub fn encode_srgb(v: f32) -> f32 {
     if v <= 0.0 {
         0.0
@@ -816,6 +862,8 @@ pub fn encode_srgb(v: f32) -> f32 {
 pub fn develop_pixel_lc(rgb_srgb: [f32; 3], mask_luma_srgb: f32, dev: &LcDevelop) -> [f32; 3] {
     let reconstructed = reconstruct_pixel(rgb_srgb, None);
     let mut c = srgb_to_rec2020(reconstructed);
+    // LightCraft: JPEG chromaticity (starting look) then relative WB.
+    c = mul3(dev.colour, c);
     c = apply_wb(c, dev);
     let gain = 2f32.powf(dev.sliders.exposure);
     c = [c[0] * gain, c[1] * gain, c[2] * gain];
@@ -830,7 +878,7 @@ pub fn develop_pixel_lc(rgb_srgb: [f32; 3], mask_luma_srgb: f32, dev: &LcDevelop
         c = [c[0] * g, c[1] * g, c[2] * g];
     }
     let yl = lum2020(c);
-    let o = tone_apply(yl, dev.sliders, dev.tone);
+    let o = tone_apply_knots(yl, dev.sliders, dev.tone, &dev.knots);
     let mut d = if yl > 1e-9 {
         [c[0] * o / yl, c[1] * o / yl, c[2] * o / yl]
     } else {
@@ -848,7 +896,8 @@ pub fn develop_pixel_lc(rgb_srgb: [f32; 3], mask_luma_srgb: f32, dev: &LcDevelop
 
 /// Rec.2020-linear in → encoded sRGB out (when the caller already converted).
 pub fn develop_pixel_rec2020(rgb: [f32; 3], mask_luma: f32, dev: &LcDevelop) -> [f32; 3] {
-    let mut c = apply_wb(rgb, dev);
+    let mut c = mul3(dev.colour, rgb);
+    c = apply_wb(c, dev);
     let gain = 2f32.powf(dev.sliders.exposure);
     c = [c[0].max(0.0) * gain, c[1].max(0.0) * gain, c[2].max(0.0) * gain];
     let base = (mask_luma.max(1e-7) / GREY).log2() + dev.sliders.exposure;
@@ -862,7 +911,7 @@ pub fn develop_pixel_rec2020(rgb: [f32; 3], mask_luma: f32, dev: &LcDevelop) -> 
         c = [c[0] * g, c[1] * g, c[2] * g];
     }
     let yl = lum2020(c);
-    let o = tone_apply(yl, dev.sliders, dev.tone);
+    let o = tone_apply_knots(yl, dev.sliders, dev.tone, &dev.knots);
     let mut d = if yl > 1e-9 {
         [c[0] * o / yl, c[1] * o / yl, c[2] * o / yl]
     } else {
@@ -897,6 +946,7 @@ pub fn develop_image_lc(
     reconstruct_image(&mut work, width, height);
     for px in &mut work {
         *px = srgb_to_rec2020(*px);
+        *px = mul3(dev.colour, *px);
         *px = apply_wb(*px, dev);
         let g = 2f32.powf(dev.sliders.exposure);
         *px = [px[0] * g, px[1] * g, px[2] * g];
@@ -923,7 +973,7 @@ pub fn develop_image_lc(
                 c = [c[0] * g, c[1] * g, c[2] * g];
             }
             let yl = lum2020(c);
-            let o = tone_apply(yl, dev.sliders, dev.tone);
+            let o = tone_apply_knots(yl, dev.sliders, dev.tone, &dev.knots);
             let mut d = if yl > 1e-9 {
                 [c[0] * o / yl, c[1] * o / yl, c[2] * o / yl]
             } else {
@@ -951,6 +1001,7 @@ pub fn develop_image_rec2020(
     let n = width * height;
     let mut work = pixels[..n].to_vec();
     for px in &mut work {
+        *px = mul3(dev.colour, *px);
         *px = apply_wb(*px, dev);
         let g = 2f32.powf(dev.sliders.exposure);
         *px = [px[0].max(0.0) * g, px[1].max(0.0) * g, px[2].max(0.0) * g];
@@ -977,7 +1028,7 @@ pub fn develop_image_rec2020(
                 c = [c[0] * g, c[1] * g, c[2] * g];
             }
             let yl = lum2020(c);
-            let o = tone_apply(yl, dev.sliders, dev.tone);
+            let o = tone_apply_knots(yl, dev.sliders, dev.tone, &dev.knots);
             let mut d = if yl > 1e-9 {
                 [c[0] * o / yl, c[1] * o / yl, c[2] * o / yl]
             } else {
@@ -997,7 +1048,8 @@ pub fn develop_image_rec2020(
 
 /// Linear display-referred sRGB of a Rec.2020 pixel after tone (no encode).
 pub fn develop_linear_rec2020(rgb: [f32; 3], mask_luma: f32, dev: &LcDevelop) -> [f32; 3] {
-    let mut c = apply_wb(rgb, dev);
+    let mut c = mul3(dev.colour, rgb);
+    c = apply_wb(c, dev);
     let gain = 2f32.powf(dev.sliders.exposure);
     c = [c[0].max(0.0) * gain, c[1].max(0.0) * gain, c[2].max(0.0) * gain];
     let base = (mask_luma.max(1e-7) / GREY).log2() + dev.sliders.exposure;
@@ -1011,7 +1063,7 @@ pub fn develop_linear_rec2020(rgb: [f32; 3], mask_luma: f32, dev: &LcDevelop) ->
         c = [c[0] * g, c[1] * g, c[2] * g];
     }
     let yl = lum2020(c);
-    let o = tone_apply(yl, dev.sliders, dev.tone);
+    let o = tone_apply_knots(yl, dev.sliders, dev.tone, &dev.knots);
     let mut d = if yl > 1e-9 {
         [c[0] * o / yl, c[1] * o / yl, c[2] * o / yl]
     } else {
@@ -1035,6 +1087,31 @@ mod tests {
         let rgb = [0.4, 0.3, 0.2];
         let out = apply_wb(rgb, &dev);
         assert!(almost(out[0], 0.4, 1e-6) && almost(out[1], 0.3, 1e-6) && almost(out[2], 0.2, 1e-6));
+    }
+
+    #[test]
+    fn custom_7500_from_d65_warms_already_balanced_grey() {
+        let mut warm = LcDevelop::default();
+        warm.wb = WbMode::Custom {
+            temp: 7500.0,
+            tint: 0.0,
+        };
+        let out = apply_wb([0.4, 0.4, 0.4], &warm);
+        assert!(
+            out[0] > out[2],
+            "7500 K from D65 as-shot must warm (R>B), got {out:?}"
+        );
+        let mut inverted = LcDevelop::default();
+        inverted.as_shot = (7986.0, -24.7);
+        inverted.wb = WbMode::Custom {
+            temp: 7500.0,
+            tint: 0.0,
+        };
+        let cold = apply_wb([0.4, 0.4, 0.4], &inverted);
+        assert!(
+            out[0] / out[2] > cold[0] / cold[2],
+            "relative 6500→7500 must be warmer than DCP-invert 7986/-25→7500; warm={out:?} invert={cold:?}"
+        );
     }
 
     #[test]
@@ -1151,5 +1228,63 @@ mod tests {
         assert!(src.contains("fn lc_apply_wb"), "WGSL twin missing WB");
         assert!(src.contains("fn lc_vibrance_sat"), "WGSL twin missing vibrance");
         assert!(src.contains("SONY_DRO_OFF"), "WGSL twin missing camera tone");
+        assert!(src.contains("LC_KNOTS"), "WGSL twin missing uploaded CameraTone knots");
+        assert!(
+            src.contains("camera == 1u || camera == 2u"),
+            "WGSL must apply uploaded knots for Sony and JPEG-fitted CameraTone"
+        );
+        let finish = include_str!("shaders/shader.wgsl");
+        assert!(
+            finish.contains("lc_tone_knots"),
+            "preview/export shader must upload CameraTone knots"
+        );
+        assert!(
+            finish.contains("LC_KNOTS"),
+            "preview/export must copy knots into the LightCraft twin"
+        );
+        let combined = format!("{src}\n{finish}");
+        let device = pollster::block_on(adapter.unwrap().request_device(&Default::default()));
+        if let Ok((device, _)) = device {
+            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("lc-cpu-gpu-equiv"),
+                source: wgpu::ShaderSource::Wgsl(combined.into()),
+            });
+            let _ = module;
+        }
+    }
+
+    #[test]
+    fn colour_then_wb_matches_cpu_steps() {
+        let mut dev = LcDevelop::default();
+        dev.colour = [
+            [1.05, -0.03, 0.0],
+            [-0.02, 1.0, 0.01],
+            [0.0, -0.04, 1.08],
+        ];
+        dev.wb = WbMode::Custom {
+            temp: 7500.0,
+            tint: 0.0,
+        };
+        let rgb = [0.42, 0.38, 0.35];
+        let stepped = apply_wb(mul3(dev.colour, rgb), &dev);
+        let baked = mul3(colour_then_wb_matrix(&dev), rgb);
+        for i in 0..3 {
+            assert!((stepped[i] - baked[i].max(0.0)).abs() < 1e-5, "{stepped:?} vs {baked:?}");
+        }
+    }
+
+    #[test]
+    fn fitted_tone_matches_sony_when_knots_are_sony() {
+        let mut sliders = LcSliders::default();
+        sliders.contrast = 10.0;
+        let a = tone_apply_knots(0.22, sliders, ToneModel::CameraSonyDroOff, &SONY_DRO_OFF);
+        let b = tone_apply_knots(0.22, sliders, ToneModel::CameraFitted, &SONY_DRO_OFF);
+        assert!((a - b).abs() < 1e-6, "{a} vs {b}");
+        let mut lifted = SONY_DRO_OFF;
+        for k in &mut lifted {
+            k[1] = (k[1] * 1.08).min(0.99);
+        }
+        let c = tone_apply_knots(0.22, sliders, ToneModel::CameraFitted, &lifted);
+        assert!(c > b, "lifted JPEG curve must raise midtones: {c} vs {b}");
     }
 }

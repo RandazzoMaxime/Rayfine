@@ -119,6 +119,7 @@ fn develop_buffer(pixels: &[[f32; 3]], w: u32, h: u32, sliders: ToneSliders, kin
                 wb: WbMode::AsShot,
                 as_shot: (6500.0, 0.0),
                 tone: ToneModel::Hdr,
+                ..LcDevelop::default()
             };
             develop_image_lc(pixels, w as usize, h as usize, &dev)
         }

@@ -45,6 +45,7 @@ const LC_OK_FROM_LAB: mat3x3<f32> = mat3x3<f32>(
 );
 
 // Sony DRO-off knots (CC0 pixls.us pool). Packed as (scene, display) pairs.
+// Uploaded per photo when `camera == 2` (JPEG-fitted CameraTone). Default is Sony.
 const SONY_DRO_OFF: array<vec2<f32>, 32> = array<vec2<f32>, 32>(
     vec2<f32>(0.01655, 0.01799), vec2<f32>(0.01970, 0.02376),
     vec2<f32>(0.02212, 0.03008), vec2<f32>(0.02469, 0.03634),
@@ -63,6 +64,11 @@ const SONY_DRO_OFF: array<vec2<f32>, 32> = array<vec2<f32>, 32>(
     vec2<f32>(0.27207, 0.60078), vec2<f32>(0.31673, 0.66533),
     vec2<f32>(0.38682, 0.74143), vec2<f32>(0.52622, 0.80307)
 );
+
+// Per-invocation CameraTone knots. Preview/export copies the uniform here
+// before `lc_develop_linear` so this file (concatenated first) can stay
+// independent of `GlobalAdjustments`.
+var<private> LC_KNOTS: array<vec2<f32>, 32> = SONY_DRO_OFF;
 
 fn lc_sstep(e0: f32, e1: f32, x: f32) -> f32 {
     let t = clamp((x - e0) / (e1 - e0), 0.0, 1.0);
@@ -179,21 +185,21 @@ fn lc_camera_tone(y: f32) -> f32 {
     }
     var previous = vec2<f32>(0.0, 0.0);
     for (var i = 0u; i < 32u; i = i + 1u) {
-        let p = SONY_DRO_OFF[i];
+        let p = LC_KNOTS[i];
         if (y <= p.x) {
             let t = (y - previous.x) / max(p.x - previous.x, 1e-8);
             return previous.y + t * (p.y - previous.y);
         }
         previous = p;
     }
-    let a = SONY_DRO_OFF[30];
-    let b = SONY_DRO_OFF[31];
+    let a = LC_KNOTS[30];
+    let b = LC_KNOTS[31];
     let slope = clamp((b.y - a.y) / max(b.x - a.x, 1e-8), 0.1, 16.0);
     return 1.0 - (1.0 - b.y) * exp(-(y - b.x) * slope / max(1.0 - b.y, 0.01));
 }
 
 fn lc_tone_apply(y: f32, contrast: f32, whites: f32, blacks: f32, camera: u32) -> f32 {
-    if (camera == 1u) {
+    if (camera == 1u || camera == 2u) {
         let mapped = lc_camera_tone(y);
         if (contrast == 0.0 && whites == 0.0 && blacks == 0.0) {
             return mapped;

@@ -23,11 +23,20 @@ Ported sources (keep in step with upstream):
     lightcraft-gpu          crates/gpu/src/wgsl/{finish.wgsl,common.wgsl}
     lightcraft-pipeline     crates/pipeline/src/{local.rs,tone.rs,finish.rs,colorops.rs}
     lightcraft-color        crates/color/src/{cct.rs,perceptual.rs}
+    lightcraft-engine       crates/engine/src/camera_preview.rs
+                            (JPEG chromaticity 3×3 `fit_matrix`, quantile
+                            CameraTone `fit_tone`, Sony DRO-off ceiling)
 
 Rayfine files that carry this port:
 
     src-tauri/src/lightcraft_develop.rs
+    src-tauri/src/lightcraft_camera.rs
     src-tauri/src/shaders/lightcraft.wgsl
+
+Spectral / DNG camera matrices from rawtoaces-data (Apache-2.0) are used by
+LightCraft as a fallback when a JPEG fit is rejected. This tree does not
+embed those tables; the per-photo JPEG fit is the starting colour for
+ARW / NEF / RW2.
 
 Sony DRO-off camera-tone knots
 ------------------------------

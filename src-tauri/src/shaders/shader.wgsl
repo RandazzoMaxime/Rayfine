@@ -120,6 +120,7 @@ struct GlobalAdjustments {
     halation_threshold: f32,
     halation_hue: f32,
     gray_mixer: array<f32, 8>,
+    lc_tone_knots: array<vec2<f32>, 32>,
 }
 
 struct MaskAdjustments {
@@ -1980,6 +1981,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             blur_lin = srgb_to_linear(tonal_blurred);
         }
         let mask = lc_lum2020(lc_srgb_to_rec(max(blur_lin, vec3<f32>(0.0))));
+        for (var ki = 0u; ki < 32u; ki = ki + 1u) {
+            LC_KNOTS[ki] = adjustments.global.lc_tone_knots[ki];
+        }
         composite_rgb_linear = lc_develop_linear(
             composite_rgb_linear,
             mask,

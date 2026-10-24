@@ -1613,6 +1613,8 @@ pub struct GlobalAdjustments {
     pub halation_threshold: f32,
     pub halation_hue: f32,
     pub gray_mixer: [f32; 8],
+    /// LightCraft CameraTone knots (scene, display). vec2 stride 16 in WGSL uniforms.
+    pub lc_tone_knots: [Point; 32],
 }
 
 impl GlobalAdjustments {
@@ -1838,6 +1840,15 @@ fn parse_color_grade_settings(js_cg: &serde_json::Value) -> ColorGradeSettings {
             / SCALES.color_grading_luminance,
         _pad: 0.0,
     }
+}
+
+fn knots_to_points(knots: [[f32; 2]; 32]) -> [Point; 32] {
+    std::array::from_fn(|i| Point {
+        x: knots[i][0],
+        y: knots[i][1],
+        _pad1: 0.0,
+        _pad2: 0.0,
+    })
 }
 
 fn convert_points_to_aligned(frontend_points: Vec<serde_json::Value>) -> [Point; 16] {
@@ -2272,11 +2283,12 @@ fn get_global_adjustments_from_json(
             .as_deref()
             .unwrap_or_else(|| js_adjustments["developPath"].as_str().unwrap_or("lightcraft")),
     );
-    let camera_tone = crate::lightcraft_develop::ToneModel::for_make(
+    let mut camera_tone = crate::lightcraft_develop::ToneModel::for_make(
         js_adjustments["cameraMake"]
             .as_str()
             .or_else(|| js_adjustments["make"].as_str()),
     );
+    let mut lc_tone_knots = knots_to_points(crate::lightcraft_develop::SONY_DRO_OFF);
     if develop_path == crate::lightcraft_develop::DevelopPath::LightCraft {
         let as_shot = (
             js_adjustments["asShotTemp"].as_f64().unwrap_or(6500.0),
@@ -2306,19 +2318,30 @@ fn get_global_adjustments_from_json(
                 }
             }
         };
+        let mut colour = crate::lightcraft_develop::IDENTITY3;
+        let mut knots = crate::lightcraft_develop::SONY_DRO_OFF;
+        if let Some(raw_path) = js_adjustments["sourcePath"]
+            .as_str()
+            .or_else(|| js_adjustments["path"].as_str())
+        {
+            if let Some(look) = crate::lightcraft_camera::look_for_path(raw_path) {
+                camera_tone = crate::lightcraft_develop::ToneModel::CameraFitted;
+                knots = look.knots;
+                colour = look.matrix;
+                lc_tone_knots = knots_to_points(look.knots);
+            }
+        }
         let dev = crate::lightcraft_develop::LcDevelop {
             sliders: crate::lightcraft_develop::LcSliders::default(),
             wb,
             as_shot,
             tone: camera_tone,
+            colour,
+            knots,
         };
-        if let Some(m) =
-            crate::lightcraft_develop::wb_matrix_for(as_shot, crate::lightcraft_develop::effective_wb(&dev))
-        {
-            pipe_to_rendering = GpuMat3::from_rows(m);
-        } else {
-            pipe_to_rendering = GpuMat3::default();
-        }
+        // Colour (JPEG chromaticity) then relative WB, same as the CPU twin.
+        pipe_to_rendering =
+            GpuMat3::from_rows(crate::lightcraft_develop::colour_then_wb_matrix(&dev));
     }
 
     let (has_lut, lut_intensity) = if is_visible("effects") {
@@ -2522,6 +2545,7 @@ fn get_global_adjustments_from_json(
             let keys = ["reds", "oranges", "yellows", "greens", "aquas", "blues", "purples", "magentas"];
             std::array::from_fn(|i| mixer[keys[i]].as_f64().unwrap_or(0.0) as f32 / 100.0)
         },
+        lc_tone_knots,
     }
 }
 
