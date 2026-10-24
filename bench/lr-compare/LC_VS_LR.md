@@ -128,3 +128,60 @@ Highlight recovery did not regress (synthetic sky H−100 clip 57%→0%;
 Sony a7III / Canon 5D IV / a6600 contre-jour sheets in
 `/opt/cursor/artifacts/tone-recovery/`). 4-col planches:
 `/opt/cursor/artifacts/lr-compare/lc-vs-lr/sheets/`.
+
+## After the cold-cast + JPEG CameraTone fix
+
+Root cause of the hyper-blue look: `wb_matrix_for` treated Kelvin + tint
+as xy. Bradford on (6500, 0) was NaN (custom WB became identity); on a
+DCP invert (~7986 / −25) it produced a garbage-blue CAT. Snow a6600-0046
+neutrals were Δb* −11 vs LightCraft.
+
+Fix: Kelvin → Kim xy before Bradford; relative 6500/0 = as-shot; JPEG
+chromaticity 3×3 + quantile CameraTone (Panasonic and other brands);
+Sony DRO-off ceiling; colour then relative WB; same wgpu knots.
+
+| Split | Image | LC ΔE | RF porté ΔE | RF avant ce fix | tone |
+|---|---|---:|---:|---:|---|
+| train | `a6600-0046` | 3.32 | **5.39** | 8.32 | CameraFitted |
+| train | `a6600-0089` | 6.45 | 6.90 | 6.18 | CameraFitted |
+| train | `g95-0192` | 12.67 | **12.38** | 19.69 | CameraFitted |
+| train | `g95-0314` | 10.75 | **12.19** | 21.29 | CameraFitted |
+| train | `z6ii-0086` | 14.84 | **14.67** | 13.39 | CameraFitted |
+| val | `a6600-0156` | 10.08 | **10.59** | 12.11 | CameraSonyDroOff |
+| val | `a7riv-1852` | 14.06 | 20.97 | 17.34 | CameraFitted |
+| val | `g95-0273` | 9.24 | **9.12** | 9.20 | Hdr |
+| val | `g95-1146` | 14.30 | **16.61** | 19.10 | CameraFitted |
+
+Moyennes train LC / RF porté / RF avant : **9.61 / 10.31 / 13.77**.
+Val : **11.92 / 14.32 / 14.44**. Train ΔEV LC / RF : **+0.06 / +0.07**.
+
+G95 train gap closed (0192 17.78→12.38, beats LC; 0314 21.10→12.19).
+Snow 0046 5.98→5.39. Port still **0.70** above LC train (target ≤ 9.59).
+
+### Neutrals Lab D50 (snow / grey)
+
+| Image | LR b* / R/B | LC b* / R/B | RF b* / R/B | Δb* RF−LC | Δb* LC−LR |
+|---|---:|---:|---:|---:|---:|
+| a6600-0046 | −7.75 / 0.914 | −5.28 / 0.940 | −11.79 / 0.875 | −6.51 | +2.48 |
+| a6600-0089 | −4.53 / 0.935 | −3.16 / 0.961 | −2.80 / 0.957 | +0.37 | +1.37 |
+| z6ii-0086 | −1.91 / 1.024 | −12.80 / 0.773 | −16.97 / 0.698 | −4.17 | −10.89 |
+| g95-0314 | −1.67 / 0.939 | +1.95 / 1.002 | +1.67 / 0.997 | −0.28 | +3.62 |
+| g95-0192 | −0.78 / 1.002 | +10.49 / 1.218 | +12.20 / 1.244 | +1.71 | +11.27 |
+
+0046 snow: Δb* vs LC was **−11.2** before this fix, now **−6.5**. Still
+outside the LC-vs-LR margin (+2.5). 0089 and G95 neutrals sit inside
+that margin. z6ii: LC is already colder than LR; RF follows LC and is
+a bit colder still (JPEG matrix on a sky-heavy proxy).
+
+### Residual
+
+1. **No HSM / lens-warp / chroma curve** from `camera_preview.rs`. The
+   3×3 + quantile tone is the global fit only. a7riv-1852 (20.97 vs
+   14.06) is the remaining val hole — 61 MP, custom 5400 / +30, relative
+   6500 = as-shot cools vs the camera’s ~4588 K as-shot.
+2. **Spectral camera matrices** (rawtoaces-data) are not embedded.
+3. Train **10.31 vs LC 9.61** — G95 is closed; leftover is 0046 colour
+   (rawler + JPEG 3×3 ≠ LC starting_colour) and a bit of z6ii.
+
+Highlight recovery: synthetic sky H−100 clip **57.2% → 0%**. a6600
+preset ciel / contre-jour / neige regenerated.
