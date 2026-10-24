@@ -653,7 +653,7 @@ fn apply_scene_local_tone(
     let delta = hl * 2.35 * scene_highlight_mask(log_base)
         + sh * 2.0 * ws * sqrt(ws)
         + wh * 0.28 * scene_whites_mask(log_base)
-        + bl * 0.32 * scene_blacks_mask(log_base);
+        + bl * 0.20 * scene_blacks_mask(log_base);
     var gain = 1.0;
     if (abs(delta) >= 0.00001) {
         gain = exp2(delta);

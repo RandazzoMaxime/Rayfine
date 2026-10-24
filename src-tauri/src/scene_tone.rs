@@ -25,7 +25,7 @@ pub const FAST_HEADROOM: f32 = 4.0;
 pub const HIGHLIGHT_LOG_STRENGTH: f32 = 2.35;
 pub const SHADOW_LOG_STRENGTH: f32 = 2.0;
 pub const WHITES_LOG_STRENGTH: f32 = 0.28;
-pub const BLACKS_LOG_STRENGTH: f32 = 0.32;
+pub const BLACKS_LOG_STRENGTH: f32 = 0.20;
 /// Reinhard `k` for overrange when Highlights/Whites pull. Larger = stronger recovery.
 pub const OVERRANGE_PULL_K: f32 = 5.0;
 

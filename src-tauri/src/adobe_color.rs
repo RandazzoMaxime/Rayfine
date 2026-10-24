@@ -812,14 +812,23 @@ pub fn eval_profile_tone(points: &[[f32; 2]], x: f32) -> f32 {
     y.clamp(0.0, 1.0)
 }
 
+/// Adobe Standard DCP has no ProfileToneCurve. Lightroom still applies a
+/// process-version midtone (LightCraft measured ~0.8 EV too dark vs a
+/// preview-fitted tone). Vendor RAW has no Adobe preview to fit, so we use a
+/// midtone-weighted lift that fades in the highlights.
+const DEFAULT_PROCESS_EV: f32 = 0.28;
+
 pub fn apply_profile_tone_curve(profile: &DngProfile, rgb: [f32; 3]) -> [f32; 3] {
-    if profile.tone_curve.len() < 2 {
-        return rgb;
+    if profile.tone_curve.len() >= 2 {
+        let y = luma(rgb).max(1e-8);
+        let mapped = eval_profile_tone(&profile.tone_curve, y.clamp(0.0, 1.0));
+        let gain = mapped.max(1e-8) / y.clamp(0.0, 1.0).max(1e-8);
+        return [rgb[0] * gain, rgb[1] * gain, rgb[2] * gain];
     }
     let y = luma(rgb).max(1e-8);
-    let mapped = eval_profile_tone(&profile.tone_curve, y.clamp(0.0, 1.0));
-    let gain = mapped.max(1e-8) / y.clamp(0.0, 1.0).max(1e-8);
-    [rgb[0] * gain, rgb[1] * gain, rgb[2] * gain]
+    let w = (0.45 / (y + 0.45)).clamp(0.0, 1.0);
+    let g = 2f32.powf(DEFAULT_PROCESS_EV * w);
+    [rgb[0] * g, rgb[1] * g, rgb[2] * g]
 }
 
 /// Named Adobe curve. Medium Contrast is a mild S around 0.18 (PV2010 default).
@@ -1960,6 +1969,15 @@ mod tests {
         let rgb = [0.2, 0.18, 0.16];
         let out = apply_profile_tone_curve(&p, rgb);
         assert!((out[0] - rgb[0]).abs() < 1e-4);
+    }
+
+    #[test]
+    fn missing_profile_tone_lifts_midgrey() {
+        let p = DngProfile::default();
+        let rgb = [0.18, 0.18, 0.18];
+        let out = apply_profile_tone_curve(&p, rgb);
+        assert!(out[1] > rgb[1] * 1.05, "{out:?}");
+        assert!(out[1] < rgb[1] * 1.35, "{out:?}");
     }
 
     #[test]
