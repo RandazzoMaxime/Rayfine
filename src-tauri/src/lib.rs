@@ -49,7 +49,7 @@ pub use adobe_color::{
     AdobeSettings, AdobeStage, DngProfile, NamedCurve, adobe_color_only_linear,
     develop_adobe_image, dcp_slug_for, find_dcp_file, load_dcp_file, merge_dcp_onto_raw,
     parse_color_profile, parse_color_profile_with_dcp, parse_color_profile_with_sidecars,
-    parse_dng_profile,
+    parse_dng_profile, temp_tint_from_neutral,
 };
 pub use raw_processing::{develop_raw_camera_linear, develop_raw_image};
 pub use scene_tone::{

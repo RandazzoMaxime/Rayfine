@@ -12,7 +12,7 @@ use rapidraw_lib::{
     AdobeSettings, AdobeStage, LcDevelop, LcSliders, NamedCurve, ToneModel, ToneSliders, WbMode,
     adobe_color_only_linear, develop_adobe_image, develop_image, develop_image_lc,
     develop_raw_camera_linear, develop_raw_image, legacy_develop_pixel,
-    parse_color_profile_with_sidecars,
+    parse_color_profile_with_sidecars, temp_tint_from_neutral,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -340,7 +340,6 @@ fn main() {
             .and_then(|p| p.file_name())
             .and_then(|s| s.to_str())
             .unwrap_or(hint);
-        let tone = ToneModel::for_make(Some(parent));
         let (w, h, pixels, bytes) = load_camera_linear(&raw, long_edge);
         let profile = parse_color_profile_with_sidecars(
             &bytes,
@@ -352,14 +351,17 @@ fn main() {
             parsed.look_uuid.as_deref(),
         )
         .ok();
+        let model = profile
+            .as_ref()
+            .map(|p| p.unique_camera_model.as_str())
+            .unwrap_or("");
+        let tone = ToneModel::for_hints(&[parent, hint, model]);
+        // rawler pixels are already as-shot balanced. Invert AsShotNeutral so a
+        // custom Kelvin is Bradford(as-shot → target), not 6500 → target.
         let as_shot = profile
             .as_ref()
-            .map(|p| {
-                // Neutral camera white → a Kelvin guess; As Shot keeps identity WB.
-                let n = p.as_shot_neutral;
-                let _ = n;
-                (6500.0, 0.0)
-            })
+            .map(temp_tint_from_neutral)
+            .map(|(t, tint)| (t as f64, tint as f64))
             .unwrap_or((6500.0, 0.0));
         let dev = LcDevelop {
             sliders,
@@ -394,6 +396,9 @@ fn main() {
             "path": path,
             "tone": format!("{tone:?}"),
             "wb": format!("{wb:?}"),
+            "as_shot_temp": as_shot.0,
+            "as_shot_tint": as_shot.1,
+            "unique_camera_model": model,
             "dcp_color": use_dcp,
             "label": sliders.ui_label(tone, "as-shot/custom"),
         });

@@ -341,6 +341,7 @@ def main() -> None:
     parser.add_argument("--look-dir", type=Path, default=DEFAULT_LOOK_DIR)
     parser.add_argument("--skip-lc-render", action="store_true")
     parser.add_argument("--skip-rayfine-render", action="store_true")
+    parser.add_argument("--force-old", action="store_true", help="re-render the Adobe/old Rayfine path")
     parser.add_argument("--only", action="append", default=[])
     args = parser.parse_args()
     pairs = [p for p in _find_pairs(args.datasets) if p.get("source") != "fivek"]
@@ -381,7 +382,8 @@ def main() -> None:
             _render_rayfine(
                 pair["raw"], mapped.adobe_json(), work, args.long_edge, args.dcp_dir, args.look_dir, "lightcraft"
             )
-        if not (args.skip_rayfine_render and rf_old_png.exists()):
+        # The Adobe/old path is unchanged by the LightCraft port; reuse it.
+        if not rf_old_png.exists() or args.force_old:
             _render_rayfine(
                 pair["raw"], mapped.adobe_json(), work, args.long_edge, args.dcp_dir, args.look_dir, "adobe"
             )

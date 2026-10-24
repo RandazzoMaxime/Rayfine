@@ -176,11 +176,17 @@ pub enum ToneModel {
 
 impl ToneModel {
     pub fn for_make(make: Option<&str>) -> Self {
-        match make.map(|m| m.to_ascii_lowercase()) {
-            Some(m) if m.contains("sony") || m.contains("ilce") || m.contains("ilca") => {
-                Self::CameraSonyDroOff
-            }
-            _ => Self::Hdr,
+        Self::for_hints(make.as_slice())
+    }
+
+    /// Sony DRO-off camera tone when any hint names a Sony body.
+    /// Imaging Resource folders (`a6600-0046`, `a7riv-1852`) count, as do
+    /// EXIF `ILCE-*` / `ILCA-*` and the camera make.
+    pub fn for_hints(hints: &[&str]) -> Self {
+        if hints.iter().copied().any(is_sony_body) {
+            Self::CameraSonyDroOff
+        } else {
+            Self::Hdr
         }
     }
 
@@ -190,6 +196,17 @@ impl ToneModel {
             Self::Hdr | Self::Display => CAMERA_TONE_HDR,
         }
     }
+}
+
+fn is_sony_body(hint: &str) -> bool {
+    let m = hint.to_ascii_lowercase();
+    const KEYS: &[&str] = &[
+        "sony", "ilce", "ilca", "ilme", "dsc-rx", "nex-", "nex7", "nex5",
+        "a6600", "a6400", "a6500", "a6700", "a6100", "a6300", "a6000",
+        "a7riv", "a7iv", "a7riii", "a7iii", "a7c", "a7r", "a7m", "a7s",
+        "a9ii", "a9m",
+    ];
+    KEYS.iter().any(|k| m.contains(k))
 }
 
 /// LightCraft slider units (−100..100 except exposure in EV).
@@ -1081,6 +1098,20 @@ mod tests {
         // already-saturated colours move less than muted ones
         let vivid0 = apply_vibrance_sat([0.40, 0.10, 0.08], 0.0, 0.0);
         assert!((c(vivid) - c(vivid0)) < (c(muted) - c(muted0)) * 2.0 + 0.05);
+    }
+
+    #[test]
+    fn sony_folder_and_exif_select_camera_tone() {
+        assert_eq!(ToneModel::for_make(Some("a6600-0046")), ToneModel::CameraSonyDroOff);
+        assert_eq!(ToneModel::for_make(Some("a7riv-1852")), ToneModel::CameraSonyDroOff);
+        assert_eq!(ToneModel::for_make(Some("ILCE-6600")), ToneModel::CameraSonyDroOff);
+        assert_eq!(ToneModel::for_make(Some("Sony ILCE-7RM4")), ToneModel::CameraSonyDroOff);
+        assert_eq!(ToneModel::for_hints(&["z6ii-0086", "raw.nef", ""]), ToneModel::Hdr);
+        assert_eq!(ToneModel::for_make(Some("g95-0192")), ToneModel::Hdr);
+        assert_eq!(
+            ToneModel::for_hints(&["a6600-0046", "raw.arw", "ILCE-6600"]),
+            ToneModel::CameraSonyDroOff
+        );
     }
 
     #[test]

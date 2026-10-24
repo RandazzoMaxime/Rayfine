@@ -488,6 +488,61 @@ pub fn neutral_from_temp_tint(profile: &DngProfile, temp_k: f32, tint: f32) -> [
     [cal_cam[0] / g, 1.0, cal_cam[2] / g]
 }
 
+/// Invert `AsShotNeutral` through the DCP matrices to Temperature / Tint.
+/// Used when the working pixels are already as-shot balanced so a custom
+/// Kelvin can be applied as Bradford(as-shot → target), LightCraft-style.
+pub fn temp_tint_from_neutral(profile: &DngProfile) -> (f32, f32) {
+    let target = profile.as_shot_neutral;
+    let err = |temp: f32, tint: f32| -> f32 {
+        let n = neutral_from_temp_tint(profile, temp, tint);
+        (n[0] - target[0]).hypot(n[2] - target[2])
+    };
+    let mut best_t = 5500.0f32;
+    let mut best_tint = 0.0f32;
+    let mut best_e = f32::MAX;
+    let mut t = 2000.0f32;
+    while t <= 12000.0 {
+        let mut tint = -40.0f32;
+        while tint <= 40.0 {
+            let e = err(t, tint);
+            if e < best_e {
+                best_e = e;
+                best_t = t;
+                best_tint = tint;
+            }
+            tint += 8.0;
+        }
+        t += 200.0;
+    }
+    for _ in 0..4 {
+        let mut lo = (best_t - 220.0).max(2000.0);
+        let mut hi = (best_t + 220.0).min(15000.0);
+        for _ in 0..16 {
+            let a = lo + (hi - lo) / 3.0;
+            let b = hi - (hi - lo) / 3.0;
+            if err(a, best_tint) < err(b, best_tint) {
+                hi = b;
+            } else {
+                lo = a;
+            }
+        }
+        best_t = (lo + hi) * 0.5;
+        let mut tlo = (best_tint - 12.0).max(-80.0);
+        let mut thi = (best_tint + 12.0).min(80.0);
+        for _ in 0..16 {
+            let a = tlo + (thi - tlo) / 3.0;
+            let b = thi - (thi - tlo) / 3.0;
+            if err(best_t, a) < err(best_t, b) {
+                thi = b;
+            } else {
+                tlo = a;
+            }
+        }
+        best_tint = (tlo + thi) * 0.5;
+    }
+    (best_t, best_tint)
+}
+
 /// White-balanced camera RGB ready for ForwardMatrix.
 /// DNG: Inverse(AnalogBalance) × (camera / neutral), then Inverse(CameraCalibration).
 fn prepared_camera(cam: [f32; 3], neutral: [f32; 3], cal: [f32; 9], analog: [f32; 3]) -> [f32; 3] {
@@ -2274,6 +2329,30 @@ mod tests {
         for k in 0..9 {
             assert!((i[k] - identity3()[k]).abs() < 1e-5);
         }
+    }
+
+    #[test]
+    fn as_shot_neutral_inverts_to_temp_tint() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../bench/lr-compare/datasets/dcp/a6600-adobe_standard.dcp"
+        );
+        let Ok(bytes) = std::fs::read(path) else {
+            return;
+        };
+        let mut p = parse_dng_profile(&bytes).expect("dcp");
+        let expect_t = 5200.0f32;
+        let expect_tint = -8.0f32;
+        p.as_shot_neutral = neutral_from_temp_tint(&p, expect_t, expect_tint);
+        let (t, tint) = temp_tint_from_neutral(&p);
+        assert!(
+            (t - expect_t).abs() < 80.0,
+            "temp {t} vs {expect_t}"
+        );
+        assert!(
+            (tint - expect_tint).abs() < 4.0,
+            "tint {tint} vs {expect_tint}"
+        );
     }
 
     #[test]
