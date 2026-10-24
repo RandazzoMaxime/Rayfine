@@ -496,10 +496,10 @@ fn fit_look_from_raw_opts(
         let j = jpix[i];
         let ys = lum2020(s);
         let yj = lum2020(j);
-        if !ys.is_finite() || ys < 1e-4 || ys > 1.4 {
+        if !ys.is_finite() || ys < 1e-5 || ys > 1.8 {
             continue;
         }
-        if !yj.is_finite() || yj < 0.003 || yj > 0.98 {
+        if !yj.is_finite() || yj < 0.001 || yj > 0.99 {
             continue;
         }
         if s.iter().any(|c| *c >= 0.99) {
@@ -519,8 +519,10 @@ fn fit_look_from_raw_opts(
         fit_chromaticity_matrix(&pairs).unwrap_or(IDENTITY3)
     };
     let chroma = if colour_locked {
-        // JPEG chroma would pull Adobe HSM+Look back toward the camera JPEG.
-        chroma_from_hue_preserving(&knots)
+        // HSM + Look already own Adobe saturation. A CameraTone-derived
+        // hue-preserving curve is the *camera JPEG* per-channel look
+        // (shadow sat / highlight bleach) and stacks on top of Landscape.
+        IDENTITY_CHROMA
     } else {
         fit_chroma(&pairs, matrix, &knots).unwrap_or(IDENTITY_CHROMA)
     };

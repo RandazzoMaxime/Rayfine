@@ -236,3 +236,39 @@ and `LcSliders`.
   hue-preserving RGB behaviour, not a constant.
 - Vibrance / Saturation XMP still go through `LcSliders::from_ui` →
   OkLab (`apply_vibrance_sat`).
+- Rec.2020 → sRGB is a hue-preserving gamut map (not a hard clamp).
+  Clamp was turning out-of-gamut blues into neon primaries (z6ii sky).
+
+### Remesure after the fix
+
+Same 9 IR, LightCraft CLI `0.13.0` / `38f8d2508`, align ORB+ECC.
+
+**C* Lab D50 (RF / LR):**
+
+| Split | Image | C* LR | LC | RF | RF/LR | avant RF/LR |
+|---|---|---:|---:|---:|---:|---:|
+| train | a6600-0046 | 9.63 | 7.37 | 11.61 | 1.21 | 0.90 |
+| train | a6600-0089 | 15.57 | 11.54 | 13.39 | 0.86 | **0.55** |
+| train | g95-0192 | 29.72 | 31.58 | 24.30 | 0.82 | 0.97 |
+| train | g95-0314 | 11.14 | 9.02 | 10.36 | **0.93** | **0.68** |
+| train | z6ii-0086 | 13.70 | 17.52 | 16.73 | 1.22 | 1.01 |
+| val | a6600-0156 | 15.91 | 17.00 | 19.06 | 1.20 | 0.98 |
+| val | a7riv-1852 | 47.28 | 40.83 | 54.01 | **1.14** | **0.53** |
+| val | g95-0273 | 5.66 | 6.82 | 16.30 | 2.88 | 2.55 |
+| val | g95-1146 | 22.99 | 21.39 | 20.06 | 0.87 | 0.79 |
+
+Train mean RF/LR **1.007** (cible 0.90–1.10). Val **1.523** — the
+mean is the night `g95-0273` (Hdr, JPEG CameraTone did not fit; LC
+is 1.20× via its JPEG look). Without 0273, val mean is **1.07**.
+
+**ΔE réduit:** train LC / RF / avant = **9.61 / 11.67 / 11.53**. Val
+**11.92 / 13.28 / 14.86**. Not ≤ LC overall. 0089 (5.31 vs LC 6.45)
+and z6ii (13.06 vs 14.84) beat LC. a7riv 20.97→14.98 (next to LC 14.06).
+0046 snow ΔE rose (Adobe colour ≠ JPEG 3×3) but neutrals improved:
+b* RF −4.95 vs LC −5.21 (was −11.8).
+
+Vibrance XMP is applied (0089 +17, 0314 +14, 0273 +23, 1146 +10, a7riv +8).
+Saturation stays 0 on all 9, as in the XMP.
+
+Highlight recovery: not re-run this pass; luma CameraTone + `highlight_desat`
+unchanged. Sky ΔEV train **+0.05**.

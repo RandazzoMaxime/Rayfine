@@ -887,6 +887,42 @@ pub fn srgb_to_linear_f32(v: f32) -> f32 {
     }
 }
 
+/// Hue-preserving sRGB gamut map. A hard clamp of Rec.2020 → sRGB turns
+/// out-of-gamut blues into neon primaries (the “almost B&W / then sudden
+/// poster paint” look). Scale chroma toward luminance until every channel
+/// is in 0..1; greys are unchanged.
+#[inline]
+pub fn gamut_map_srgb(s: [f32; 3]) -> [f32; 3] {
+    let y = (0.2126 * s[0] + 0.7152 * s[1] + 0.0722 * s[2]).clamp(0.0, 1.0);
+    let mut t = 1.0f32;
+    for c in s {
+        let d = c - y;
+        if d > 1e-8 {
+            t = t.min((1.0 - y) / d);
+        } else if d < -1e-8 {
+            t = t.min(y / -d);
+        }
+    }
+    let t = t.clamp(0.0, 1.0);
+    if t >= 1.0 {
+        return [s[0].clamp(0.0, 1.0), s[1].clamp(0.0, 1.0), s[2].clamp(0.0, 1.0)];
+    }
+    [
+        (y + (s[0] - y) * t).clamp(0.0, 1.0),
+        (y + (s[1] - y) * t).clamp(0.0, 1.0),
+        (y + (s[2] - y) * t).clamp(0.0, 1.0),
+    ]
+}
+
+fn encode_mapped(s: [f32; 3]) -> [f32; 3] {
+    let s = gamut_map_srgb(s);
+    [
+        encode_srgb(s[0]).clamp(0.0, 1.0),
+        encode_srgb(s[1]).clamp(0.0, 1.0),
+        encode_srgb(s[2]).clamp(0.0, 1.0),
+    ]
+}
+
 pub fn encode_srgb(v: f32) -> f32 {
     if v <= 0.0 {
         0.0
@@ -926,12 +962,7 @@ pub fn develop_pixel_lc(rgb_srgb: [f32; 3], mask_luma_srgb: f32, dev: &LcDevelop
     d = apply_chroma_scale(d, o, &dev.chroma);
     d = highlight_desat(d, o);
     d = apply_vibrance_sat(d, dev.sliders.vibrance, dev.sliders.saturation);
-    let s = rec2020_to_srgb(d);
-    [
-        encode_srgb(s[0]).clamp(0.0, 1.0),
-        encode_srgb(s[1]).clamp(0.0, 1.0),
-        encode_srgb(s[2]).clamp(0.0, 1.0),
-    ]
+    encode_mapped(rec2020_to_srgb(d))
 }
 
 /// Rec.2020-linear in → encoded sRGB out (when the caller already converted).
@@ -960,12 +991,7 @@ pub fn develop_pixel_rec2020(rgb: [f32; 3], mask_luma: f32, dev: &LcDevelop) -> 
     d = apply_chroma_scale(d, o, &dev.chroma);
     d = highlight_desat(d, o);
     d = apply_vibrance_sat(d, dev.sliders.vibrance, dev.sliders.saturation);
-    let s = rec2020_to_srgb(d);
-    [
-        encode_srgb(s[0]).clamp(0.0, 1.0),
-        encode_srgb(s[1]).clamp(0.0, 1.0),
-        encode_srgb(s[2]).clamp(0.0, 1.0),
-    ]
+    encode_mapped(rec2020_to_srgb(d))
 }
 
 /// Guided Rec.2020 luma at 0.15 % of the long edge (LightCraft V2 `tone_base`).
@@ -1023,12 +1049,7 @@ pub fn develop_image_lc(
             d = apply_chroma_scale(d, o, &dev.chroma);
             d = highlight_desat(d, o);
             d = apply_vibrance_sat(d, dev.sliders.vibrance, dev.sliders.saturation);
-            let s = rec2020_to_srgb(d);
-            [
-                encode_srgb(s[0]).clamp(0.0, 1.0),
-                encode_srgb(s[1]).clamp(0.0, 1.0),
-                encode_srgb(s[2]).clamp(0.0, 1.0),
-            ]
+            encode_mapped(rec2020_to_srgb(d))
         })
         .collect()
 }
@@ -1079,12 +1100,7 @@ pub fn develop_image_rec2020(
             d = apply_chroma_scale(d, o, &dev.chroma);
             d = highlight_desat(d, o);
             d = apply_vibrance_sat(d, dev.sliders.vibrance, dev.sliders.saturation);
-            let s = rec2020_to_srgb(d);
-            [
-                encode_srgb(s[0]).clamp(0.0, 1.0),
-                encode_srgb(s[1]).clamp(0.0, 1.0),
-                encode_srgb(s[2]).clamp(0.0, 1.0),
-            ]
+            encode_mapped(rec2020_to_srgb(d))
         })
         .collect()
 }
@@ -1282,6 +1298,10 @@ mod tests {
             "WGSL twin missing chroma_scale"
         );
         assert!(
+            src.contains("fn lc_gamut_map_srgb"),
+            "WGSL twin missing hue-preserving sRGB gamut map"
+        );
+        assert!(
             src.contains("LC_CHROMA"),
             "WGSL twin missing uploaded chroma nodes"
         );
@@ -1406,5 +1426,16 @@ mod tests {
         let sliders = LcSliders::from_ui(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 18.0, 12.0);
         assert!((sliders.vibrance - 18.0).abs() < 1e-6);
         assert!((sliders.saturation - 12.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn gamut_map_keeps_grey_and_pulls_neon_blue_in() {
+        let grey = gamut_map_srgb([0.4, 0.4, 0.4]);
+        assert!((grey[0] - 0.4).abs() < 1e-6 && (grey[1] - 0.4).abs() < 1e-6);
+        let neon = gamut_map_srgb([-0.2, 0.1, 1.8]);
+        assert!(neon.iter().all(|c| (0.0..=1.0).contains(c)), "{neon:?}");
+        let y = 0.2126 * neon[0] + 0.7152 * neon[1] + 0.0722 * neon[2];
+        assert!(y > 0.05, "mapped blue should keep luminance {neon:?}");
+        assert!(neon[2] > neon[0] && neon[2] > neon[1], "{neon:?}");
     }
 }

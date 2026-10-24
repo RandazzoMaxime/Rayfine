@@ -283,8 +283,23 @@ fn lc_encode_srgb(v: f32) -> f32 {
     return 1.055 * pow(v, 1.0 / 2.4) - 0.055;
 }
 
+fn lc_gamut_map_srgb(s: vec3<f32>) -> vec3<f32> {
+    let y = clamp(0.2126 * s.x + 0.7152 * s.y + 0.0722 * s.z, 0.0, 1.0);
+    var t = 1.0;
+    let d = s - vec3<f32>(y);
+    if (d.x > 1e-8) { t = min(t, (1.0 - y) / d.x); }
+    if (d.y > 1e-8) { t = min(t, (1.0 - y) / d.y); }
+    if (d.z > 1e-8) { t = min(t, (1.0 - y) / d.z); }
+    if (d.x < -1e-8) { t = min(t, y / -d.x); }
+    if (d.y < -1e-8) { t = min(t, y / -d.y); }
+    if (d.z < -1e-8) { t = min(t, y / -d.z); }
+    t = clamp(t, 0.0, 1.0);
+    return clamp(vec3<f32>(y) + d * t, vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
 fn lc_encode_srgb3(c: vec3<f32>) -> vec3<f32> {
-    return clamp(vec3<f32>(lc_encode_srgb(c.x), lc_encode_srgb(c.y), lc_encode_srgb(c.z)), vec3<f32>(0.0), vec3<f32>(1.0));
+    let s = lc_gamut_map_srgb(c);
+    return clamp(vec3<f32>(lc_encode_srgb(s.x), lc_encode_srgb(s.y), lc_encode_srgb(s.z)), vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
 // Linear sRGB in → display-linear sRGB out (no encode). Slider units are
@@ -320,7 +335,7 @@ fn lc_develop_linear(
     d = lc_apply_chroma(d, o);
     d = lc_highlight_desat(d, o);
     d = lc_vibrance_sat(d, vibrance, saturation);
-    return lc_rec_to_srgb(d);
+    return lc_gamut_map_srgb(lc_rec_to_srgb(d));
 }
 
 fn lc_develop(
