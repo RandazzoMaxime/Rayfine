@@ -841,6 +841,30 @@ fn read_f64_at(data: &[u8], off: usize) -> Option<f64> {
         .map(f64::from_le_bytes)
 }
 
+/// DNG Converter 16.3 Look XMP stores SatScale, ValScale, HueShift. DCP LookTable
+/// stores HueShift, SatScale, ValScale. If the first channel never leaves a scale
+/// range and the third hits degree-sized values, swizzle to DNG order.
+fn swizzle_look_hsv_if_needed(data: &mut [f32]) {
+    if data.len() < 6 {
+        return;
+    }
+    let n = data.len() / 3;
+    let mut first_abs = 0.0f32;
+    let mut third_abs = 0.0f32;
+    for i in 0..n {
+        first_abs = first_abs.max(data[i * 3].abs());
+        third_abs = third_abs.max(data[i * 3 + 2].abs());
+    }
+    if first_abs < 8.0 && third_abs > 20.0 {
+        for i in 0..n {
+            let (sat, val, hue) = (data[i * 3], data[i * 3 + 1], data[i * 3 + 2]);
+            data[i * 3] = hue;
+            data[i * 3 + 1] = sat;
+            data[i * 3 + 2] = val;
+        }
+    }
+}
+
 /// Parse a decompressed `dng_big_table` blob: HSV LookTable (type 0) or RGB 3D LUT (type 1).
 pub fn parse_look_blob(raw: &[u8], profile: &mut DngProfile) -> Result<()> {
     if raw.len() < 16 {
@@ -874,6 +898,7 @@ pub fn parse_look_blob(raw: &[u8], profile: &mut DngProfile) -> Result<()> {
                 data.push(read_f32_at(raw, off + 8).unwrap_or(1.0));
                 off += 12;
             }
+            swizzle_look_hsv_if_needed(&mut data);
             profile.look_dims = [hue, sat, val];
             profile.look_data = data;
             profile.look_encoding = enc;
@@ -2511,5 +2536,10 @@ mod tests {
         assert!(p.has_look);
         let mid = apply_look_table(&p, [0.22, 0.22, 0.22]);
         assert!(mid.iter().all(|c| c.is_finite()), "{mid:?}");
+        let y0 = (0.22 + 0.22 + 0.22) / 3.0;
+        let y1 = (mid[0] + mid[1] + mid[2]) / 3.0;
+        assert!((y1 - y0).abs() < 0.08, "mid grey exploded {mid:?}");
+        let blue = apply_look_table(&p, [0.12, 0.16, 0.28]);
+        assert!(blue[2] > blue[0], "blue should stay blue-ish {blue:?}");
     }
 }
