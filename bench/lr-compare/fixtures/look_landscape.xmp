@@ -1,0 +1,41 @@
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+   crs:Version="11.3.1"
+   crs:ProcessVersion="11.0"
+   crs:WhiteBalance="As Shot"
+   crs:Temperature="5250" crs:Tint="+19"
+   crs:Exposure2012="+0.05" crs:Contrast2012="0"
+   crs:Highlights2012="-41" crs:Shadows2012="+58"
+   crs:Whites2012="0" crs:Blacks2012="0"
+   crs:Clarity2012="0" crs:Vibrance="0" crs:Saturation="0"
+   crs:ToneCurveName="Medium Contrast"
+   crs:ToneCurveName2012="Linear"
+   crs:CameraProfile="Adobe Standard"
+   crs:HasCrop="False">
+   <crs:ToneCurvePV2012>
+    <rdf:Seq>
+     <rdf:li>0, 0</rdf:li>
+     <rdf:li>255, 255</rdf:li>
+    </rdf:Seq>
+   </crs:ToneCurvePV2012>
+   <crs:Look>
+    <rdf:Description crs:Name="Adobe Landscape">
+     <crs:Parameters>
+      <rdf:Description crs:Highlights2012="-12" crs:Shadows2012="+12" crs:Clarity2012="+10">
+       <crs:ToneCurvePV2012>
+        <rdf:Seq>
+         <rdf:li>0, 0</rdf:li>
+         <rdf:li>64, 60</rdf:li>
+         <rdf:li>128, 128</rdf:li>
+         <rdf:li>192, 196</rdf:li>
+         <rdf:li>255, 255</rdf:li>
+        </rdf:Seq>
+       </crs:ToneCurvePV2012>
+      </rdf:Description>
+     </crs:Parameters>
+    </rdf:Description>
+   </crs:Look>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>

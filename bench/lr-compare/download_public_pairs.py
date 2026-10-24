@@ -5,15 +5,14 @@ Datasets are written to bench/lr-compare/datasets/ (gitignored). This script
 never commits pixels.
 
 Sources (see SOURCES.md):
-  fivek     MIT-Adobe FiveK, LicenseAdobeMIT research files only.
-            DNG + Expert C TIFF (Lightroom 3 export, ProPhoto 16-bit).
-            XMP is extracted from the TIFF (crs: PV2010).
+  ir        Imaging Resource field-test ACR exports (primary).
+            RAW + `-MOD.JPG` (sRGB, embedded crs: PV2012+) + extracted XMP.
+  fivek     MIT-Adobe FiveK — kept for history, not the PV2012 reference.
   ppr10k    Layout helper only — files are on Google Drive / Baidu (research).
   playraw   Optional curated discuss.pixls.us triples (CC, crs: XMP only).
-  pixls     raw.pixls.us CC0 RAWs. No Lightroom export; not a full triple.
 
 Usage:
-  python bench/lr-compare/download_public_pairs.py --accept-research-license --source fivek
+  python bench/lr-compare/download_public_pairs.py --accept-ir-evaluation-license --source ir
 """
 
 from __future__ import annotations
@@ -25,6 +24,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+
+from download_ir_triples import download_ir
 
 ROOT = Path(__file__).resolve().parent
 DATASETS = ROOT / "datasets"
@@ -192,21 +193,28 @@ def main() -> None:
     parser.add_argument(
         "--source",
         action="append",
-        choices=("fivek", "ppr10k", "playraw", "all"),
-        help="Dataset to prepare (repeatable). Default: fivek",
+        choices=("ir", "fivek", "ppr10k", "playraw", "all"),
+        help="Dataset to prepare (repeatable). Default: ir",
     )
     parser.add_argument(
         "--accept-research-license",
         action="store_true",
         help="Required for FiveK / PPR10K (non-commercial research).",
     )
+    parser.add_argument(
+        "--accept-ir-evaluation-license",
+        action="store_true",
+        help="Required for Imaging Resource samples (evaluation / no redistribution).",
+    )
     parser.add_argument("--out", type=Path, default=DATASETS)
     args = parser.parse_args()
-    sources = args.source or ["fivek"]
+    sources = args.source or ["ir"]
     if "all" in sources:
-        sources = ["fivek", "ppr10k", "playraw"]
+        sources = ["ir", "fivek", "ppr10k", "playraw"]
     out = args.out
     out.mkdir(parents=True, exist_ok=True)
+    if "ir" in sources:
+        download_ir(out / "ir", args.accept_ir_evaluation_license)
     if "fivek" in sources:
         download_fivek(out / "fivek", args.accept_research_license)
     if "ppr10k" in sources:

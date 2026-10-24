@@ -110,10 +110,35 @@ def _load_srgb(path: Path, long_edge: int, space: str) -> np.ndarray:
     return np.asarray(rgb).astype(np.float64) / 255.0
 
 
-def _load_png_srgb(path: Path, size: tuple[int, int]) -> np.ndarray:
+def _load_png_srgb(path: Path, size: tuple[int, int] | None) -> np.ndarray:
     img = Image.open(path).convert("RGB")
-    if img.size != size:
+    if size is not None and img.size != size:
         img = img.resize(size, Image.Resampling.LANCZOS)
+    return np.asarray(img).astype(np.float64) / 255.0
+
+
+def _center_crop_to_aspect(arr: np.ndarray, target_aspect: float) -> np.ndarray:
+    height, width = arr.shape[:2]
+    aspect = width / max(height, 1)
+    if abs(aspect - target_aspect) < 0.03:
+        return arr
+    if aspect > target_aspect:
+        new_w = max(1, int(round(height * target_aspect)))
+        x0 = max(0, (width - new_w) // 2)
+        return arr[:, x0 : x0 + new_w]
+    new_h = max(1, int(round(width / target_aspect)))
+    y0 = max(0, (height - new_h) // 2)
+    return arr[y0 : y0 + new_h, :]
+
+
+def _align_pred_to_ref(pred: np.ndarray, ref: np.ndarray) -> np.ndarray:
+    """Center-crop pred to the reference aspect, then resize. Avoids squash."""
+    target_aspect = ref.shape[1] / max(ref.shape[0], 1)
+    cropped = _center_crop_to_aspect(pred, target_aspect)
+    if cropped.shape[0] == ref.shape[0] and cropped.shape[1] == ref.shape[1]:
+        return cropped
+    img = Image.fromarray(np.clip(cropped * 255.0 + 0.5, 0, 255).astype(np.uint8), mode="RGB")
+    img = img.resize((ref.shape[1], ref.shape[0]), Image.Resampling.LANCZOS)
     return np.asarray(img).astype(np.float64) / 255.0
 
 
@@ -295,9 +320,8 @@ def main() -> None:
         else:
             before_png, after_png = _run_rust(pair["raw"], mapped.sliders_json(), work, args.long_edge)
         lr = _load_srgb(pair["reference"], args.long_edge, pair["reference_space"])
-        size = (lr.shape[1], lr.shape[0])
-        before = _load_png_srgb(before_png, size)
-        after = _load_png_srgb(after_png, size)
+        before = _align_pred_to_ref(_load_png_srgb(before_png, None), lr)
+        after = _align_pred_to_ref(_load_png_srgb(after_png, None), lr)
         before_m = compare_srgb(before, lr)
         after_m = compare_srgb(after, lr)
         _contact_sheet(

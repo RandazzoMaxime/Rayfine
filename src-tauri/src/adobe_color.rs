@@ -44,6 +44,7 @@ pub enum AdobeStage {
     Profile,
     Exposure,
     Curve,
+    Color,
     Hs,
 }
 
@@ -54,6 +55,7 @@ impl AdobeStage {
             "profile" => Ok(Self::Profile),
             "exposure" => Ok(Self::Exposure),
             "curve" => Ok(Self::Curve),
+            "color" => Ok(Self::Color),
             "hs" => Ok(Self::Hs),
             other => Err(anyhow!("unknown stage {other}")),
         }
@@ -65,12 +67,20 @@ impl AdobeStage {
             Self::Profile => "profile",
             Self::Exposure => "exposure",
             Self::Curve => "curve",
+            Self::Color => "color",
             Self::Hs => "hs",
         }
     }
 
-    pub fn all() -> [Self; 5] {
-        [Self::Wb, Self::Profile, Self::Exposure, Self::Curve, Self::Hs]
+    pub fn all() -> [Self; 6] {
+        [
+            Self::Wb,
+            Self::Profile,
+            Self::Exposure,
+            Self::Curve,
+            Self::Color,
+            Self::Hs,
+        ]
     }
 }
 
@@ -131,7 +141,28 @@ pub struct AdobeSettings {
     pub shadows: f32,
     pub whites: f32,
     pub blacks: f32,
+    pub vibrance: f32,
+    pub saturation: f32,
+    pub dehaze: f32,
+    pub clarity: f32,
+    pub texture: f32,
+    pub parametric_shadows: f32,
+    pub parametric_darks: f32,
+    pub parametric_lights: f32,
+    pub parametric_highlights: f32,
+    pub parametric_shadow_split: f32,
+    pub parametric_mid_split: f32,
+    pub parametric_highlight_split: f32,
+    pub hsl: [f32; 24],
+    pub red_hue: f32,
+    pub red_sat: f32,
+    pub green_hue: f32,
+    pub green_sat: f32,
+    pub blue_hue: f32,
+    pub blue_sat: f32,
     pub tone_curve: NamedCurve,
+    pub tone_curve_pv2012: [(f32, f32); 8],
+    pub tone_curve_len: usize,
     /// False when XMP `CameraProfile` is ACR 4.x (ColorMatrix + CAT, no LookTable).
     pub use_forward_matrix: bool,
     pub apply_look: bool,
@@ -150,7 +181,28 @@ impl Default for AdobeSettings {
             shadows: 0.0,
             whites: 0.0,
             blacks: 0.0,
+            vibrance: 0.0,
+            saturation: 0.0,
+            dehaze: 0.0,
+            clarity: 0.0,
+            texture: 0.0,
+            parametric_shadows: 0.0,
+            parametric_darks: 0.0,
+            parametric_lights: 0.0,
+            parametric_highlights: 0.0,
+            parametric_shadow_split: 25.0,
+            parametric_mid_split: 50.0,
+            parametric_highlight_split: 75.0,
+            hsl: [0.0; 24],
+            red_hue: 0.0,
+            red_sat: 0.0,
+            green_hue: 0.0,
+            green_sat: 0.0,
+            blue_hue: 0.0,
+            blue_sat: 0.0,
             tone_curve: NamedCurve::Linear,
+            tone_curve_pv2012: [(0.0, 0.0); 8],
+            tone_curve_len: 0,
             use_forward_matrix: true,
             apply_look: true,
         }
@@ -564,6 +616,163 @@ fn to_display(ppr: [f32; 3]) -> [f32; 3] {
     encode_srgb(prophoto_to_srgb_linear(ppr))
 }
 
+fn eval_curve(points: &[(f32, f32)], len: usize, x: f32) -> f32 {
+    if len < 2 {
+        return x;
+    }
+    let x = x.clamp(0.0, 1.0);
+    let pts = &points[..len];
+    if x <= pts[0].0 {
+        return pts[0].1;
+    }
+    for i in 1..len {
+        if x <= pts[i].0 {
+            let t = (x - pts[i - 1].0) / (pts[i].0 - pts[i - 1].0).max(1e-6);
+            return pts[i - 1].1 + t * (pts[i].1 - pts[i - 1].1);
+        }
+    }
+    pts[len - 1].1
+}
+
+fn apply_point_curve(rgb: [f32; 3], settings: AdobeSettings) -> [f32; 3] {
+    if settings.tone_curve_len < 2 {
+        return rgb;
+    }
+    let y = luma(rgb).max(1e-8);
+    let x = y.clamp(0.0, 1.0);
+    let mapped = eval_curve(&settings.tone_curve_pv2012, settings.tone_curve_len, x);
+    let gain = mapped.max(1e-8) / x.max(1e-8);
+    [rgb[0] * gain, rgb[1] * gain, rgb[2] * gain]
+}
+
+fn apply_parametric(rgb: [f32; 3], settings: AdobeSettings) -> [f32; 3] {
+    let amount = settings.parametric_shadows.abs()
+        + settings.parametric_darks.abs()
+        + settings.parametric_lights.abs()
+        + settings.parametric_highlights.abs();
+    if amount < 1e-6 {
+        return rgb;
+    }
+    let y = luma(rgb).clamp(0.0, 1.0);
+    let s0 = (settings.parametric_shadow_split / 100.0).clamp(0.05, 0.45);
+    let s1 = (settings.parametric_mid_split / 100.0).clamp(s0 + 0.05, 0.7);
+    let s2 = (settings.parametric_highlight_split / 100.0).clamp(s1 + 0.05, 0.95);
+    let w_sh = (1.0 - (y / s0).clamp(0.0, 1.0)).powf(1.4);
+    let w_hi = ((y - s2) / (1.0 - s2).max(1e-4)).clamp(0.0, 1.0).powf(1.4);
+    let w_dk = if y < s1 {
+        1.0 - ((y - s0) / (s1 - s0).max(1e-4)).clamp(0.0, 1.0)
+    } else {
+        0.0
+    } * (1.0 - w_sh);
+    let w_li = if y > s1 {
+        ((y - s1) / (s2 - s1).max(1e-4)).clamp(0.0, 1.0)
+    } else {
+        0.0
+    } * (1.0 - w_hi);
+    let ev = (settings.parametric_shadows * w_sh
+        + settings.parametric_darks * w_dk
+        + settings.parametric_lights * w_li
+        + settings.parametric_highlights * w_hi)
+        / 100.0
+        * 0.6;
+    let g = 2f32.powf(ev);
+    [rgb[0] * g, rgb[1] * g, rgb[2] * g]
+}
+
+fn apply_vibrance_sat(rgb: [f32; 3], settings: AdobeSettings) -> [f32; 3] {
+    if settings.vibrance.abs() < 1e-6 && settings.saturation.abs() < 1e-6 {
+        return rgb;
+    }
+    let mut hsv = rgb_to_hsv(rgb);
+    if settings.saturation.abs() > 1e-6 {
+        hsv[1] = (hsv[1] * (1.0 + settings.saturation / 100.0)).clamp(0.0, 1.5);
+    }
+    if settings.vibrance.abs() > 1e-6 {
+        let protect = (1.0 - hsv[1]).powf(1.2);
+        hsv[1] = (hsv[1] * (1.0 + settings.vibrance / 100.0 * protect * 0.85)).max(0.0);
+    }
+    hsv_to_rgb(hsv)
+}
+
+fn hsl_weight(hue: f32, center: f32) -> f32 {
+    let mut d = (hue - center).abs();
+    if d > 180.0 {
+        d = 360.0 - d;
+    }
+    (1.0 - (d / 35.0).clamp(0.0, 1.0)).powf(1.4)
+}
+
+fn apply_hsl(rgb: [f32; 3], settings: AdobeSettings) -> [f32; 3] {
+    if settings.hsl.iter().all(|v| v.abs() < 1e-6) {
+        return rgb;
+    }
+    let centers = [0.0, 30.0, 60.0, 120.0, 180.0, 240.0, 280.0, 320.0];
+    let mut hsv = rgb_to_hsv(rgb);
+    let mut dh = 0.0;
+    let mut ds = 0.0;
+    let mut dv = 0.0;
+    let mut wsum = 0.0;
+    for i in 0..8 {
+        let w = hsl_weight(hsv[0], centers[i]);
+        if w <= 0.0 {
+            continue;
+        }
+        dh += settings.hsl[i] * w;
+        ds += settings.hsl[8 + i] * w;
+        dv += settings.hsl[16 + i] * w;
+        wsum += w;
+    }
+    if wsum > 1e-6 {
+        hsv[0] = (hsv[0] + dh / wsum).rem_euclid(360.0);
+        hsv[1] = (hsv[1] * (1.0 + ds / wsum / 100.0)).max(0.0);
+        hsv[2] = (hsv[2] * (1.0 + dv / wsum / 100.0)).max(0.0);
+    }
+    hsv_to_rgb(hsv)
+}
+
+fn apply_calibration(rgb: [f32; 3], settings: AdobeSettings) -> [f32; 3] {
+    if settings.red_hue.abs()
+        + settings.red_sat.abs()
+        + settings.green_hue.abs()
+        + settings.green_sat.abs()
+        + settings.blue_hue.abs()
+        + settings.blue_sat.abs()
+        < 1e-6
+    {
+        return rgb;
+    }
+    let r = rgb[0]
+        * (1.0 + settings.red_sat / 200.0)
+        + rgb[1] * (settings.red_hue / 400.0)
+        - rgb[2] * (settings.red_hue / 400.0);
+    let g = rgb[1] * (1.0 + settings.green_sat / 200.0)
+        + rgb[2] * (settings.green_hue / 400.0)
+        - rgb[0] * (settings.green_hue / 400.0);
+    let b = rgb[2] * (1.0 + settings.blue_sat / 200.0)
+        + rgb[0] * (settings.blue_hue / 400.0)
+        - rgb[1] * (settings.blue_hue / 400.0);
+    [r.max(0.0), g.max(0.0), b.max(0.0)]
+}
+
+fn apply_dehaze_pixel(rgb: [f32; 3], amount: f32) -> [f32; 3] {
+    if amount.abs() < 1e-6 {
+        return rgb;
+    }
+    let t = (amount / 100.0).clamp(-1.0, 1.0);
+    let air = [0.82, 0.88, 0.96];
+    [
+        (rgb[0] - air[0] * t * 0.35) / (1.0 - t.abs() * 0.25).max(0.4),
+        (rgb[1] - air[1] * t * 0.35) / (1.0 - t.abs() * 0.25).max(0.4),
+        (rgb[2] - air[2] * t * 0.35) / (1.0 - t.abs() * 0.25).max(0.4),
+    ]
+}
+
+fn apply_color_ops(rgb: [f32; 3], settings: AdobeSettings) -> [f32; 3] {
+    let mut p = apply_calibration(rgb, settings);
+    p = apply_hsl(p, settings);
+    apply_vibrance_sat(p, settings)
+}
+
 fn tone_sliders(settings: AdobeSettings) -> ToneSliders {
     ToneSliders::from_ui_full(
         0.0,
@@ -602,9 +811,16 @@ pub fn apply_adobe_pixel(
     ppr = apply_pv2010_brightness(ppr, settings.brightness);
     ppr = apply_named_curve(ppr, settings.tone_curve);
     ppr = apply_contrast(ppr, settings.contrast / 100.0);
+    ppr = apply_parametric(ppr, settings);
+    ppr = apply_point_curve(ppr, settings);
     if matches!(stage, AdobeStage::Curve) {
         return to_display(ppr);
     }
+    ppr = apply_color_ops(ppr, settings);
+    if matches!(stage, AdobeStage::Color) {
+        return to_display(ppr);
+    }
+    ppr = apply_dehaze_pixel(ppr, settings.dehaze);
     let sliders = tone_sliders(settings);
     if sliders.needs_local_mask() {
         ppr = apply_local_tone(ppr, log_grey(luma(ppr).max(1e-8)), sliders);
@@ -650,9 +866,20 @@ pub fn develop_adobe_image(
         *p = apply_pv2010_brightness(*p, settings.brightness);
         *p = apply_named_curve(*p, settings.tone_curve);
         *p = apply_contrast(*p, settings.contrast / 100.0);
+        *p = apply_parametric(*p, settings);
+        *p = apply_point_curve(*p, settings);
     });
     if matches!(stage, AdobeStage::Curve) {
         return ppr.par_iter().map(|p| to_display(*p)).collect();
+    }
+    ppr.par_iter_mut().for_each(|p| *p = apply_color_ops(*p, settings));
+    if matches!(stage, AdobeStage::Color) {
+        return ppr.par_iter().map(|p| to_display(*p)).collect();
+    }
+    ppr.par_iter_mut()
+        .for_each(|p| *p = apply_dehaze_pixel(*p, settings.dehaze));
+    if settings.clarity.abs() + settings.texture.abs() > 1e-6 {
+        apply_local_contrast(&mut ppr, width, height, settings.clarity, settings.texture);
     }
     let sliders = tone_sliders(settings);
     if sliders.needs_local_mask() {
@@ -663,6 +890,21 @@ pub fn develop_adobe_image(
             .for_each(|(p, m)| *p = apply_local_tone(*p, log_grey(*m), sliders));
     }
     ppr.par_iter().map(|p| to_display(*p)).collect()
+}
+
+fn apply_local_contrast(ppr: &mut [[f32; 3]], width: usize, height: usize, clarity: f32, texture: f32) {
+    let n = width * height;
+    let lumas: Vec<f32> = ppr.iter().map(|p| luma(*p)).collect();
+    let blur = multi_scale_guided_luma(&lumas.iter().map(|y| y.max(1e-8)).collect::<Vec<_>>(), width, height, false);
+    let c = clarity / 100.0 * 0.35;
+    let t = texture / 100.0 * 0.22;
+    for i in 0..n {
+        let y = lumas[i].max(1e-8);
+        let mid = 1.0 - ((y - 0.18).abs() * 2.2).clamp(0.0, 1.0);
+        let fine = y - blur[i];
+        let gain = 1.0 + (c * mid + t) * (fine / y.max(0.05)).clamp(-1.5, 1.5);
+        ppr[i] = [ppr[i][0] * gain, ppr[i][1] * gain, ppr[i][2] * gain];
+    }
 }
 
 // --- DNG IFD parser (Adobe tags only) --------------------------------------
@@ -708,6 +950,9 @@ fn parse_ifd(data: &[u8], offset: usize, le: bool, seen: &mut Vec<usize>, out: &
             50728 => {
                 let n = read_rational_n(raw, le, 3);
                 out.as_shot_neutral = [n[0], n[1], n[2]];
+            }
+            50706 => {
+                out.notes.push("DNGVersion present".into());
             }
             50730 => out.baseline_exposure = read_srat1(raw, le),
             50778 => out.illuminant1_k = illuminant_k(val as u16),
@@ -831,6 +1076,60 @@ fn read_rational_n(raw: &[u8], le: bool, n: usize) -> [f32; 3] {
     o
 }
 
+fn matrix_looks_valid(m: [f32; 9]) -> bool {
+    let s0 = (m[0] + m[1] + m[2]).abs();
+    let s1 = (m[3] + m[4] + m[5]).abs();
+    s0 > 0.2 && s0 < 6.0 && s1 > 0.2 && s1 < 6.0
+}
+
+/// DNG ColorMatrix/ForwardMatrix when present; otherwise rawler's vendor matrix.
+pub fn parse_color_profile(data: &[u8]) -> Result<DngProfile> {
+    if let Ok(p) = parse_dng_profile(data)
+        && (p.has_forward || (matrix_looks_valid(p.color_matrix1) && p.notes.iter().any(|n| n.contains("DNGVersion"))))
+    {
+        return Ok(p);
+    }
+    profile_from_vendor_raw(data)
+}
+
+fn profile_from_vendor_raw(data: &[u8]) -> Result<DngProfile> {
+    let source = rawler::rawsource::RawSource::new_from_slice(data);
+    let decoder = rawler::get_decoder(&source)?;
+    let raw = decoder.raw_image(&source, &rawler::decoders::RawDecodeParams::default(), false)?;
+    let mut out = DngProfile::default();
+    let mat = raw
+        .color_matrix
+        .iter()
+        .find(|(illuminant, _)| **illuminant == rawler::imgop::xyz::Illuminant::D65)
+        .or_else(|| raw.color_matrix.iter().next());
+    if let Some((_, color_matrix)) = mat {
+        let mut m = identity3();
+        for i in 0..9.min(color_matrix.len()) {
+            m[i] = color_matrix[i];
+        }
+        out.color_matrix1 = m;
+        out.color_matrix2 = m;
+    }
+    let wb = raw.wb_coeffs;
+    if wb[0].is_finite() && wb[1].abs() > 1e-6 && wb[2].is_finite() {
+        let n = [
+            1.0 / wb[0].max(1e-8),
+            1.0 / wb[1].max(1e-8),
+            1.0 / wb[2].max(1e-8),
+        ];
+        let g = n[1];
+        out.as_shot_neutral = [n[0] / g, 1.0, n[2] / g];
+    }
+    out.has_forward = false;
+    out.has_look = false;
+    out.notes.push(
+        "Vendor RAW: ColorMatrix from rawler (not Adobe Standard DCP). \
+         LookTable / HueSatMap / BaselineExposure from DNG are absent."
+            .into(),
+    );
+    Ok(out)
+}
+
 pub fn parse_dng_profile(data: &[u8]) -> Result<DngProfile> {
     if data.len() < 8 {
         return Err(anyhow!("DNG too small"));
@@ -944,5 +1243,33 @@ mod tests {
     fn named_curve_linear_is_identity() {
         let rgb = [0.2, 0.3, 0.4];
         assert_eq!(apply_named_curve(rgb, NamedCurve::Linear), rgb);
+    }
+
+    #[test]
+    fn default_color_ops_are_identity() {
+        let rgb = [0.22, 0.18, 0.14];
+        let settings = AdobeSettings::default();
+        assert_eq!(apply_color_ops(rgb, settings), rgb);
+        assert_eq!(apply_parametric(rgb, settings), rgb);
+        assert_eq!(apply_point_curve(rgb, settings), rgb);
+        assert_eq!(apply_dehaze_pixel(rgb, 0.0), rgb);
+    }
+
+    #[test]
+    fn point_curve_identity_pair_is_noop() {
+        let mut settings = AdobeSettings::default();
+        settings.tone_curve_pv2012[0] = (0.0, 0.0);
+        settings.tone_curve_pv2012[1] = (1.0, 1.0);
+        settings.tone_curve_len = 2;
+        let rgb = [0.31, 0.22, 0.18];
+        let out = apply_point_curve(rgb, settings);
+        assert!((out[0] - rgb[0]).abs() < 1e-5);
+        assert!((out[1] - rgb[1]).abs() < 1e-5);
+    }
+
+    #[test]
+    fn adobe_stage_parse_includes_color() {
+        assert_eq!(AdobeStage::parse("color").unwrap(), AdobeStage::Color);
+        assert_eq!(AdobeStage::all().len(), 6);
     }
 }

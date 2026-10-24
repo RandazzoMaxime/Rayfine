@@ -35,10 +35,20 @@ class ToneMapping:
     tint: float | None = None
     white_balance: str | None = None
     process_version: str | None = None
+    crs_version: str | None = None
     tone_curve_name: str | None = None
     camera_profile: str | None = None
     vibrance: float = 0.0
     saturation: float = 0.0
+    dehaze: float = 0.0
+    clarity: float = 0.0
+    texture: float = 0.0
+    look_name: str | None = None
+    parametric: dict[str, float] = field(default_factory=dict)
+    hsl: dict[str, float] = field(default_factory=dict)
+    calibration: dict[str, float] = field(default_factory=dict)
+    crop: dict[str, float] | None = None
+    tone_curve_pv2012: list[tuple[float, float]] = field(default_factory=list)
     unused: dict[str, Any] = field(default_factory=dict)
     limits: list[str] = field(default_factory=list)
     source: str = "empty"
@@ -78,6 +88,17 @@ class ToneMapping:
             "use_forward_matrix": True,
             "apply_look": True,
             "camera_profile": self.camera_profile,
+            "look_name": self.look_name,
+            "vibrance": self.vibrance,
+            "saturation": self.saturation,
+            "dehaze": self.dehaze,
+            "clarity": self.clarity,
+            "texture": self.texture,
+            "parametric": self.parametric,
+            "hsl": self.hsl,
+            "calibration": self.calibration,
+            "crop": self.crop,
+            "tone_curve_pv2012": self.tone_curve_pv2012,
         }
 
     def raw_exposure(self) -> float:
@@ -92,9 +113,38 @@ class ToneMapping:
             f"Exp {self.raw_exposure():+.2f}  Br {self.brightness:+.0f}  "
             f"H {self.highlights:+.0f}  S {self.shadows:+.0f}  "
             f"W {self.whites:+.0f}  B {self.blacks:+.0f}  C {self.contrast:+.0f}  "
+            f"Vib {self.vibrance:+.0f} Sat {self.saturation:+.0f}  "
             f"Temp {temp} Tint {tint}  curve={self.tone_curve_name or 'Linear'}  "
-            f"pv={self.process_version or '?'}  src={self.source}"
+            f"pv={self.process_version or '?'}  acr={self.crs_version or '?'}  "
+            f"prof={self.camera_profile or '?'}  look={self.look_name or '-'}  "
+            f"src={self.source}"
         )
+
+    def neutral_adobe_json(self) -> dict[str, Any]:
+        """All develop sliders at 0; keep Temperature/Tint so WB/profile can be judged."""
+        payload = self.adobe_json()
+        for key in (
+            "exposure",
+            "brightness",
+            "contrast",
+            "highlights",
+            "shadows",
+            "whites",
+            "blacks",
+            "vibrance",
+            "saturation",
+            "dehaze",
+            "clarity",
+            "texture",
+        ):
+            payload[key] = 0.0
+        payload["tone_curve"] = "Linear"
+        payload["tone_curve_pv2012"] = []
+        payload["parametric"] = {}
+        payload["hsl"] = {}
+        payload["calibration"] = {}
+        payload["apply_look"] = False
+        return payload
 
 
 def _num(raw: str) -> float | None:
@@ -105,19 +155,41 @@ def _num(raw: str) -> float | None:
 
 
 def parse_crs_attrs(xmp: str) -> dict[str, str]:
+    """Parse the *root* Camera Raw description, not nested Look.Parameters."""
     attrs: dict[str, str] = {}
-    one_line = " ".join(xmp.splitlines())
+    root = xmp
+    look_at = re.search(r"<crs:Look[\s>]", xmp)
+    if look_at:
+        root = xmp[: look_at.start()]
+    one_line = " ".join(root.splitlines())
     for match in CRS_ATTR.finditer(one_line):
-        attrs[match.group(1)] = match.group(2)
-    for match in CRS_ELEM.finditer(xmp):
+        # First wins: nested Correction / RangeMask / Gradient must not
+        # overwrite the root rdf:Description (crs:Version="+2" on masks).
+        attrs.setdefault(match.group(1), match.group(2))
+    for match in CRS_ELEM.finditer(root):
         attrs.setdefault(match.group(1), match.group(2).strip())
     return attrs
 
 
+def parse_look_parameters(xmp: str) -> dict[str, str]:
+    """Numeric extras inside crs:Look / crs:Parameters (Adobe Landscape etc.)."""
+    match = re.search(
+        r"<crs:Parameters>\s*<rdf:Description\b([^>]*)>",
+        xmp,
+        flags=re.DOTALL,
+    )
+    if not match:
+        return {}
+    return {k: v for k, v in CRS_ATTR.findall(match.group(1))}
+
+
 def extract_xmp_packet(data: bytes) -> str | None:
-    match = XMP_META.search(data)
-    if match:
-        return match.group(0).decode("utf-8", "replace")
+    packets = [m.group(0).decode("utf-8", "replace") for m in XMP_META.finditer(data)]
+    if packets:
+        for packet in packets:
+            if "crs:" in packet or "camera-raw-settings" in packet:
+                return packet
+        return max(packets, key=len)
     start = data.find(b"<?xpacket begin")
     if start < 0:
         return None
@@ -131,18 +203,20 @@ def extract_xmp_from_path(path: Path) -> str | None:
     suffix = path.suffix.lower()
     if suffix in {".xmp", ".xml"}:
         return path.read_text(encoding="utf-8", errors="replace")
-    # XMP packets sit near the start of DNG/TIFF/JPEG; cap the scan.
+    # JPEG/TIFF often store a stub XMP first and the crs: packet later.
     with path.open("rb") as handle:
-        head = handle.read(2_000_000)
-    packet = extract_xmp_packet(head)
-    if packet:
+        blob = handle.read(8_000_000)
+    packet = extract_xmp_packet(blob)
+    if packet and ("crs:" in packet or "camera-raw-settings" in packet):
         return packet
-    if path.stat().st_size > 2_000_000:
+    if path.stat().st_size > 8_000_000:
         with path.open("rb") as handle:
-            handle.seek(max(0, path.stat().st_size - 2_000_000))
+            handle.seek(max(0, path.stat().st_size - 4_000_000))
             tail = handle.read()
-        return extract_xmp_packet(tail)
-    return None
+        later = extract_xmp_packet(tail)
+        if later:
+            return later
+    return packet
 
 
 def _is_pv2012(attrs: dict[str, str]) -> bool:
@@ -156,9 +230,15 @@ def _is_pv2012(attrs: dict[str, str]) -> bool:
 
 
 def map_crs_to_rayfine(attrs: dict[str, str]) -> ToneMapping:
+    pv2012 = _is_pv2012(attrs)
     mapped = ToneMapping(
         process_version=attrs.get("ProcessVersion"),
-        tone_curve_name=attrs.get("ToneCurveName") or attrs.get("ToneCurveName2012"),
+        crs_version=attrs.get("Version"),
+        tone_curve_name=(
+            attrs.get("ToneCurveName2012") or attrs.get("ToneCurveName")
+            if pv2012
+            else attrs.get("ToneCurveName") or attrs.get("ToneCurveName2012")
+        ),
         white_balance=attrs.get("WhiteBalance"),
         camera_profile=attrs.get("CameraProfile"),
         vibrance=_num(attrs.get("Vibrance", "0")) or 0.0,
@@ -169,7 +249,7 @@ def map_crs_to_rayfine(attrs: dict[str, str]) -> ToneMapping:
     mapped.temperature_k = temp
     mapped.tint = tint
 
-    if _is_pv2012(attrs):
+    if pv2012:
         mapped.source = "pv2012"
         mapped.exposure = _num(attrs.get("Exposure2012", "0")) or 0.0
         mapped.highlights = _num(attrs.get("Highlights2012", "0")) or 0.0
@@ -177,6 +257,9 @@ def map_crs_to_rayfine(attrs: dict[str, str]) -> ToneMapping:
         mapped.whites = _num(attrs.get("Whites2012", "0")) or 0.0
         mapped.blacks = _num(attrs.get("Blacks2012", "0")) or 0.0
         mapped.contrast = _num(attrs.get("Contrast2012", "0")) or 0.0
+        mapped.dehaze = _num(attrs.get("Dehaze", "0")) or 0.0
+        mapped.clarity = _num(attrs.get("Clarity2012", attrs.get("Clarity", "0"))) or 0.0
+        mapped.texture = _num(attrs.get("Texture", "0")) or 0.0
         mapped.limits.append(
             "PV2012 tone sliders are 1:1 UI units; Adobe's response curves are not."
         )
@@ -216,42 +299,137 @@ def map_crs_to_rayfine(attrs: dict[str, str]) -> ToneMapping:
             ]
         )
 
-    unused_keys = (
-        "Saturation",
-        "Vibrance",
-        "Clarity",
-        "Clarity2012",
-        "ParametricShadows",
-        "ParametricDarks",
-        "ParametricLights",
-        "ParametricHighlights",
-        "ToneCurveName",
-        "ToneCurveName2012",
-        "CameraProfile",
-        "Dehaze",
-        "Texture",
+    hsl_keys = (
+        "HueAdjustmentRed",
+        "HueAdjustmentOrange",
+        "HueAdjustmentYellow",
+        "HueAdjustmentGreen",
+        "HueAdjustmentAqua",
+        "HueAdjustmentBlue",
+        "HueAdjustmentPurple",
+        "HueAdjustmentMagenta",
+        "SaturationAdjustmentRed",
+        "SaturationAdjustmentOrange",
+        "SaturationAdjustmentYellow",
+        "SaturationAdjustmentGreen",
+        "SaturationAdjustmentAqua",
+        "SaturationAdjustmentBlue",
+        "SaturationAdjustmentPurple",
+        "SaturationAdjustmentMagenta",
+        "LuminanceAdjustmentRed",
+        "LuminanceAdjustmentOrange",
+        "LuminanceAdjustmentYellow",
+        "LuminanceAdjustmentGreen",
+        "LuminanceAdjustmentAqua",
+        "LuminanceAdjustmentBlue",
+        "LuminanceAdjustmentPurple",
+        "LuminanceAdjustmentMagenta",
     )
-    unused = {
-        key: attrs[key]
-        for key in unused_keys
-        if key in attrs and attrs[key] not in {"0", "+0", "0.0", "Linear", ""}
+    mapped.hsl = {
+        key: value
+        for key in hsl_keys
+        if (value := _num(attrs.get(key, "0")) or 0.0)
     }
-    if unused:
-        mapped.unused.update(unused)
-        mapped.limits.append(
-            "Saturation / vibrance / clarity / parametric / point curve / camera profile are not applied."
+    mapped.parametric = {
+        key: _num(attrs.get(key, "0")) or 0.0
+        for key in (
+            "ParametricShadows",
+            "ParametricDarks",
+            "ParametricLights",
+            "ParametricHighlights",
+            "ParametricShadowSplit",
+            "ParametricMidtoneSplit",
+            "ParametricHighlightSplit",
         )
-    if mapped.tone_curve_name and mapped.tone_curve_name not in {"Linear", "Linear Contrast"}:
-        mapped.limits.append(f"Tone curve {mapped.tone_curve_name!r} is not applied.")
+        if key in attrs
+    }
+    mapped.calibration = {
+        key: value
+        for key in (
+            "RedHue",
+            "RedSaturation",
+            "GreenHue",
+            "GreenSaturation",
+            "BlueHue",
+            "BlueSaturation",
+            "ShadowTint",
+        )
+        if (value := _num(attrs.get(key, "0")) or 0.0)
+    }
+    if attrs.get("HasCrop") == "True":
+        mapped.crop = {
+            key: _num(attrs.get(key, "0")) or 0.0
+            for key in ("CropLeft", "CropTop", "CropRight", "CropBottom", "CropAngle")
+        }
+    unimplemented = []
+    if mapped.tone_curve_name and mapped.tone_curve_name not in {
+        "Linear",
+        "Linear Contrast",
+        "Medium Contrast",
+        "MediumContrast",
+    }:
+        unimplemented.append(f"named curve {mapped.tone_curve_name!r} (applied as Medium Contrast stand-in)")
     if mapped.white_balance and mapped.white_balance not in {"As Shot", "AsShot"}:
         mapped.limits.append(
             f"White balance {mapped.white_balance!r} is recorded; the Adobe path applies Temperature/Tint."
         )
+    if unimplemented:
+        mapped.limits.extend(unimplemented)
     return mapped
 
 
+def _parse_curve_seq(xmp: str, tag: str) -> list[tuple[float, float]]:
+    block = re.search(rf"<crs:{tag}>(.*?)</crs:{tag}>", xmp, flags=re.DOTALL)
+    if not block:
+        return []
+    points = []
+    for item in re.findall(r"<rdf:li>([^<]+)</rdf:li>", block.group(1)):
+        parts = [p.strip() for p in item.split(",")]
+        if len(parts) >= 2:
+            x = _num(parts[0])
+            y = _num(parts[1])
+            if x is not None and y is not None:
+                points.append((x, y))
+    return points
+
+
 def map_xmp_text(xmp: str) -> ToneMapping:
-    return map_crs_to_rayfine(parse_crs_attrs(xmp))
+    mapped = map_crs_to_rayfine(parse_crs_attrs(xmp))
+    look = parse_look_parameters(xmp)
+    look_name = re.search(r'<crs:Look[\s\S]*?crs:Name="([^"]+)"', xmp)
+    if look_name:
+        mapped.look_name = look_name.group(1)
+    if look:
+        mapped.highlights += _num(look.get("Highlights2012", "0")) or 0.0
+        mapped.shadows += _num(look.get("Shadows2012", "0")) or 0.0
+        mapped.clarity += _num(look.get("Clarity2012", "0")) or 0.0
+        mapped.unused["look_parameters"] = look
+        mapped.limits.append(
+            f"Look {mapped.look_name or 'unnamed'} numeric extras were added to H/S/Clarity; "
+            "the proprietary LookTable is not public."
+        )
+    mapped.tone_curve_pv2012 = _parse_curve_seq(xmp, "ToneCurvePV2012")
+    look_curve = _parse_look_curve(xmp)
+    if look_curve and look_curve != [(0.0, 0.0), (255.0, 255.0)]:
+        mapped.tone_curve_pv2012 = look_curve
+        mapped.limits.append("Look ToneCurvePV2012 is applied (Adobe Look S-curve).")
+    elif mapped.tone_curve_pv2012 and mapped.tone_curve_pv2012 != [(0.0, 0.0), (255.0, 255.0)]:
+        mapped.limits.append("ToneCurvePV2012 point curve is applied in the Adobe path.")
+    for tag in ("ToneCurvePV2012Red", "ToneCurvePV2012Green", "ToneCurvePV2012Blue"):
+        pts = _parse_curve_seq(xmp, tag)
+        if pts and pts != [(0.0, 0.0), (255.0, 255.0)]:
+            mapped.unused[tag] = pts
+            mapped.limits.append(f"{tag} is recorded but not applied (per-channel point curve).")
+    if "<crs:Correction" in xmp or "MaskGroupBasedCorrections" in xmp:
+        mapped.limits.append("Local corrections / gradient masks are not applied.")
+    return mapped
+
+
+def _parse_look_curve(xmp: str) -> list[tuple[float, float]]:
+    block = re.search(r"<crs:Look>(.*?)</crs:Look>", xmp, flags=re.DOTALL)
+    if not block:
+        return []
+    return _parse_curve_seq(block.group(0), "ToneCurvePV2012")
 
 
 def map_xmp_path(path: Path) -> ToneMapping:

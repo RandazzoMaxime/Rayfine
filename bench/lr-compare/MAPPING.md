@@ -15,8 +15,11 @@ preserved.
 | `crs:Blacks2012` | `blacks` | ÷ 40 | Extremes `1−smoothstep(−6.0, −1.5)`. |
 | `crs:Contrast2012` | `contrast` | ÷ 100 | Pivot 0.18 scene-linear. |
 | `crs:Temperature` / `Tint` | recorded | — | **Not applied** on the CPU compare path (as-shot WB). |
-| `crs:ToneCurvePV2012` | unused | — | Point curve is not replayed. |
-| Parametric / HSL / calib / profile | unused | — | See `unused` in `mapping.json`. |
+| `crs:ToneCurvePV2012` / Look curve | Adobe path | 0–255 → 0–1 | Applied as a luma point curve. |
+| Parametric 4-bands + splits | Adobe path | ÷100 × 0.6 EV | Shadows / Darks / Lights / Highlights. |
+| HSL / Calibration / Vibrance / Saturation | Adobe path | ÷100 | Applied at the `color` stage. |
+| Dehaze / Clarity / Texture | Adobe path | approx. | Applied at `hs` (not Adobe’s operator). |
+| `crs:Look.Parameters` | added to H/S/Clarity | 1:1 | Adobe Landscape typically −12 / +12 / +10. LookTable is not public. |
 
 `preset_converter` already maps the 2012 tone sliders 1:1 (test
 `crs_tone_sliders_map_one_to_one`). This compare path reuses that contract.
@@ -46,14 +49,17 @@ the library GPU preview. Stages are cumulative:
 | Stage | What is applied |
 |---|---|
 | `wb` | `crs:Temperature` / `Tint` → Planckian xy + CIE 1960 tint (`kTintScale = −3000`), illuminant mix A↔D65 by inverse CCT, camera ÷ Neutral, Inverse(CameraCalibration). No matrix. |
-| `profile` | + ForwardMatrix (or inverse ColorMatrix) → XYZ D50 → ProPhoto linear + 36×8×16 LookTable. |
+| `profile` | + ForwardMatrix (DNG) or inverse ColorMatrix + Bradford (vendor RAW) → XYZ D50 → ProPhoto linear + LookTable when present. |
 | `exposure` | + `BaselineExposure` + `crs:Exposure` (`2^EV`). Brightness still off. |
-| `curve` | + PV2010 Brightness, named ToneCurve (`Linear` / `Medium Contrast`), Contrast. |
-| `hs` | + Highlights / Shadows / Whites / Blacks (guided log masks). |
+| `curve` | + named ToneCurve (`Linear` / `Medium Contrast`), Contrast, parametric 4-bands, ToneCurvePV2012 (incl. Look curve). |
+| `color` | + Calibration, HSL, Vibrance, Saturation. |
+| `hs` | + Dehaze / Clarity / Texture + Highlights / Shadows / Whites / Blacks (guided log masks). |
 
-Working space is ProPhoto linear, then the same ProPhoto→sRGB matrix as the
-FiveK TIFF loader (`metrics.prophoto_to_srgb`). `crs:Brightness` is **not**
-folded into Exposure on this path.
+Working space is ProPhoto linear, then ProPhoto→sRGB (Bradford D50→D65) encoded
+as sRGB. The IR oracle is an 8-bit sRGB JPEG; FiveK 16-bit ProPhoto TIFFs are
+not used as the PV2012 reference. `crs:Brightness` is **not** folded into
+Exposure on this path. For PV2012, `ToneCurveName2012` wins over the leftover
+PV2010 `ToneCurveName`.
 
 **HueSatMap is missing** on these FiveK DNGs (no tag 50937). Only the embedded
 LookTable is public. That gap is reported with the measured ΔE, not hidden.
@@ -91,4 +97,5 @@ In `scene_tone.rs` / `shader.wgsl` `apply_scene_local_tone`:
 - overrange Reinhard `k = pull * 4.0`
 - guided radii preview 2/6, quality 3/10
 
-Tune on the **train** FiveK IDs only. Report **val** separately.
+Tune on the **train** Imaging Resource IDs only. Report **val** separately.
+FiveK remains downloadable (`--source fivek`) but is not the colour/light oracle.

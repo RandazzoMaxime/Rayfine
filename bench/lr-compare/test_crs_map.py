@@ -91,6 +91,49 @@ class CrsMapTests(unittest.TestCase):
         self.assertIsNotNone(text)
         self.assertIn("Highlights2012", text or "")
 
+    def test_look_parameters_do_not_replace_user_sliders(self) -> None:
+        mapped = map_xmp_path(FIXTURES / "look_landscape.xmp")
+        self.assertAlmostEqual(mapped.exposure, 0.05)
+        self.assertAlmostEqual(mapped.highlights, -41.0 + -12.0)
+        self.assertAlmostEqual(mapped.shadows, 58.0 + 12.0)
+        self.assertAlmostEqual(mapped.clarity, 10.0)
+        self.assertEqual(mapped.look_name, "Adobe Landscape")
+        self.assertEqual(mapped.process_version, "11.0")
+        self.assertEqual(mapped.crs_version, "11.3.1")
+        self.assertEqual(mapped.camera_profile, "Adobe Standard")
+        self.assertEqual(mapped.tone_curve_name, "Linear")
+        self.assertEqual(
+            mapped.tone_curve_pv2012,
+            [(0.0, 0.0), (64.0, 60.0), (128.0, 128.0), (192.0, 196.0), (255.0, 255.0)],
+        )
+        adobe = mapped.adobe_json()
+        self.assertAlmostEqual(adobe["highlights"], -53.0)
+        self.assertEqual(adobe["tone_curve"], "Linear")
+        ir = Path(__file__).resolve().parent / "datasets" / "ir" / "g95-0192" / "develop.xmp"
+        if ir.exists():
+            live = map_xmp_path(ir)
+            self.assertAlmostEqual(live.highlights, -41.0 + -12.0)
+            self.assertAlmostEqual(live.shadows, 58.0 + 12.0)
+            self.assertEqual(live.look_name, "Adobe Landscape")
+
+    def test_nested_mask_version_does_not_replace_acr(self) -> None:
+        xmp = """<rdf:Description crs:Version="11.3.1" crs:ProcessVersion="11.0"
+           crs:Exposure2012="+0.20" crs:Highlights2012="0"/>
+           <crs:CorrectionRangeMask crs:Version="+2" crs:Type="0"/>"""
+        mapped = map_xmp_text(xmp)
+        self.assertEqual(mapped.crs_version, "11.3.1")
+        self.assertAlmostEqual(mapped.exposure, 0.20)
+
+    def test_neutral_json_zeros_sliders_keeps_wb(self) -> None:
+        mapped = map_xmp_path(FIXTURES / "look_landscape.xmp")
+        neutral = mapped.neutral_adobe_json()
+        self.assertEqual(neutral["highlights"], 0.0)
+        self.assertEqual(neutral["shadows"], 0.0)
+        self.assertEqual(neutral["clarity"], 0.0)
+        self.assertEqual(neutral["tone_curve"], "Linear")
+        self.assertFalse(neutral["apply_look"])
+        self.assertAlmostEqual(neutral["temperature_k"], 5250.0)
+
 
 if __name__ == "__main__":
     unittest.main()

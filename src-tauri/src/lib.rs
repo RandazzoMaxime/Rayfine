@@ -45,7 +45,8 @@ mod raw_tone;
 mod scene_tone;
 mod tonemap;
 pub use adobe_color::{
-    AdobeSettings, AdobeStage, DngProfile, NamedCurve, develop_adobe_image, parse_dng_profile,
+    AdobeSettings, AdobeStage, DngProfile, NamedCurve, develop_adobe_image, parse_color_profile,
+    parse_dng_profile,
 };
 pub use raw_processing::{develop_raw_camera_linear, develop_raw_image};
 pub use scene_tone::{

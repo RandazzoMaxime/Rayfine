@@ -1,37 +1,57 @@
 # Public RAW + Lightroom settings + Lightroom export
 
 Only sources that can be used locally for research comparison. **Pixels are not
-committed** — `download_public_pairs.py` writes `datasets/` (gitignored).
+committed** — the download scripts write `datasets/` (gitignored).
 
-## MIT-Adobe FiveK — used (research)
+## Imaging Resource field tests — primary (PV2012+)
+
+- Pages: camera / lens field tests that say the JPEG was “converted and
+  processed to taste in Adobe Camera Raw”, plus a RAW download.
+- Per image: vendor RAW + `-MOD.JPG` (sRGB IEC61966-2.1, Photoshop/ACR export)
+  + `crs:` packet extracted from the JPEG.
+- Typical packet: `crs:Version` 11.3–13.2, `crs:ProcessVersion` 11.0 (PV5),
+  `crs:CameraProfile` Adobe Standard, optional `crs:Look` (Adobe Landscape /
+  Adobe Color). `crs:RawFileName` names the RAW sibling.
+- Curated subset (varied bodies, outdoor / sky / highlights, train ≠ val):
+  see `download_ir_triples.py` `IR_PAIRS`.
+- **License**: Imaging Resource copyright. Local evaluation / research
+  comparison only. Do not commit or redistribute.
+  https://www.imaging-resource.com/USAGE.HTM
+- Downloader: `download_ir_triples.py` / `download_public_pairs.py --source ir`.
+
+## MIT-Adobe FiveK — not the PV2012 reference
 
 - Official page: https://data.csail.mit.edu/graphics/fivek/
-- Per image: DNG + Expert A–E 16-bit ProPhoto TIFF + Lightroom catalog in the 50 GB archive.
-- Expert C TIFFs embed the Lightroom 3.4.1 `crs:` packet (`ProcessVersion` 5.0). That is the settings source; the 50 GB `.lrcat` is optional (`extract_lrcat_xmp.py`).
-- **License**: `LicenseAdobe.txt` / `LicenseAdobeMIT.txt` — research only, no commercial advantage, keep the copyright notice, do not use Adobe/MIT names to promote products. This script downloads **LicenseAdobeMIT** IDs only.
-- Cite: Bychkovsky, Paris, Chan, Durand, CVPR 2011.
-- Curated subset (outdoor / nature, train ≠ val): see `download_public_pairs.py` `FIVEK_PAIRS`.
+- Expert C is a 16-bit ProPhoto TIFF already retouched in Lightroom 3
+  (`ProcessVersion` 5.0, `CameraProfile` ACR 4.4). That is the wrong process
+  version and the TIFF is not a Lightroom sRGB JPEG. Kept only as a historical
+  download target (`--source fivek`).
+- **License**: `LicenseAdobeMIT` research only.
 
 ## PPR10K — supported, not auto-downloaded
 
 - https://github.com/csjliang/PPR10K (CVPR 2021)
-- RAW + `xmp_target_{a,b,c}` Camera Raw sidecars (PV2012) + 8-bit sRGB TIF targets (360p pack).
-- **License**: non-commercial research; do not reproduce / sell / trade the images.
-- Hosted on Google Drive / Baidu (~406 GB). The downloader only writes the local folder layout.
+- RAW + `xmp_target_{a,b,c}` Camera Raw sidecars (PV2012) + 8-bit sRGB TIF
+  targets. Google Drive / Baidu (~406 GB). Research non-commercial; do not
+  redistribute. The 360p pack is a true Lightroom TIFF export (see
+  `docs/dataset_usage.md`).
+- HuggingFace `JarvisArt/MMArt-PPR10k` has ACR 12.4 / PV 11.0 `config.xmp` +
+  `processed.jpg` but **no RAW**.
 
-## raw.pixls.us — RAW only
+## Play Raw (discuss.pixls.us)
 
-- https://raw.pixls.us/ — CC0 / public domain camera samples.
-- Unmodified RAWs, no Lightroom catalog, no expert JPEG. Useful as extra RAW input, **not** a full triple.
+- Typically CC-BY-SA RAW + sidecar + JPEG. Sidecars scanned so far are
+  **darktable**, not `crs:`. No curated Lightroom triple is vendored.
 
-## Play Raw (discuss.pixls.us) — accepted if crs:
+## raw.pixls.us
 
-- Forum asks for RAW + sidecar + small JPEG, typically **CC-BY-SA**.
-- Most sidecars are **darktable** (`darktable:` namespace), not Lightroom. The compare pipeline keeps a file only when the XMP contains `crs:Exposure2012` / `crs:Highlights2012` / PV2010 `crs:Exposure`.
-- No curated Lightroom triple is vendored here; drop verified CC posts under `datasets/playraw/<id>/`.
+- CC0 RAWs, no Lightroom catalog, no expert JPEG. Not a full triple.
 
 ## Rejected / not used
 
-- Private `A7S02588.ARW` catalog in `bench/lr-compare/README.md` (not redistributable).
-- FiveK files listed only in `filesAdobe.txt` (same research terms, but this pass sticks to `filesAdobeMIT.txt`).
+- FiveK Expert C as the colour/light oracle (ACR 4.4 + already-tonemapped
+  ProPhoto TIFF).
+- Private catalogs.
+- GitHub repos with NEF+XMP but no Lightroom JPEG (`dcapaccio/profile24`,
+  `marchyman/GeoTag`, `z-x/pushu.ps`).
 - Any sample without a documented license.

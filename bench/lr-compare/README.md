@@ -2,23 +2,25 @@
 
 ## Public RAW + XMP + Lightroom export (this PR)
 
-Private A7S02588 captures stay local. This folder now also compares **licensed
-public triples** (FiveK Expert C, optional PPR10K / Play Raw):
+Private A7S02588 captures stay local. The public PV2012+ oracle is **Imaging
+Resource** Camera Raw `-MOD.JPG` triples (RAW + `crs:` XMP + sRGB JPEG).
+FiveK Expert C is kept as a historical download only (ACR 4.4, already-retouched
+ProPhoto TIFF — not a Lightroom JPEG).
 
 ```text
 python bench/lr-compare/test_crs_map.py
 python bench/lr-compare/test_metrics.py
-python bench/lr-compare/download_public_pairs.py --accept-research-license --source fivek
-python bench/lr-compare/compare_public_pairs.py \
-  --datasets bench/lr-compare/datasets --out bench/lr-compare/out/public
+python bench/lr-compare/download_public_pairs.py --accept-ir-evaluation-license --source ir
+python bench/lr-compare/validate_measurement.py --datasets bench/lr-compare/datasets/ir
 python bench/lr-compare/compare_adobe_match.py \
-  --datasets bench/lr-compare/datasets --out bench/lr-compare/out/adobe
+  --datasets bench/lr-compare/datasets/ir --out bench/lr-compare/out/adobe
 ```
 
+- Triple catalog (URL, ACR/PV, license): [IR_TRIPLES.md](IR_TRIPLES.md)
 - Mapping and limits: [MAPPING.md](MAPPING.md)
 - Licenses and why each source is in or out: [SOURCES.md](SOURCES.md)
 - `datasets/` is gitignored. Commit scripts only.
-- Train / val split is fixed in `download_public_pairs.py`. Do not fit curves on `val`.
+- Train / val split is fixed in `download_ir_triples.py`. Do not fit curves on `val`.
 
 # Lightroom Classic comparison — 2026-10-02 (private catalog)
 

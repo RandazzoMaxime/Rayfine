@@ -3,15 +3,16 @@
 //! Usage:
 //!   cargo run -p Rayfine --bin lr_public_compare -- \
 //!     --raw FILE --sliders sliders.json --out DIR [--long-edge 640] \
-//!     [--path legacy|adobe] [--stage wb|profile|exposure|curve|hs|all]
+//!     [--path legacy|adobe] [--stage wb|profile|exposure|curve|color|hs|all]
 
 use image::{Rgb, RgbImage};
 use rapidraw_lib::{
     AdobeSettings, AdobeStage, NamedCurve, ToneSliders, develop_adobe_image,
     develop_image, develop_raw_camera_linear, develop_raw_image, legacy_develop_pixel,
-    parse_dng_profile,
+    parse_color_profile,
 };
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -44,6 +45,24 @@ struct SliderFile {
     use_forward_matrix: bool,
     #[serde(default = "default_true")]
     apply_look: bool,
+    #[serde(default)]
+    vibrance: f32,
+    #[serde(default)]
+    saturation: f32,
+    #[serde(default)]
+    dehaze: f32,
+    #[serde(default)]
+    clarity: f32,
+    #[serde(default)]
+    texture: f32,
+    #[serde(default)]
+    parametric: HashMap<String, f32>,
+    #[serde(default)]
+    hsl: HashMap<String, f32>,
+    #[serde(default)]
+    calibration: HashMap<String, f32>,
+    #[serde(default)]
+    tone_curve_pv2012: Vec<(f32, f32)>,
 }
 
 fn default_true() -> bool {
@@ -139,7 +158,50 @@ fn parse_args() -> (PathBuf, PathBuf, PathBuf, u32, String, String) {
     )
 }
 
+fn map_hsl(parsed: &SliderFile) -> [f32; 24] {
+    let names = [
+        "HueAdjustmentRed",
+        "HueAdjustmentOrange",
+        "HueAdjustmentYellow",
+        "HueAdjustmentGreen",
+        "HueAdjustmentAqua",
+        "HueAdjustmentBlue",
+        "HueAdjustmentPurple",
+        "HueAdjustmentMagenta",
+        "SaturationAdjustmentRed",
+        "SaturationAdjustmentOrange",
+        "SaturationAdjustmentYellow",
+        "SaturationAdjustmentGreen",
+        "SaturationAdjustmentAqua",
+        "SaturationAdjustmentBlue",
+        "SaturationAdjustmentPurple",
+        "SaturationAdjustmentMagenta",
+        "LuminanceAdjustmentRed",
+        "LuminanceAdjustmentOrange",
+        "LuminanceAdjustmentYellow",
+        "LuminanceAdjustmentGreen",
+        "LuminanceAdjustmentAqua",
+        "LuminanceAdjustmentBlue",
+        "LuminanceAdjustmentPurple",
+        "LuminanceAdjustmentMagenta",
+    ];
+    let mut out = [0.0f32; 24];
+    for (i, name) in names.iter().enumerate() {
+        if let Some(v) = parsed.hsl.get(*name) {
+            out[i] = *v;
+        }
+    }
+    out
+}
+
 fn adobe_settings(parsed: &SliderFile) -> AdobeSettings {
+    let mut curve = [(0.0f32, 0.0f32); 8];
+    let mut curve_len = 0usize;
+    for (x, y) in parsed.tone_curve_pv2012.iter().take(8) {
+        curve[curve_len] = (*x / 255.0, *y / 255.0);
+        curve_len += 1;
+    }
+    let p = &parsed.parametric;
     AdobeSettings {
         temperature_k: parsed.temperature_k,
         tint: parsed.tint,
@@ -151,7 +213,28 @@ fn adobe_settings(parsed: &SliderFile) -> AdobeSettings {
         shadows: parsed.shadows,
         whites: parsed.whites,
         blacks: parsed.blacks,
+        vibrance: parsed.vibrance,
+        saturation: parsed.saturation,
+        dehaze: parsed.dehaze,
+        clarity: parsed.clarity,
+        texture: parsed.texture,
+        parametric_shadows: *p.get("ParametricShadows").unwrap_or(&0.0),
+        parametric_darks: *p.get("ParametricDarks").unwrap_or(&0.0),
+        parametric_lights: *p.get("ParametricLights").unwrap_or(&0.0),
+        parametric_highlights: *p.get("ParametricHighlights").unwrap_or(&0.0),
+        parametric_shadow_split: *p.get("ParametricShadowSplit").unwrap_or(&25.0),
+        parametric_mid_split: *p.get("ParametricMidtoneSplit").unwrap_or(&50.0),
+        parametric_highlight_split: *p.get("ParametricHighlightSplit").unwrap_or(&75.0),
+        hsl: map_hsl(parsed),
+        red_hue: *parsed.calibration.get("RedHue").unwrap_or(&0.0),
+        red_sat: *parsed.calibration.get("RedSaturation").unwrap_or(&0.0),
+        green_hue: *parsed.calibration.get("GreenHue").unwrap_or(&0.0),
+        green_sat: *parsed.calibration.get("GreenSaturation").unwrap_or(&0.0),
+        blue_hue: *parsed.calibration.get("BlueHue").unwrap_or(&0.0),
+        blue_sat: *parsed.calibration.get("BlueSaturation").unwrap_or(&0.0),
         tone_curve: NamedCurve::parse(parsed.tone_curve.as_deref().unwrap_or("Linear")),
+        tone_curve_pv2012: curve,
+        tone_curve_len: curve_len,
         use_forward_matrix: parsed.use_forward_matrix,
         apply_look: parsed.apply_look,
     }
@@ -191,7 +274,7 @@ fn main() {
     if path == "adobe" {
         let settings = adobe_settings(&parsed);
         let (w, h, camera, bytes) = load_camera_linear(&raw, long_edge);
-        let profile = parse_dng_profile(&bytes).expect("DNG profile");
+        let profile = parse_color_profile(&bytes).expect("color profile");
         write_profile_notes(&out, &profile, settings);
         let stages: Vec<AdobeStage> = if stage_arg == "all" {
             AdobeStage::all().to_vec()
