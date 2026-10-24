@@ -77,3 +77,54 @@ g95-0273 (already too bright) got slightly worse, as expected.
 Target < 5 is still not reached; LightCraft’s remaining A6600 gap is
 the JPEG-fitted camera tone, not a slider we should copy onto the
 Adobe path.
+
+## After the LightCraft develop port (wgpu + CPU twin)
+
+Default path is now LightCraft global develop (`lightcraft_develop` /
+`lightcraft.wgsl`): V2 H/S, Reinhard `hdr` / Sony DRO-off `camera_tone`,
+Bradford Temperature/Tint from inverted AsShotNeutral, OkLab vibrance.
+Old Adobe path kept as `developPath=adobe`. Same 9 IR triples, ORB+ECC,
+ΔE réduit ~512 + flou. LightCraft CLI still `0.13.0` / `38f8d2508`.
+
+| Split | Image | LC ΔE | RF porté ΔE | RF ancien ΔE | LC ΔEV | RF porté ΔEV | RF ancien ΔEV |
+|---|---|---:|---:|---:|---:|---:|---:|
+| train | `a6600-0046` | 3.32 | **5.98** | 13.53 | -0.019 | **-0.001** | -0.286 |
+| train | `a6600-0089` | 6.45 | **6.03** | 16.45 | -0.010 | -0.018 | -0.507 |
+| train | `g95-0192` | 12.67 | 17.78 | 17.83 | 0.213 | -0.335 | -0.086 |
+| train | `g95-0314` | 10.65 | 21.10 | 17.54 | 0.095 | -0.573 | -0.400 |
+| train | `z6ii-0086` | 14.84 | **13.88** | 12.58 | 0.028 | 0.166 | -0.127 |
+| val | `a6600-0156` | 10.09 | **10.61** | 19.46 | 0.004 | 0.069 | -0.631 |
+| val | `a7riv-1852` | 14.06 | 18.75 | 20.27 | -0.130 | -0.080 | -0.490 |
+| val | `g95-0273` | 9.24 | **9.12** | 14.33 | 1.020 | 0.586 | 0.914 |
+| val | `g95-1146` | 14.30 | 19.44 | 16.88 | 0.171 | -0.407 | -0.230 |
+
+Moyennes train LC / RF porté / RF ancien : **9.59 / 12.95 / 15.59**.
+Val : **11.92 / 14.48 / 17.74**. Train ΔEV LC / RF porté : **+0.06 / −0.15**.
+
+Sony DRO-off + inverted as-shot Kelvin closed the A6600 hole
+(0046 12.18→5.98, ΔEV −0.29→0.00; 0089 **beats** LC 6.45). z6ii and
+g95-0273 also beat LightCraft. The port does **not** yet equal LC’s
+9.59 / 11.92 overall.
+
+### Residual vs LightCraft (why not ≤ 9.72 / 11.99)
+
+1. **No per-photo JPEG `CameraTone` fitter.** LightCraft
+   `camera_preview.rs` fits a 32-knot curve to the embedded preview.
+   We only ported the pooled Sony DRO-off curve (`sony-dro-off.json`).
+   Panasonic G95 (`DC-G99`) therefore stays on `ToneMap::hdr` and is
+   the whole remaining train gap: 0192 17.78 vs 12.67, 0314 21.10 vs
+   10.65 (ΔEV −0.57). Those two images alone keep train RF at 12.95.
+   Sony-only train mean is 8.63 vs LC 8.20.
+2. **Colour is still rawler, not LightCraft’s camera model.** DCP is
+   optional and colour-only (`--path lightcraft-dcp`). Default path
+   does not apply Adobe Standard / Landscape — matching LC’s `lc.color`,
+   but rawler’s matrix ≠ LC’s. a7riv-1852 (18.75 vs 14.06) is mostly
+   that, not exposure (ΔEV −0.08).
+3. **Guided V2 mask on GPU is a blurred-luma proxy**, not LC’s full
+   guided filter. CPU bench uses the real guided filter; GPU preview
+   will be slightly softer. This remesure is the CPU twin.
+
+Highlight recovery did not regress (synthetic sky H−100 clip 57%→0%;
+Sony a7III / Canon 5D IV / a6600 contre-jour sheets in
+`/opt/cursor/artifacts/tone-recovery/`). 4-col planches:
+`/opt/cursor/artifacts/lr-compare/lc-vs-lr/sheets/`.
