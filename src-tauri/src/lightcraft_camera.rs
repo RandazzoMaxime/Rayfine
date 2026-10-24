@@ -501,18 +501,6 @@ fn fit_chroma(
     (after.is_finite() && after < before).then_some(curve)
 }
 
-/// Lowest chroma_scale node on an Adobe + dim-JPEG path. Below this the
-/// camera JPEG's near-grey shadows erase Landscape (g95-0273 C* 0.42× LR).
-const ADOBE_DIM_CHROMA_FLOOR: f32 = 0.55;
-
-fn adobe_dim_chroma(chroma: [f32; CHROMA_N]) -> [f32; CHROMA_N] {
-    let mut out = chroma;
-    for k in &mut out {
-        *k = k.max(ADOBE_DIM_CHROMA_FLOOR);
-    }
-    out
-}
-
 /// Fit a look from the RAW's embedded JPEG onto already-developed linear sRGB pixels.
 /// `colour_locked` skips the JPEG 3×3 (Adobe HSM+Look already owns colour) and
 /// derives chroma from the CameraTone itself instead of the JPEG.
@@ -599,14 +587,7 @@ fn fit_look_from_raw_opts(
     let chroma = if colour_locked && jpeg_mean_y >= 0.08 {
         IDENTITY_CHROMA
     } else {
-        let fitted = fit_chroma(&pairs, matrix, &knots).unwrap_or(IDENTITY_CHROMA);
-        if colour_locked {
-            // The night JPEG is almost grey in the shadows (0273 k≈0.09).
-            // Floor so Landscape is not erased; highlights stay near 1.
-            adobe_dim_chroma(fitted)
-        } else {
-            fitted
-        }
+        fit_chroma(&pairs, matrix, &knots).unwrap_or(IDENTITY_CHROMA)
     };
     Some(CameraLook {
         matrix,
@@ -824,8 +805,5 @@ mod tests {
         let curve = fit_chroma(&pairs, IDENTITY3, &SONY_DRO_OFF).expect("chroma");
         let mid = curve[3];
         assert!(mid < 0.95, "muted JPEG must drop midtone chroma: {curve:?}");
-        let floored = adobe_dim_chroma(curve);
-        assert!(floored.iter().all(|k| *k >= ADOBE_DIM_CHROMA_FLOOR));
-        assert!((floored[7] - curve[7]).abs() < 1e-6 || curve[7] < ADOBE_DIM_CHROMA_FLOOR);
     }
 }
