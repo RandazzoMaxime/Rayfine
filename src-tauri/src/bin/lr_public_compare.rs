@@ -10,7 +10,7 @@ use image::{Rgb, RgbImage};
 use rapidraw_lib::{
     AdobeSettings, AdobeStage, NamedCurve, ToneSliders, develop_adobe_image,
     develop_image, develop_raw_camera_linear, develop_raw_image, legacy_develop_pixel,
-    parse_color_profile_with_dcp,
+    parse_color_profile_with_sidecars,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -64,6 +64,12 @@ struct SliderFile {
     calibration: HashMap<String, f32>,
     #[serde(default)]
     tone_curve_pv2012: Vec<(f32, f32)>,
+    #[serde(default)]
+    look_name: Option<String>,
+    #[serde(default)]
+    look_uuid: Option<String>,
+    #[serde(default)]
+    look_amount: Option<f32>,
 }
 
 fn default_true() -> bool {
@@ -128,7 +134,17 @@ fn load_camera_linear(path: &Path, long_edge: u32) -> (u32, u32, Vec<[f32; 3]>, 
     (w, h, pixels, bytes)
 }
 
-fn parse_args() -> (PathBuf, PathBuf, PathBuf, u32, String, String, Option<PathBuf>, Option<PathBuf>) {
+fn parse_args() -> (
+    PathBuf,
+    PathBuf,
+    PathBuf,
+    u32,
+    String,
+    String,
+    Option<PathBuf>,
+    Option<PathBuf>,
+    Option<PathBuf>,
+) {
     let mut raw = None;
     let mut sliders = None;
     let mut out = None;
@@ -137,6 +153,7 @@ fn parse_args() -> (PathBuf, PathBuf, PathBuf, u32, String, String, Option<PathB
     let mut stage = "hs".to_string();
     let mut dcp = None;
     let mut dcp_dir = None;
+    let mut look_dir = None;
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -150,6 +167,7 @@ fn parse_args() -> (PathBuf, PathBuf, PathBuf, u32, String, String, Option<PathB
             "--stage" => stage = args.next().unwrap_or_else(|| "hs".into()),
             "--dcp" => dcp = args.next().map(PathBuf::from),
             "--dcp-dir" => dcp_dir = args.next().map(PathBuf::from),
+            "--look-dir" => look_dir = args.next().map(PathBuf::from),
             other => panic!("unknown arg {other}"),
         }
     }
@@ -162,6 +180,7 @@ fn parse_args() -> (PathBuf, PathBuf, PathBuf, u32, String, String, Option<PathB
         stage,
         dcp,
         dcp_dir,
+        look_dir,
     )
 }
 
@@ -273,6 +292,14 @@ fn write_profile_notes(out: &Path, profile: &rapidraw_lib::DngProfile, settings:
         "tone_curve": settings.tone_curve.label(),
         "use_forward_matrix": settings.use_forward_matrix,
         "apply_look": settings.apply_look,
+        "look_name": profile.look_name,
+        "look_uuid": profile.look_uuid,
+        "look_source": profile.look_source,
+        "look_amount": profile.look_amount,
+        "has_rgb_lut": profile.has_rgb_lut,
+        "rgb_lut_div": profile.rgb_lut_div,
+        "rgb_primaries": profile.rgb_primaries,
+        "rgb_gamma": profile.rgb_gamma,
         "notes": profile.notes,
     });
     fs::write(out.join("adobe_profile.json"), serde_json::to_string_pretty(&notes).unwrap())
@@ -280,7 +307,7 @@ fn write_profile_notes(out: &Path, profile: &rapidraw_lib::DngProfile, settings:
 }
 
 fn main() {
-    let (raw, sliders_path, out, long_edge, path, stage_arg, dcp, dcp_dir) = parse_args();
+    let (raw, sliders_path, out, long_edge, path, stage_arg, dcp, dcp_dir, look_dir) = parse_args();
     fs::create_dir_all(&out).expect("mkdir");
     let parsed: SliderFile =
         serde_json::from_str(&fs::read_to_string(&sliders_path).expect("sliders")).expect("json");
@@ -294,13 +321,19 @@ fn main() {
             .and_then(|p| p.file_name())
             .and_then(|s| s.to_str())
             .unwrap_or(hint);
-        let profile = parse_color_profile_with_dcp(
+        let mut profile = parse_color_profile_with_sidecars(
             &bytes,
             Some(parent),
             dcp.as_deref(),
             dcp_dir.as_deref(),
+            look_dir.as_deref(),
+            parsed.look_name.as_deref(),
+            parsed.look_uuid.as_deref(),
         )
         .expect("color profile");
+        if let Some(amt) = parsed.look_amount {
+            profile.look_amount = amt;
+        }
         write_profile_notes(&out, &profile, settings);
         let stages: Vec<AdobeStage> = if stage_arg == "all" {
             let mut v = AdobeStage::all().to_vec();

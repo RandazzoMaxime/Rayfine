@@ -22,10 +22,10 @@ pub const SCENE_HEADROOM: f32 = 16.0;
 pub const FAST_HEADROOM: f32 = 4.0;
 /// Log-EV peak at Highlights UI = ±100 (after ÷120). Keep in sync with `shader.wgsl`.
 /// Calibrated on public LR pairs (`bench/lr-compare/MAPPING.md`); identity at 0.
-pub const HIGHLIGHT_LOG_STRENGTH: f32 = 2.35;
-pub const SHADOW_LOG_STRENGTH: f32 = 2.0;
-pub const WHITES_LOG_STRENGTH: f32 = 0.28;
-pub const BLACKS_LOG_STRENGTH: f32 = 0.20;
+pub const HIGHLIGHT_LOG_STRENGTH: f32 = 2.20;
+pub const SHADOW_LOG_STRENGTH: f32 = 1.55;
+pub const WHITES_LOG_STRENGTH: f32 = 0.26;
+pub const BLACKS_LOG_STRENGTH: f32 = 0.11;
 /// Reinhard `k` for overrange when Highlights/Whites pull. Larger = stronger recovery.
 pub const OVERRANGE_PULL_K: f32 = 5.0;
 
@@ -113,22 +113,27 @@ pub fn log_grey(linear_luma: f32) -> f32 {
 
 #[inline]
 pub fn highlight_mask(log_base: f32) -> f32 {
-    smoothstep(-1.0, 2.8, log_base)
+    // PV2012 Highlights start just above mid-grey, fade into speculars.
+    smoothstep(-0.2, 2.6, log_base)
 }
 
 #[inline]
 pub fn shadow_mask(log_base: f32) -> f32 {
-    1.0 - smoothstep(-4.8, 0.3, log_base)
+    // PV2012 Shadows is a fill: peak in the lower-mids, protect the black point.
+    // Falloff is wide so y * 2^(k*mask) stays monotone at S+100.
+    let from_floor = smoothstep(-5.6, -3.0, log_base);
+    let to_mid = 1.0 - smoothstep(-2.8, 0.5, log_base);
+    from_floor * to_mid
 }
 
 #[inline]
 pub fn whites_mask(log_base: f32) -> f32 {
-    smoothstep(0.5, 3.0, log_base)
+    smoothstep(0.8, 3.2, log_base)
 }
 
 #[inline]
 pub fn blacks_mask(log_base: f32) -> f32 {
-    1.0 - smoothstep(-6.0, -1.5, log_base)
+    1.0 - smoothstep(-6.4, -2.4, log_base)
 }
 
 /// Log-domain local tone. `log_base` should be edge-aware (guided/blurred) when available.
@@ -142,7 +147,7 @@ pub fn blacks_mask(log_base: f32) -> f32 {
 pub fn local_tone_delta(log_base: f32, _linear_luma: f32, sliders: ToneSliders) -> f32 {
     let ws = shadow_mask(log_base);
     sliders.highlights * HIGHLIGHT_LOG_STRENGTH * highlight_mask(log_base)
-        + sliders.shadows * SHADOW_LOG_STRENGTH * ws * ws.sqrt()
+        + sliders.shadows * SHADOW_LOG_STRENGTH * ws
         + sliders.whites * WHITES_LOG_STRENGTH * whites_mask(log_base)
         + sliders.blacks * BLACKS_LOG_STRENGTH * blacks_mask(log_base)
 }

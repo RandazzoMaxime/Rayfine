@@ -21,8 +21,12 @@ aspect then resized — no squash when the RAW crop differs.
 - `crs:HasCrop` is False on every complete triple. EXIF orientation is 1.
 - Nested `crs:CorrectionRangeMask crs:Version="+2"` must not overwrite root
   `crs:Version` (first-wins in `parse_crs_attrs`).
+- Default ACR NR on this set: `ColorNoiseReduction` 25, `Sharpness` 40.
+  `LuminanceSmoothing` is 0 except z6ii-0086 (14) and g95-0273 (26). Metrics
+  are reported full-res **and** on a ~512 px + Gaussian pair so colour/light
+  is not dominated by grain. ΔE is also split by zone (ciel / milieux / ombres).
 - No IR JPEG is a default Adobe Standard export: Adobe Landscape Look extras
-  (H −12 / S +12 / Clarity +10 + Look ToneCurvePV2012) are always present.
+  (H −12 / S +12 / Clarity +10 + Look ToneCurvePV2012 + LookTable UUID) are always present.
   A synthetic all-zero XMP vs these JPEGs therefore measures the
   WB / ColorMatrix / missing DCP+LookTable residual, not H/S.
 

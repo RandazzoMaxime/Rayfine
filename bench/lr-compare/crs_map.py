@@ -44,6 +44,11 @@ class ToneMapping:
     clarity: float = 0.0
     texture: float = 0.0
     look_name: str | None = None
+    look_uuid: str | None = None
+    look_amount: float = 1.0
+    color_nr: float = 25.0
+    luma_nr: float = 0.0
+    sharpness: float = 40.0
     parametric: dict[str, float] = field(default_factory=dict)
     hsl: dict[str, float] = field(default_factory=dict)
     calibration: dict[str, float] = field(default_factory=dict)
@@ -89,6 +94,8 @@ class ToneMapping:
             "apply_look": True,
             "camera_profile": self.camera_profile,
             "look_name": self.look_name,
+            "look_uuid": self.look_uuid,
+            "look_amount": self.look_amount,
             "vibrance": self.vibrance,
             "saturation": self.saturation,
             "dehaze": self.dehaze,
@@ -117,6 +124,8 @@ class ToneMapping:
             f"Temp {temp} Tint {tint}  curve={self.tone_curve_name or 'Linear'}  "
             f"pv={self.process_version or '?'}  acr={self.crs_version or '?'}  "
             f"prof={self.camera_profile or '?'}  look={self.look_name or '-'}  "
+            f"uuid={(self.look_uuid or '-')[:8]}  "
+            f"CNR {self.color_nr:.0f} Lum {self.luma_nr:.0f} Sh {self.sharpness:.0f}  "
             f"src={self.source}"
         )
 
@@ -399,6 +408,19 @@ def map_xmp_text(xmp: str) -> ToneMapping:
     look_name = re.search(r'<crs:Look[\s\S]*?crs:Name="([^"]+)"', xmp)
     if look_name:
         mapped.look_name = look_name.group(1)
+    look_uuid = re.search(r'crs:LookTable="([0-9A-Fa-f]+)"', xmp)
+    if look_uuid:
+        mapped.look_uuid = look_uuid.group(1).upper()
+    look_amount = re.search(r'<crs:Look[\s\S]*?crs:Amount="([^"]+)"', xmp)
+    if look_amount and (amt := _num(look_amount.group(1))) is not None:
+        mapped.look_amount = amt
+    attrs = parse_crs_attrs(xmp)
+    if "ColorNoiseReduction" in attrs:
+        mapped.color_nr = _num(attrs["ColorNoiseReduction"]) or 0.0
+    if "LuminanceSmoothing" in attrs:
+        mapped.luma_nr = _num(attrs["LuminanceSmoothing"]) or 0.0
+    if "Sharpness" in attrs:
+        mapped.sharpness = _num(attrs["Sharpness"]) or 0.0
     if look:
         mapped.highlights += _num(look.get("Highlights2012", "0")) or 0.0
         mapped.shadows += _num(look.get("Shadows2012", "0")) or 0.0
@@ -406,7 +428,7 @@ def map_xmp_text(xmp: str) -> ToneMapping:
         mapped.unused["look_parameters"] = look
         mapped.limits.append(
             f"Look {mapped.look_name or 'unnamed'} numeric extras were added to H/S/Clarity; "
-            "the proprietary LookTable is not public."
+            "LookTable UUID is applied from the fetched Adobe XMP when present."
         )
     mapped.tone_curve_pv2012 = _parse_curve_seq(xmp, "ToneCurvePV2012")
     look_curve = _parse_look_curve(xmp)

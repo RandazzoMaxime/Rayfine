@@ -12,7 +12,9 @@
 //! is merged when present (not shipped; see `bench/lr-compare/fetch_adobe_dcp.py`).
 
 use anyhow::{Result, anyhow};
+use flate2::read::ZlibDecoder;
 use rayon::prelude::*;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::scene_tone::{
@@ -149,6 +151,15 @@ pub struct DngProfile {
     pub profile_name: String,
     pub unique_camera_model: String,
     pub dcp_source: String,
+    pub look_name: String,
+    pub look_uuid: String,
+    pub look_source: String,
+    pub look_amount: f32,
+    pub rgb_lut_div: u32,
+    pub rgb_lut: Vec<f32>,
+    pub rgb_primaries: u32,
+    pub rgb_gamma: u32,
+    pub has_rgb_lut: bool,
     pub has_forward: bool,
     pub has_look: bool,
     pub has_hue_sat_map: bool,
@@ -181,6 +192,15 @@ impl Default for DngProfile {
             profile_name: String::new(),
             unique_camera_model: String::new(),
             dcp_source: String::new(),
+            look_name: String::new(),
+            look_uuid: String::new(),
+            look_source: String::new(),
+            look_amount: 1.0,
+            rgb_lut_div: 0,
+            rgb_lut: Vec::new(),
+            rgb_primaries: 2,
+            rgb_gamma: 0,
+            has_rgb_lut: false,
             has_forward: false,
             has_look: false,
             has_hue_sat_map: false,
@@ -737,6 +757,377 @@ pub fn apply_look_table(profile: &DngProfile, rgb: [f32; 3]) -> [f32; 3] {
     apply_hsv_table(profile.look_dims, &profile.look_data, profile.look_encoding, rgb)
 }
 
+/// Adobe DNG SDK `kDecodeTable` (dng_big_table::DecodeFromString). Indexed by `ch - 32`.
+const ADOBE_B85_DECODE: [u8; 96] = [
+    0xFF, 0x44, 0xFF, 0x54, 0x53, 0x52, 0xFF, 0x49, 0x4B, 0x4C, 0x46, 0x41, 0xFF, 0x3F, 0x3E, 0x45,
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x40, 0xFF, 0xFF, 0x42, 0xFF, 0x47,
+    0x51, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x2D, 0x2E, 0x2F, 0x30, 0x31, 0x32,
+    0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x4D, 0xFF, 0x4E, 0x43, 0xFF,
+    0x48, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+    0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x20, 0x21, 0x22, 0x23, 0x4F, 0x4A, 0x50, 0xFF, 0xFF,
+];
+
+/// Decode Adobe XMP base85 (DNG `dng_big_table`) into the compressed block.
+pub fn adobe_base85_decode(text: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut phase = 0u32;
+    let mut value = 0u32;
+    for ch in text.chars() {
+        let e = ch as u32;
+        if !(32..=127).contains(&e) {
+            continue;
+        }
+        let d = ADOBE_B85_DECODE[(e - 32) as usize];
+        if d > 85 {
+            continue;
+        }
+        phase += 1;
+        match phase {
+            1 => value = d as u32,
+            2 => value += d as u32 * 85,
+            3 => value += d as u32 * 85 * 85,
+            4 => value += d as u32 * 85 * 85 * 85,
+            _ => {
+                value += d as u32 * 85 * 85 * 85 * 85;
+                out.extend_from_slice(&value.to_le_bytes());
+                phase = 0;
+            }
+        }
+    }
+    if phase > 1 {
+        out.extend_from_slice(&value.to_le_bytes()[..(phase as usize - 1)]);
+    }
+    out
+}
+
+fn inflate_big_table(compressed: &[u8]) -> Result<Vec<u8>> {
+    if compressed.len() < 5 {
+        return Err(anyhow!("look table payload too short"));
+    }
+    let expected = u32::from_le_bytes(compressed[0..4].try_into().unwrap()) as usize;
+    let mut decoder = ZlibDecoder::new(&compressed[4..]);
+    let mut decoded = Vec::with_capacity(expected);
+    decoder.read_to_end(&mut decoded)?;
+    if decoded.len() != expected {
+        return Err(anyhow!(
+            "look zlib length mismatch: expected {expected}, got {}",
+            decoded.len()
+        ));
+    }
+    Ok(decoded)
+}
+
+fn read_u32_at(data: &[u8], off: usize) -> Option<u32> {
+    data.get(off..off + 4)
+        .and_then(|b| b.try_into().ok())
+        .map(u32::from_le_bytes)
+}
+
+fn read_u16_at(data: &[u8], off: usize) -> Option<u16> {
+    data.get(off..off + 2)
+        .and_then(|b| b.try_into().ok())
+        .map(u16::from_le_bytes)
+}
+
+fn read_f32_at(data: &[u8], off: usize) -> Option<f32> {
+    data.get(off..off + 4)
+        .and_then(|b| b.try_into().ok())
+        .map(f32::from_le_bytes)
+}
+
+fn read_f64_at(data: &[u8], off: usize) -> Option<f64> {
+    data.get(off..off + 8)
+        .and_then(|b| b.try_into().ok())
+        .map(f64::from_le_bytes)
+}
+
+/// Parse a decompressed `dng_big_table` blob: HSV LookTable (type 0) or RGB 3D LUT (type 1).
+pub fn parse_look_blob(raw: &[u8], profile: &mut DngProfile) -> Result<()> {
+    if raw.len() < 16 {
+        return Err(anyhow!("look blob shorter than header"));
+    }
+    let field0 = read_u32_at(raw, 0).unwrap_or(0);
+    let field1 = read_u32_at(raw, 4).unwrap_or(0);
+    let field2 = read_u32_at(raw, 8).unwrap_or(0);
+    let field3 = read_u32_at(raw, 12).unwrap_or(0);
+    // type-1 RGB table (mini_film / xmp2cube / DNG SDK dng_rgb_table).
+    if field0 == 1 && field1 == 1 && (field2 == 1 || field2 == 3) && field3 >= 2 {
+        return parse_rgb_table_blob(raw, profile);
+    }
+    // DNG Converter 16.3 Landscape/Color: [0, version=1, hue, sat, val, encoding]
+    // then hue*sat*val float32 HSV cells (H degrees, S scale, V scale).
+    if field1 == 1 && field2 >= 2 && field3 >= 2 && raw.len() >= 24 {
+        let hue = field2;
+        let sat = field3;
+        let val = read_u32_at(raw, 16).unwrap_or(0);
+        let enc = read_u32_at(raw, 20).unwrap_or(0);
+        let n = (hue as usize)
+            .saturating_mul(sat as usize)
+            .saturating_mul(val as usize);
+        let need = 24 + n * 12;
+        if val >= 1 && raw.len() >= need {
+            let mut data = Vec::with_capacity(n * 3);
+            let mut off = 24;
+            for _ in 0..n {
+                data.push(read_f32_at(raw, off).unwrap_or(0.0));
+                data.push(read_f32_at(raw, off + 4).unwrap_or(1.0));
+                data.push(read_f32_at(raw, off + 8).unwrap_or(1.0));
+                off += 12;
+            }
+            profile.look_dims = [hue, sat, val];
+            profile.look_data = data;
+            profile.look_encoding = enc;
+            profile.has_look = true;
+            return Ok(());
+        }
+    }
+    Err(anyhow!(
+        "unrecognised look blob header {field0},{field1},{field2},{field3} len={}",
+        raw.len()
+    ))
+}
+
+fn parse_rgb_table_blob(raw: &[u8], profile: &mut DngProfile) -> Result<()> {
+    let dimensions = read_u32_at(raw, 8).unwrap_or(0);
+    let divisions = read_u32_at(raw, 12).unwrap_or(0);
+    if dimensions != 3 || divisions < 2 {
+        return Err(anyhow!("RGB table must be 3D with ≥2 divisions"));
+    }
+    let n = divisions as usize;
+    let nop: Vec<u16> = (0..n)
+        .map(|i| ((i as u32 * 0xFFFF + (divisions >> 1)) / (divisions - 1)) as u16)
+        .collect();
+    let sample_count = n * n * n;
+    let mut off = 16;
+    let mut samples = Vec::with_capacity(sample_count * 3);
+    for &ri in &nop {
+        for &gi in &nop {
+            for &bi in &nop {
+                let rr = read_u16_at(raw, off).unwrap_or(0).wrapping_add(ri);
+                let gg = read_u16_at(raw, off + 2).unwrap_or(0).wrapping_add(gi);
+                let bb = read_u16_at(raw, off + 4).unwrap_or(0).wrapping_add(bi);
+                off += 6;
+                samples.push(rr as f32 / 65535.0);
+                samples.push(gg as f32 / 65535.0);
+                samples.push(bb as f32 / 65535.0);
+            }
+        }
+    }
+    let primaries = read_u32_at(raw, off).unwrap_or(2);
+    let gamma = read_u32_at(raw, off + 4).unwrap_or(0);
+    let min_amount = read_f64_at(raw, off + 12).unwrap_or(0.0);
+    let max_amount = read_f64_at(raw, off + 20).unwrap_or(1.0);
+    profile.rgb_lut_div = divisions;
+    profile.rgb_lut = samples;
+    profile.rgb_primaries = primaries;
+    profile.rgb_gamma = gamma;
+    profile.has_rgb_lut = true;
+    if profile.look_amount <= 0.0 {
+        profile.look_amount = max_amount.clamp(min_amount, 1.0) as f32;
+    }
+    Ok(())
+}
+
+fn encode_lut_gamma(x: f32, gamma: u32) -> f32 {
+    let x = x.max(0.0);
+    match gamma {
+        1 => linear_to_srgb(x),
+        2 => x.powf(1.0 / 1.8),
+        3 => x.powf(1.0 / 2.2),
+        4 => {
+            const A: f32 = 1.099_296_8;
+            const B: f32 = 0.018_053_97;
+            if x < B {
+                4.5 * x
+            } else {
+                A * x.powf(0.45) - (A - 1.0)
+            }
+        }
+        _ => x,
+    }
+}
+
+fn decode_lut_gamma(x: f32, gamma: u32) -> f32 {
+    let x = x.max(0.0);
+    match gamma {
+        1 => srgb_to_linear(x),
+        2 => x.powf(1.8),
+        3 => x.powf(2.2),
+        4 => {
+            const A: f32 = 1.099_296_8;
+            const B: f32 = 0.018_053_97;
+            if x < 4.5 * B {
+                x / 4.5
+            } else {
+                ((x + (A - 1.0)) / A).powf(1.0 / 0.45)
+            }
+        }
+        _ => x,
+    }
+}
+
+fn sample_rgb_lut(div: u32, data: &[f32], rgb: [f32; 3]) -> [f32; 3] {
+    let n = div as usize;
+    if n < 2 || data.len() < n * n * n * 3 {
+        return rgb;
+    }
+    let m = (n - 1) as f32;
+    let axis = |c: f32| -> (usize, usize, f32) {
+        let x = c.clamp(0.0, 1.0) * m;
+        let lo = (x as usize).min(n - 2);
+        let hi = lo + 1;
+        (lo, hi, (x - lo as f32).clamp(0.0, 1.0))
+    };
+    let (r0, r1, fr) = axis(rgb[0]);
+    let (g0, g1, fg) = axis(rgb[1]);
+    let (b0, b1, fb) = axis(rgb[2]);
+    let at = |ri: usize, gi: usize, bi: usize| -> [f32; 3] {
+        let idx = ((ri * n + gi) * n + bi) * 3;
+        [data[idx], data[idx + 1], data[idx + 2]]
+    };
+    let mut out = [0.0f32; 3];
+    for (ri, wr) in [(r0, 1.0 - fr), (r1, fr)] {
+        if wr == 0.0 {
+            continue;
+        }
+        for (gi, wg) in [(g0, 1.0 - fg), (g1, fg)] {
+            if wg == 0.0 {
+                continue;
+            }
+            for (bi, wb) in [(b0, 1.0 - fb), (b1, fb)] {
+                if wb == 0.0 {
+                    continue;
+                }
+                let w = wr * wg * wb;
+                let s = at(ri, gi, bi);
+                out[0] += w * s[0];
+                out[1] += w * s[1];
+                out[2] += w * s[2];
+            }
+        }
+    }
+    out
+}
+
+/// Apply a type-1 RGBTable in the table's declared transfer (working space = linear ProPhoto).
+pub fn apply_rgb_lut(profile: &DngProfile, rgb: [f32; 3]) -> [f32; 3] {
+    if !profile.has_rgb_lut {
+        return rgb;
+    }
+    let amount = profile.look_amount.clamp(0.0, 1.0);
+    if amount <= 1e-6 {
+        return rgb;
+    }
+    let encoded = [
+        encode_lut_gamma(rgb[0], profile.rgb_gamma),
+        encode_lut_gamma(rgb[1], profile.rgb_gamma),
+        encode_lut_gamma(rgb[2], profile.rgb_gamma),
+    ];
+    let sampled = sample_rgb_lut(profile.rgb_lut_div, &profile.rgb_lut, encoded);
+    let decoded = [
+        decode_lut_gamma(sampled[0], profile.rgb_gamma),
+        decode_lut_gamma(sampled[1], profile.rgb_gamma),
+        decode_lut_gamma(sampled[2], profile.rgb_gamma),
+    ];
+    if amount >= 1.0 - 1e-6 {
+        return decoded;
+    }
+    [
+        rgb[0] + (decoded[0] - rgb[0]) * amount,
+        rgb[1] + (decoded[1] - rgb[1]) * amount,
+        rgb[2] + (decoded[2] - rgb[2]) * amount,
+    ]
+}
+
+fn xmp_attr(xmp: &str, key: &str) -> Option<String> {
+    let pat = format!("{key}=\"");
+    let start = xmp.find(&pat)? + pat.len();
+    let end = xmp[start..].find('"')? + start;
+    Some(xmp[start..end].to_string())
+}
+
+fn xmp_elem(xmp: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = xmp.find(&open)? + open.len();
+    let end = xmp[start..].find(&close)? + start;
+    Some(xmp[start..end].trim().to_string())
+}
+
+/// Load `crs:Table_<UUID>` from an Adobe Look XMP and merge onto `profile` (replaces DCP LookTable).
+pub fn apply_look_xmp(profile: &mut DngProfile, path: &Path) -> Result<()> {
+    let xmp = std::fs::read_to_string(path)?;
+    let uuid = xmp_attr(&xmp, "crs:LookTable")
+        .or_else(|| {
+            xmp.find("crs:Table_").and_then(|i| {
+                let rest = &xmp[i + 10..];
+                let end = rest.find('=')?;
+                Some(rest[..end].to_string())
+            })
+        })
+        .unwrap_or_default();
+    let key = format!("crs:Table_{uuid}");
+    let encoded = xmp_attr(&xmp, &key).ok_or_else(|| anyhow!("no {key} in {}", path.display()))?;
+    let raw = inflate_big_table(&adobe_base85_decode(&encoded))?;
+    parse_look_blob(&raw, profile)?;
+    profile.look_uuid = uuid;
+    profile.look_name = xmp_elem(&xmp, "crs:Name")
+        .or_else(|| xmp_attr(&xmp, "crs:Name"))
+        .unwrap_or_else(|| {
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("look")
+                .replace('_', " ")
+        });
+    if let Some(amt) = xmp_attr(&xmp, "crs:Amount").and_then(|s| s.parse().ok()) {
+        profile.look_amount = amt;
+    }
+    profile.look_source = path.display().to_string();
+    profile.notes.push(format!(
+        "Look '{}' uuid={} dims={:?} rgb_lut={} from {}",
+        profile.look_name,
+        profile.look_uuid,
+        profile.look_dims,
+        profile.has_rgb_lut,
+        path.display()
+    ));
+    Ok(())
+}
+
+pub fn find_look_xmp(look_dir: &Path, name: Option<&str>, uuid: Option<&str>) -> Option<PathBuf> {
+    if !look_dir.is_dir() {
+        return None;
+    }
+    let mut files: Vec<PathBuf> = std::fs::read_dir(look_dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("xmp"))
+        .collect();
+    files.sort();
+    let name_l = name.unwrap_or("").to_ascii_lowercase();
+    let uuid_l = uuid.unwrap_or("").to_ascii_uppercase();
+    if !name_l.is_empty() {
+        let slug = name_l.replace(' ', "_");
+        for p in &files {
+            let stem = p.file_stem()?.to_string_lossy().to_ascii_lowercase();
+            if stem == slug || stem.contains(&slug) || name_l.contains(&stem.replace('_', " ")) {
+                return Some(p.clone());
+            }
+        }
+    }
+    if !uuid_l.is_empty() {
+        for p in &files {
+            if let Ok(text) = std::fs::read_to_string(p) {
+                if text.to_ascii_uppercase().contains(&uuid_l) {
+                    return Some(p.clone());
+                }
+            }
+        }
+    }
+    None
+}
+
 fn blend_hsv_data(a: &[f32], b: &[f32], g: f32) -> Vec<f32> {
     let n = a.len().min(b.len());
     let mut out = vec![0.0f32; n];
@@ -1163,6 +1554,7 @@ fn apply_profile_stack(
     }
     if flags.look {
         ppr = apply_look_table(profile, ppr);
+        ppr = apply_rgb_lut(profile, ppr);
     }
     if flags.tone {
         ppr = apply_profile_tone_curve(profile, ppr);
@@ -1764,24 +2156,56 @@ pub fn parse_color_profile_with_dcp(
     dcp_path: Option<&Path>,
     dcp_dir: Option<&Path>,
 ) -> Result<DngProfile> {
+    parse_color_profile_with_sidecars(data, hint, dcp_path, dcp_dir, None, None, None)
+}
+
+/// Same as [`parse_color_profile_with_dcp`] plus an Adobe Look XMP (Landscape / Color).
+pub fn parse_color_profile_with_sidecars(
+    data: &[u8],
+    hint: Option<&str>,
+    dcp_path: Option<&Path>,
+    dcp_dir: Option<&Path>,
+    look_dir: Option<&Path>,
+    look_name: Option<&str>,
+    look_uuid: Option<&str>,
+) -> Result<DngProfile> {
     let mut raw = parse_color_profile(data)?;
     if let Some(path) = dcp_path {
-        let dcp = load_dcp_file(path)?;
-        return Ok(merge_dcp_onto_raw(&raw, &dcp));
-    }
-    let dir = dcp_dir
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("RAYFINE_DCP_DIR").map(PathBuf::from));
-    let hint = hint.unwrap_or("");
-    if let Some(dir) = dir {
-        if let Some(path) = find_dcp_file(&dir, hint, "Adobe Standard") {
-            match load_dcp_file(&path) {
-                Ok(dcp) => return Ok(merge_dcp_onto_raw(&raw, &dcp)),
-                Err(e) => raw.notes.push(format!("DCP load failed {}: {e}", path.display())),
+        raw = merge_dcp_onto_raw(&raw, &load_dcp_file(path)?);
+    } else {
+        let dir = dcp_dir
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("RAYFINE_DCP_DIR").map(PathBuf::from));
+        let hint = hint.unwrap_or("");
+        if let Some(dir) = dir {
+            if let Some(path) = find_dcp_file(&dir, hint, "Adobe Standard") {
+                match load_dcp_file(&path) {
+                    Ok(dcp) => raw = merge_dcp_onto_raw(&raw, &dcp),
+                    Err(e) => raw.notes.push(format!("DCP load failed {}: {e}", path.display())),
+                }
+            } else {
+                raw.notes.push(format!(
+                    "No Adobe Standard DCP for '{hint}' under {}.",
+                    dir.display()
+                ));
             }
+        }
+    }
+    let look_dir = look_dir
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("RAYFINE_LOOK_DIR").map(PathBuf::from));
+    if let Some(dir) = look_dir {
+        if let Some(path) = find_look_xmp(&dir, look_name, look_uuid) {
+            if let Err(e) = apply_look_xmp(&mut raw, &path) {
+                raw.notes.push(format!("Look load failed {}: {e}", path.display()));
+            }
+        } else if look_name.unwrap_or("").is_empty() && look_uuid.unwrap_or("").is_empty() {
+            raw.notes.push(format!("No Look XMP under {}.", dir.display()));
         } else {
             raw.notes.push(format!(
-                "No Adobe Standard DCP for '{hint}' under {}.",
+                "No Look XMP for name={:?} uuid={:?} under {}.",
+                look_name,
+                look_uuid,
                 dir.display()
             ));
         }
@@ -2028,5 +2452,51 @@ mod tests {
         assert!((cam[2] - 1.0).abs() < 1e-5, "{cam:?}");
         let xyz = mul3(invert3(cm).unwrap(), [1.0, 1.0, 1.0]);
         assert!((xyz[1] - white[1]).abs() < 1e-4, "{xyz:?} white={white:?}");
+    }
+
+    #[test]
+    fn identity_look_xmp_is_noop() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../bench/lr-compare/fixtures/look_identity.xmp"
+        );
+        let mut p = DngProfile::default();
+        apply_look_xmp(&mut p, Path::new(path)).expect("identity look");
+        assert_eq!(p.look_dims, [2, 2, 2]);
+        assert!(p.has_look);
+        assert_eq!(p.look_name, "Identity Look");
+        let rgb = [0.31, 0.22, 0.18];
+        let out = apply_look_table(&p, rgb);
+        assert!((out[0] - rgb[0]).abs() < 0.02, "{out:?}");
+        assert!((out[1] - rgb[1]).abs() < 0.02, "{out:?}");
+        assert!((out[2] - rgb[2]).abs() < 0.02, "{out:?}");
+    }
+
+    #[test]
+    fn adobe_base85_roundtrip_length_prefix() {
+        let encoded = "z1000n]m$uBRLy1V-G3JkLuC50m/50:}sZ{";
+        let raw = inflate_big_table(&adobe_base85_decode(encoded)).expect("inflate");
+        assert_eq!(raw.len(), 120);
+        let mut p = DngProfile::default();
+        parse_look_blob(&raw, &mut p).expect("blob");
+        assert_eq!(p.look_dims, [2, 2, 2]);
+    }
+
+    #[test]
+    fn parse_local_landscape_look_when_fetched() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../bench/lr-compare/datasets/looks/adobe_landscape.xmp"
+        );
+        let Ok(_) = std::fs::read_to_string(path) else {
+            return;
+        };
+        let mut p = DngProfile::default();
+        apply_look_xmp(&mut p, Path::new(path)).expect("landscape");
+        assert_eq!(p.look_uuid.to_ascii_uppercase(), "0B3BFB5CFB7DBF7FF175E98F24D316B0");
+        assert_eq!(p.look_dims, [36, 16, 16]);
+        assert!(p.has_look);
+        let mid = apply_look_table(&p, [0.22, 0.22, 0.22]);
+        assert!(mid.iter().all(|c| c.is_finite()), "{mid:?}");
     }
 }

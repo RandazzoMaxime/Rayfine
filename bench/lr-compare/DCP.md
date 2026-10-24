@@ -11,6 +11,7 @@ bodies (G95, A6600, Z 6 II, A7R IV) come from **Adobe DNG Converter**.
   Rayfine commits only `fetch_adobe_dcp.py`. Extracted files stay in
   `datasets/dcp/` (gitignored).
 - **Fetch**: `python bench/lr-compare/fetch_adobe_dcp.py`
+- **Looks** (Adobe Landscape / Adobe Color XMP, same installer): `fetch_adobe_looks.py` → `datasets/looks/` (gitignored). IR UUID `0B3BFB5C…` is Landscape's `crs:LookTable`. See [LOOK.md](LOOK.md).
 - **Names** (DNG Converter 16.3): `Sony ILCE-6600`, `Sony ILCE-7RM4`,
   `Nikon Z 6 2`, and `Panasonic DC-G99` (same body as US G95 / EU G90).
   Adobe Color / Adobe Landscape are Looks on Adobe Standard in this installer,

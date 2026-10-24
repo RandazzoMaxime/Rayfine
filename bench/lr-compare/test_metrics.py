@@ -7,7 +7,18 @@ import unittest
 
 import numpy as np
 
-from metrics import compare_srgb, de_heatmap_srgb, delta_e2000, delta_e_map, srgb_to_lab, ssim
+from metrics import (
+    compare_srgb,
+    de_heatmap_srgb,
+    delta_e2000,
+    delta_e_map,
+    downsample_blur,
+    robust_compare,
+    sky_lab_stats,
+    srgb_to_lab,
+    ssim,
+    zone_delta_e,
+)
 
 
 class MetricsTests(unittest.TestCase):
@@ -52,6 +63,28 @@ class MetricsTests(unittest.TestCase):
         self.assertTrue(np.all(de > 10.0))
         heat = de_heatmap_srgb(de, 20.0)
         self.assertEqual(heat.shape, (4, 6, 3))
+
+    def test_downsample_blur_shrinks_and_softens(self) -> None:
+        rng = np.random.default_rng(1)
+        img = rng.random((200, 800, 3))
+        out = downsample_blur(img, width=200, radius=1.0)
+        self.assertEqual(out.shape[1], 200)
+        self.assertLess(out.std(), img.std())
+
+    def test_zone_delta_e_splits_sky_and_shadows(self) -> None:
+        ref = np.zeros((40, 40, 3), dtype=np.float64)
+        ref[:12] = (0.55, 0.45, 0.25)  # warm sky
+        ref[12:28] = 0.4
+        ref[28:] = 0.05
+        pred = ref.copy()
+        pred[:12] = (0.35, 0.40, 0.50)  # grey-blue sky
+        zones = zone_delta_e(pred, ref)
+        self.assertIsNotNone(zones["sky"])
+        self.assertGreater(zones["sky"], zones["mids"])
+        robust = robust_compare(pred, ref, width=32, radius=0.6)
+        self.assertGreater(robust["de_mean"], 1.0)
+        sky = sky_lab_stats(ref)
+        self.assertGreater(sky["b"], 0.0)  # yellow-orange
 
 
 if __name__ == "__main__":

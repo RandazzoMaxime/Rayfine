@@ -49,9 +49,10 @@ committed** — the download scripts write `datasets/` (gitignored).
 
 ## Adobe DCP (local only)
 
-- Adobe DNG Converter Windows installer ships Camera Raw `.dcp` (Adobe Standard,
-  Adobe Color, Adobe Landscape). See [DCP.md](DCP.md). **Copyright Adobe — not
-  committed.** `fetch_adobe_dcp.py` extracts the four IR bodies.
+- Adobe DNG Converter Windows installer ships Camera Raw `.dcp` (Adobe Standard)
+  and Look XMP (Adobe Landscape / Adobe Color). See [DCP.md](DCP.md) and
+  [LOOK.md](LOOK.md). **Copyright Adobe — not committed.**
+  `fetch_adobe_dcp.py` / `fetch_adobe_looks.py` extract locally.
 - LightCraft does **not** ship Adobe profiles ([LIGHTCRAFT.md](LIGHTCRAFT.md)).
 
 ## Rejected / not used

@@ -11,6 +11,7 @@ import math
 from dataclasses import asdict, dataclass
 
 import numpy as np
+from PIL import Image, ImageFilter
 
 HIGHLIGHT_LUMA = 0.8
 SHADOW_LUMA = 0.1
@@ -252,3 +253,69 @@ def nan_safe(value: float) -> float | None:
     if value is None or (isinstance(value, float) and (math.isnan(value) or math.isinf(value))):
         return None
     return float(value)
+
+
+def downsample_blur(img: np.ndarray, width: int = 512, radius: float = 1.1) -> np.ndarray:
+    """Box-downscale to `width` then a mild Gaussian so ΔE sees colour/light, not NR grain."""
+    h, w = img.shape[:2]
+    nw = max(1, int(width))
+    nh = max(1, int(round(h * (nw / max(w, 1)))))
+    pil = Image.fromarray(np.clip(img * 255.0, 0, 255).astype(np.uint8), mode="RGB")
+    pil = pil.resize((nw, nh), Image.Resampling.BOX)
+    pil = pil.filter(ImageFilter.GaussianBlur(radius=radius))
+    return np.asarray(pil, dtype=np.float64) / 255.0
+
+
+def zone_masks(ref: np.ndarray) -> dict[str, np.ndarray]:
+    """Sky = upper third + not-dark; mids / shadows from luma. Position-aware for outdoor IR."""
+    y = luma(ref)
+    h = ref.shape[0]
+    row = np.linspace(0.0, 1.0, h, dtype=np.float64)[:, None]
+    sky = (row < 0.38) & (y > 0.16)
+    shadows = y < 0.12
+    mids = (y >= 0.12) & (y <= 0.75) & ~sky
+    return {"sky": sky, "mids": mids, "shadows": shadows}
+
+
+def zone_delta_e(pred: np.ndarray, ref: np.ndarray) -> dict[str, float | None]:
+    de = delta_e_map(pred, ref)
+    out: dict[str, float | None] = {}
+    for name, mask in zone_masks(ref).items():
+        out[name] = nan_safe(float(de[mask].mean())) if np.any(mask) else None
+    out["global"] = nan_safe(float(de.mean()))
+    return out
+
+
+def robust_compare(
+    pred: np.ndarray,
+    ref: np.ndarray,
+    width: int = 512,
+    radius: float = 1.1,
+) -> dict[str, float | None]:
+    """ΔE2000 after ~512 px wide + Gaussian. Zones on the reduced pair."""
+    a = downsample_blur(pred, width, radius)
+    b = downsample_blur(ref, width, radius)
+    m = compare_srgb(a, b)
+    payload = m.as_dict()
+    payload["de_mean"] = m.de_mean
+    payload["de_p95"] = m.de_p95
+    payload["zones"] = zone_delta_e(a, b)
+    return payload
+
+
+def sky_lab_stats(img: np.ndarray) -> dict[str, float | None]:
+    """Mean Lab / chroma / hue in the sky mask — for the z6ii-0086 orange vs grey-blue note."""
+    mask = zone_masks(img)["sky"]
+    if not np.any(mask):
+        return {"L": None, "a": None, "b": None, "chroma": None, "hue_deg": None, "n": 0}
+    lab = srgb_to_lab(img)[mask]
+    a = float(lab[:, 1].mean())
+    b = float(lab[:, 2].mean())
+    return {
+        "L": float(lab[:, 0].mean()),
+        "a": a,
+        "b": b,
+        "chroma": float(np.hypot(a, b)),
+        "hue_deg": float((np.degrees(np.arctan2(b, a)) + 360.0) % 360.0),
+        "n": int(mask.sum()),
+    }

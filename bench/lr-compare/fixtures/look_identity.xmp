@@ -1,0 +1,16 @@
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+   crs:PresetType="Look"
+   crs:UUID="00000000000000000000000000000000"
+   crs:SupportsAmount="True"
+   crs:Version="11.0"
+   crs:ProcessVersion="11.0"
+   crs:CameraProfile="Adobe Standard"
+   crs:LookTable="00000000000000000000000000000000"
+   crs:Table_00000000000000000000000000000000="z1000n]m$uBRLy1V-G3JkLuC50m/50:}sZ{"
+   crs:HasSettings="True">
+   <crs:Name>Identity Look</crs:Name>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>

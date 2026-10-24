@@ -9,17 +9,17 @@ preserved.
 | Lightroom | Rayfine UI | Scale inside `ToneSliders` | Notes |
 |---|---|---|---|
 | `crs:Exposure2012` | `exposure` (EV) | × 1 | Linear `2^EV`. |
-| `crs:Highlights2012` | `highlights` (−100…100) | ÷ 120 | Log-luma mask `smoothstep(−1, 2.8)`. Negative recovers. |
-| `crs:Shadows2012` | `shadows` | ÷ 120 | Log-luma mask `1−smoothstep(−4.8, 0.3)`. |
-| `crs:Whites2012` | `whites` | ÷ 30 | Extremes `smoothstep(0.5, 3.0)`. |
-| `crs:Blacks2012` | `blacks` | ÷ 40 | Extremes `1−smoothstep(−6.0, −1.5)`. |
+| `crs:Highlights2012` | `highlights` (−100…100) | ÷ 120 | PV2012-like mask `smoothstep(−0.2, 2.6)`. Negative recovers. |
+| `crs:Shadows2012` | `shadows` | ÷ 120 | Fill mask: rise from the floor `smoothstep(−5.6, −3.0)` × fall before mid `1−smoothstep(−2.8, 0.5)`. |
+| `crs:Whites2012` | `whites` | ÷ 30 | Extremes `smoothstep(0.8, 3.2)`. |
+| `crs:Blacks2012` | `blacks` | ÷ 40 | Extremes `1−smoothstep(−6.4, −2.4)`, weaker than Shadows. |
 | `crs:Contrast2012` | `contrast` | ÷ 100 | Pivot 0.18 scene-linear. |
 | `crs:Temperature` / `Tint` | recorded | — | **Not applied** on the CPU compare path (as-shot WB). |
 | `crs:ToneCurvePV2012` / Look curve | Adobe path | 0–255 → 0–1 | Applied as a luma point curve. |
 | Parametric 4-bands + splits | Adobe path | ÷100 × 0.6 EV | Shadows / Darks / Lights / Highlights. |
 | HSL / Calibration / Vibrance / Saturation | Adobe path | ÷100 | Applied at the `color` stage. |
 | Dehaze / Clarity / Texture | Adobe path | approx. | Applied at `hs` (not Adobe’s operator). |
-| `crs:Look.Parameters` | added to H/S/Clarity | 1:1 | Adobe Landscape typically −12 / +12 / +10. LookTable is not public. |
+| `crs:Look.Parameters` | added to H/S/Clarity | 1:1 | Adobe Landscape typically −12 / +12 / +10. LookTable / RGBTable from `fetch_adobe_looks.py`. |
 
 `preset_converter` already maps the 2012 tone sliders 1:1 (test
 `crs_tone_sliders_map_one_to_one`). This compare path reuses that contract.

@@ -13,12 +13,14 @@ python bench/lr-compare/test_metrics.py
 python bench/lr-compare/download_public_pairs.py --accept-ir-evaluation-license --source ir
 python bench/lr-compare/validate_measurement.py --datasets bench/lr-compare/datasets/ir
 python bench/lr-compare/fetch_adobe_dcp.py
+python bench/lr-compare/fetch_adobe_looks.py
 python bench/lr-compare/compare_adobe_match.py \
   --datasets bench/lr-compare/datasets/ir --out bench/lr-compare/out/adobe
 ```
 
-Adobe Standard `.dcp` is extracted locally (not committed): [DCP.md](DCP.md).
-LightCraft contents vs Rayfine: [LIGHTCRAFT.md](LIGHTCRAFT.md).
+Adobe Standard `.dcp` and Landscape/Color Looks are extracted locally (not
+committed): [DCP.md](DCP.md), [LOOK.md](LOOK.md). Mono-slider exports for
+Maxime: [PROTOCOL.md](PROTOCOL.md). LightCraft: [LIGHTCRAFT.md](LIGHTCRAFT.md).
 
 - Triple catalog (URL, ACR/PV, license): [IR_TRIPLES.md](IR_TRIPLES.md)
 - Mapping and limits: [MAPPING.md](MAPPING.md)

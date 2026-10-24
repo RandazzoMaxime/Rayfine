@@ -28,6 +28,8 @@ From `crates/raw/src/profile.rs` and `dng.rs` (DNG spec 1.6/1.7 ch. 6):
 2. **`ProfileHueSatMapData1/2`** in linear ProPhoto HSV. Value-major, hue-middle, sat-minor. Saturation needs ≥ 2 divisions. Encoding 1 indexes value through the sRGB transfer. Headroom &gt; 1 is only ever lowered.
 3. Exposure gain (`BaselineExposure` + `BaselineExposureOffset` + user Exposure).
 4. **`ProfileLookTableData`** (same HSV table type), *after* exposure.
+   Rayfine replaces this with the Adobe Landscape XMP table (36×16×16) when
+   `fetch_adobe_looks.py` has been run — that is the IR `crs:LookTable` UUID.
 5. **`ProfileToneCurve`**: linear 0..1 knots, Fritsch–Carlson monotone cubic.
 6. `ProfileGainTableMap*` is read but **not** rendered by default (Apple ProRAW; measured worse vs LrC).
 

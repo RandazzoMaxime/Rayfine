@@ -455,19 +455,21 @@ fn log_grey_luma(linear_luma: f32) -> f32 {
 }
 
 fn scene_highlight_mask(log_base: f32) -> f32 {
-    return smoothstep(-1.0, 2.8, log_base);
+    return smoothstep(-0.2, 2.6, log_base);
 }
 
 fn scene_shadow_mask(log_base: f32) -> f32 {
-    return 1.0 - smoothstep(-4.8, 0.3, log_base);
+    let from_floor = smoothstep(-5.6, -3.0, log_base);
+    let to_mid = 1.0 - smoothstep(-2.8, 0.5, log_base);
+    return from_floor * to_mid;
 }
 
 fn scene_whites_mask(log_base: f32) -> f32 {
-    return smoothstep(0.5, 3.0, log_base);
+    return smoothstep(0.8, 3.2, log_base);
 }
 
 fn scene_blacks_mask(log_base: f32) -> f32 {
-    return 1.0 - smoothstep(-6.0, -1.5, log_base);
+    return 1.0 - smoothstep(-6.4, -2.4, log_base);
 }
 
 // Soft shoulder above 0.95 scene-linear. Identity at and below 0.95 so default
@@ -650,10 +652,10 @@ fn apply_scene_local_tone(
     let mask_luma = multi_scale_mask_luma(coord, color, fine_linear, mid_linear, is_raw);
     let log_base = log_grey_luma(mask_luma);
     let ws = scene_shadow_mask(log_base);
-    let delta = hl * 2.35 * scene_highlight_mask(log_base)
-        + sh * 2.0 * ws * sqrt(ws)
-        + wh * 0.28 * scene_whites_mask(log_base)
-        + bl * 0.20 * scene_blacks_mask(log_base);
+    let delta = hl * 2.20 * scene_highlight_mask(log_base)
+        + sh * 1.55 * ws
+        + wh * 0.26 * scene_whites_mask(log_base)
+        + bl * 0.11 * scene_blacks_mask(log_base);
     var gain = 1.0;
     if (abs(delta) >= 0.00001) {
         gain = exp2(delta);
