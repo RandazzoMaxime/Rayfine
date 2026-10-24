@@ -569,6 +569,18 @@ fn camera_to_prophoto_settings(
     mul3(inv, xyz_d50)
 }
 
+/// DCP colour only: CameraCalibration + WB + Forward/ColorMatrix → linear sRGB.
+/// No HueSatMap, Look, ProfileToneCurve, BaselineExposure, or user Exposure.
+pub fn adobe_color_only_linear(
+    cam: [f32; 3],
+    profile: &DngProfile,
+    settings: AdobeSettings,
+) -> [f32; 3] {
+    let (prepared, temp) = wb_and_forward(cam, profile, settings);
+    let ppr = camera_to_prophoto_settings(prepared, profile, settings, temp);
+    prophoto_to_srgb_linear(ppr)
+}
+
 pub fn prophoto_to_srgb_linear(ppr: [f32; 3]) -> [f32; 3] {
     let xyz_d50 = mul3(PROPHOTO_TO_XYZ_D50, ppr);
     let xyz_d65 = mul3(BRADFORD_D50_TO_D65, xyz_d50);

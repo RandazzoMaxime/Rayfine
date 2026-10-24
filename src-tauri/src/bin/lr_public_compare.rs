@@ -3,13 +3,15 @@
 //! Usage:
 //!   cargo run -p Rayfine --bin lr_public_compare -- \
 //!     --raw FILE --sliders sliders.json --out DIR [--long-edge 640] \
-//!     [--path legacy|adobe] [--stage wb|profile|exposure|curve|color|hs|all|layers]
+//!     [--path lightcraft|lightcraft-dcp|adobe|legacy]
+//!     [--stage wb|profile|exposure|curve|color|hs|all|layers]
 //!     [--dcp FILE] [--dcp-dir DIR]
 
 use image::{Rgb, RgbImage};
 use rapidraw_lib::{
-    AdobeSettings, AdobeStage, NamedCurve, ToneSliders, develop_adobe_image,
-    develop_image, develop_raw_camera_linear, develop_raw_image, legacy_develop_pixel,
+    AdobeSettings, AdobeStage, LcDevelop, LcSliders, NamedCurve, ToneModel, ToneSliders, WbMode,
+    adobe_color_only_linear, develop_adobe_image, develop_image, develop_image_lc,
+    develop_raw_camera_linear, develop_raw_image, legacy_develop_pixel,
     parse_color_profile_with_sidecars,
 };
 use serde::Deserialize;
@@ -149,7 +151,7 @@ fn parse_args() -> (
     let mut sliders = None;
     let mut out = None;
     let mut long_edge = 640u32;
-    let mut path = "legacy".to_string();
+    let mut path = "lightcraft".to_string();
     let mut stage = "hs".to_string();
     let mut dcp = None;
     let mut dcp_dir = None;
@@ -311,6 +313,95 @@ fn main() {
     fs::create_dir_all(&out).expect("mkdir");
     let parsed: SliderFile =
         serde_json::from_str(&fs::read_to_string(&sliders_path).expect("sliders")).expect("json");
+
+    if path == "lightcraft" || path == "lightcraft-dcp" {
+        let use_dcp = path == "lightcraft-dcp";
+        let sliders = LcSliders::from_ui(
+            parsed.exposure,
+            parsed.highlights,
+            parsed.shadows,
+            parsed.whites,
+            parsed.blacks,
+            parsed.contrast,
+            parsed.vibrance,
+            parsed.saturation,
+        );
+        let wb = if parsed.use_as_shot || parsed.temperature_k.is_none() {
+            WbMode::AsShot
+        } else {
+            WbMode::Custom {
+                temp: parsed.temperature_k.unwrap_or(6500.0) as f64,
+                tint: parsed.tint.unwrap_or(0.0) as f64,
+            }
+        };
+        let hint = raw.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        let parent = raw
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|s| s.to_str())
+            .unwrap_or(hint);
+        let tone = ToneModel::for_make(Some(parent));
+        let (w, h, pixels, bytes) = load_camera_linear(&raw, long_edge);
+        let profile = parse_color_profile_with_sidecars(
+            &bytes,
+            Some(parent),
+            dcp.as_deref(),
+            dcp_dir.as_deref(),
+            look_dir.as_deref(),
+            parsed.look_name.as_deref(),
+            parsed.look_uuid.as_deref(),
+        )
+        .ok();
+        let as_shot = profile
+            .as_ref()
+            .map(|p| {
+                // Neutral camera white → a Kelvin guess; As Shot keeps identity WB.
+                let n = p.as_shot_neutral;
+                let _ = n;
+                (6500.0, 0.0)
+            })
+            .unwrap_or((6500.0, 0.0));
+        let dev = LcDevelop {
+            sliders,
+            wb,
+            as_shot,
+            tone,
+        };
+        let linear: Vec<[f32; 3]> = if use_dcp {
+            if let Some(ref profile) = profile {
+                let settings = adobe_settings(&parsed);
+                pixels
+                    .iter()
+                    .map(|p| adobe_color_only_linear(*p, profile, settings))
+                    .collect()
+            } else {
+                pixels
+            }
+        } else {
+            // rawler-developed linear (as-shot WB + colour), same working space as the GPU.
+            let (rw, rh, developed) = load_linear(&raw, long_edge);
+            if (rw, rh) == (w, h) {
+                developed
+            } else {
+                pixels
+            }
+        };
+        let after = develop_image_lc(&linear, w as usize, h as usize, &dev);
+        pixels_to_image(&after, w, h)
+            .save(out.join("lightcraft_hs.png"))
+            .expect("lc png");
+        let notes = serde_json::json!({
+            "path": path,
+            "tone": format!("{tone:?}"),
+            "wb": format!("{wb:?}"),
+            "dcp_color": use_dcp,
+            "label": sliders.ui_label(tone, "as-shot/custom"),
+        });
+        fs::write(out.join("lightcraft_profile.json"), serde_json::to_string_pretty(&notes).unwrap())
+            .expect("lc json");
+        eprintln!("{}", sliders.ui_label(tone, &path));
+        return;
+    }
 
     if path == "adobe" {
         let settings = adobe_settings(&parsed);

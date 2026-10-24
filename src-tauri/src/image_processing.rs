@@ -1510,6 +1510,17 @@ impl Default for GpuMat3 {
     }
 }
 
+impl GpuMat3 {
+    /// Row-major 3×3 → column-padded GPU matrix (`M * v`).
+    pub fn from_rows(m: [[f32; 3]; 3]) -> Self {
+        Self {
+            col0: [m[0][0], m[1][0], m[2][0], 0.0],
+            col1: [m[0][1], m[1][1], m[2][1], 0.0],
+            col2: [m[0][2], m[1][2], m[2][2], 0.0],
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Pod, Zeroable, Default)]
 #[repr(C)]
 pub struct GlobalAdjustments {
@@ -1553,8 +1564,8 @@ pub struct GlobalAdjustments {
     pub has_lut: u32,
     pub lut_intensity: f32,
     pub tonemapper_mode: u32,
-    _pad_lut2: f32,
-    _pad_lut3: f32,
+    pub develop_path: u32,
+    pub camera_tone: u32,
     _pad_lut4: f32,
     _pad_lut5: f32,
 
@@ -2254,7 +2265,61 @@ fn get_global_adjustments_from_json(
     };
 
     let tone_mapper = js_adjustments["toneMapper"].as_str().unwrap_or("basic");
-    let (pipe_to_rendering, rendering_to_pipe) = calculate_agx_matrices();
+    let (mut pipe_to_rendering, rendering_to_pipe) = calculate_agx_matrices();
+    let develop_path = crate::lightcraft_develop::DevelopPath::parse(
+        std::env::var("RAYFINE_DEVELOP_PATH")
+            .ok()
+            .as_deref()
+            .unwrap_or_else(|| js_adjustments["developPath"].as_str().unwrap_or("lightcraft")),
+    );
+    let camera_tone = crate::lightcraft_develop::ToneModel::for_make(
+        js_adjustments["cameraMake"]
+            .as_str()
+            .or_else(|| js_adjustments["make"].as_str()),
+    );
+    if develop_path == crate::lightcraft_develop::DevelopPath::LightCraft {
+        let as_shot = (
+            js_adjustments["asShotTemp"].as_f64().unwrap_or(6500.0),
+            js_adjustments["asShotTint"].as_f64().unwrap_or(0.0),
+        );
+        let wb = if js_adjustments["useAsShot"].as_bool().unwrap_or(true)
+            && js_adjustments.get("temperatureK").and_then(|v| v.as_f64()).is_none()
+        {
+            crate::lightcraft_develop::WbMode::AsShot
+        } else if let Some(temp) = js_adjustments["temperatureK"].as_f64() {
+            crate::lightcraft_develop::WbMode::Custom {
+                temp,
+                tint: js_adjustments["tintK"]
+                    .as_f64()
+                    .or_else(|| js_adjustments["tint"].as_f64())
+                    .unwrap_or(0.0),
+            }
+        } else {
+            let t = get_val("color", "temperature", SCALES.temperature, None);
+            let ti = get_val("color", "tint", SCALES.tint, None);
+            if t.abs() < 1e-4 && ti.abs() < 1e-4 {
+                crate::lightcraft_develop::WbMode::AsShot
+            } else {
+                crate::lightcraft_develop::WbMode::Relative {
+                    temp: 6500.0 * 2f64.powf(-(t as f64) * 0.35),
+                    tint: ti as f64 * 80.0,
+                }
+            }
+        };
+        let dev = crate::lightcraft_develop::LcDevelop {
+            sliders: crate::lightcraft_develop::LcSliders::default(),
+            wb,
+            as_shot,
+            tone: camera_tone,
+        };
+        if let Some(m) =
+            crate::lightcraft_develop::wb_matrix_for(as_shot, crate::lightcraft_develop::effective_wb(&dev))
+        {
+            pipe_to_rendering = GpuMat3::from_rows(m);
+        } else {
+            pipe_to_rendering = GpuMat3::default();
+        }
+    }
 
     let (has_lut, lut_intensity) = if is_visible("effects") {
         (
@@ -2371,8 +2436,8 @@ fn get_global_adjustments_from_json(
 
         tonemapper_mode: tonemapper_override
             .unwrap_or_else(|| if tone_mapper == "agx" { 1 } else { 0 }),
-        _pad_lut2: 0.0,
-        _pad_lut3: 0.0,
+        develop_path: develop_path.as_u32(),
+        camera_tone: camera_tone.as_u32(),
         _pad_lut4: 0.0,
         _pad_lut5: 0.0,
 

@@ -1,0 +1,41 @@
+Rayfine
+=======
+
+This product includes a port of LightCraft's global develop treatment
+(white balance, exposure, base / camera tone, Highlights / Shadows /
+Whites / Blacks / Contrast, vibrance / saturation) for the GPU preview
+and the export path.
+
+LightCraft
+----------
+Copyright (c) 2026 ArtCraft Team and the LightCraft contributors
+https://github.com/storytold/lightcraft
+Commit referenced by this port: 38f8d2508 (0.13.0)
+
+Licensed under the MIT License or the Apache License, Version 2.0,
+at your option. Copies of both licenses are in:
+
+    THIRD_PARTY/lightcraft/LICENSE-MIT
+    THIRD_PARTY/lightcraft/LICENSE-APACHE
+
+Ported sources (keep in step with upstream):
+
+    lightcraft-gpu          crates/gpu/src/wgsl/{finish.wgsl,common.wgsl}
+    lightcraft-pipeline     crates/pipeline/src/{local.rs,tone.rs,finish.rs,colorops.rs}
+    lightcraft-color        crates/color/src/{cct.rs,perceptual.rs}
+
+Rayfine files that carry this port:
+
+    src-tauri/src/lightcraft_develop.rs
+    src-tauri/src/shaders/lightcraft.wgsl
+
+Sony DRO-off camera-tone knots
+------------------------------
+Derived by LightCraft from CC0 pixls.us samples (see
+`assets/camera-tone/sony-dro-off.json` in the LightCraft tree). The
+32 (scene, display) knots are reproduced in the files above.
+The original JSON is CC0; the surrounding LightCraft fitting code is
+MIT / Apache-2.0.
+
+Adobe DCP / Camera Raw colour remains optional and is not required for
+this LightCraft tone path. Adobe assets are not shipped.

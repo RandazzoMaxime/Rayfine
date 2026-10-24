@@ -43,15 +43,20 @@ mod adobe_color;
 mod raw_processing;
 mod raw_tone;
 mod scene_tone;
+mod lightcraft_develop;
 mod tonemap;
 pub use adobe_color::{
-    AdobeSettings, AdobeStage, DngProfile, NamedCurve, develop_adobe_image, dcp_slug_for,
-    find_dcp_file, load_dcp_file, merge_dcp_onto_raw, parse_color_profile,
-    parse_color_profile_with_dcp, parse_color_profile_with_sidecars, parse_dng_profile,
+    AdobeSettings, AdobeStage, DngProfile, NamedCurve, adobe_color_only_linear,
+    develop_adobe_image, dcp_slug_for, find_dcp_file, load_dcp_file, merge_dcp_onto_raw,
+    parse_color_profile, parse_color_profile_with_dcp, parse_color_profile_with_sidecars,
+    parse_dng_profile,
 };
 pub use raw_processing::{develop_raw_camera_linear, develop_raw_image};
 pub use scene_tone::{
     ToneSliders, develop_image, develop_pixel, legacy_develop_pixel, lightcraft_like_pixel,
+};
+pub use lightcraft_develop::{
+    DevelopPath, LcDevelop, LcSliders, ToneModel, WbMode, develop_image_lc, develop_pixel_lc,
 };
 mod tagging;
 mod tagging_utils;

@@ -2276,7 +2276,11 @@ fn perf_shader_profile() {
     }));
     let data = to_rgba_f16(&img);
     let (_tex, view) = create_input_texture(&ctx, &data, w, h);
-    let base_src = include_str!("shaders/shader.wgsl").to_string();
+    let base_src = format!(
+        "{}\n{}",
+        include_str!("shaders/lightcraft.wgsl"),
+        include_str!("shaders/shader.wgsl")
+    );
     let reps = env_usize("RUSTROOM_BENCH_REPS", 15);
 
     // (label, adjustments, patches applied to the shader source)

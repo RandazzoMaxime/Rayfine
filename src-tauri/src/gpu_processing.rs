@@ -943,7 +943,12 @@ fn main_shader_source() -> std::borrow::Cow<'static, str> {
     if let Some(src) = MAIN_SHADER_OVERRIDE.lock().unwrap().clone() {
         return src.into();
     }
-    include_str!("shaders/shader.wgsl").into()
+    format!(
+        "{}\n{}",
+        include_str!("shaders/lightcraft.wgsl"),
+        include_str!("shaders/shader.wgsl")
+    )
+    .into()
 }
 
 pub(crate) fn requires_guided_dehaze(a: &AllAdjustments) -> bool {

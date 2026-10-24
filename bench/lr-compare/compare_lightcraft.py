@@ -122,10 +122,19 @@ def _lc_version(cli: Path) -> dict[str, str]:
     return info
 
 
-def _render_rayfine(raw: Path, sliders: dict, out_dir: Path, long_edge: int, dcp_dir: Path | None, look_dir: Path | None) -> None:
-    sliders_path = out_dir / "adobe_sliders.json"
+def _render_rayfine(
+    raw: Path,
+    sliders: dict,
+    out_dir: Path,
+    long_edge: int,
+    dcp_dir: Path | None,
+    look_dir: Path | None,
+    path: str = "lightcraft",
+) -> None:
+    sliders_path = out_dir / f"{path}_sliders.json"
     sliders_path.write_text(json.dumps(sliders, indent=2) + "\n", encoding="utf-8")
     binary = REPO / "src-tauri" / "target" / "release" / "lr_public_compare"
+    dest = out_dir / ("lightcraft_hs.png" if path.startswith("lightcraft") else "adobe_hs.png")
     if binary.is_file():
         cmd = [
             str(binary),
@@ -138,7 +147,7 @@ def _render_rayfine(raw: Path, sliders: dict, out_dir: Path, long_edge: int, dcp
             "--long-edge",
             str(long_edge),
             "--path",
-            "adobe",
+            path,
             "--stage",
             "all",
         ]
@@ -162,7 +171,7 @@ def _render_rayfine(raw: Path, sliders: dict, out_dir: Path, long_edge: int, dcp
             "--long-edge",
             str(long_edge),
             "--path",
-            "adobe",
+            path,
             "--stage",
             "all",
         ]
@@ -172,6 +181,9 @@ def _render_rayfine(raw: Path, sliders: dict, out_dir: Path, long_edge: int, dcp
         cmd.extend(["--look-dir", str(look_dir.resolve())])
     print(" ".join(cmd))
     subprocess.run(cmd, cwd=str(REPO / "src-tauri"), check=True)
+    if path.startswith("lightcraft") and dest.is_file():
+        # Keep a stable name for the ported path.
+        (out_dir / "rayfine_lc.png").write_bytes(dest.read_bytes())
 
 
 def _render_lightcraft(cli: Path, raw: Path, settings: dict, dest: Path, long_edge: int) -> None:
@@ -225,28 +237,35 @@ def _sheet(
     rf_m: dict,
     dest: Path,
     notes: str,
+    rf_old: np.ndarray | None = None,
+    rf_old_m: dict | None = None,
+    rf_old_line: str = "",
 ) -> None:
     heat_lc = de_heatmap_srgb(delta_e_map(lc, lr), DE_SCALE)
     heat_rf = de_heatmap_srgb(delta_e_map(rf, lr), DE_SCALE)
-    top = _stack_h(
-        [
-            _panel("Lightroom JPEG  sRGB IEC61966-2.1  Adobe Standard + Landscape", lr, banner),
-            _panel("LightCraft", lc, lc_line),
-            _panel("Rayfine Adobe", rf, rf_line),
+    panels = [
+        _panel("Lightroom JPEG  sRGB IEC61966-2.1  Adobe Standard + Landscape", lr, banner),
+        _panel("LightCraft", lc, lc_line),
+        _panel("Rayfine (porté LC)", rf, rf_line),
+    ]
+    if rf_old is not None:
+        panels.append(_panel("Rayfine (ancien)", rf_old, rf_old_line))
+    top = _stack_h(panels)
+    heat_panels = [
+        _panel("ΔE LightCraft vs LR", heat_lc, f"plein {_fmt(lc_m.get('de_mean'))}  réduit {_fmt((lc_m.get('robust') or {}).get('de_mean'))}"),
+        _panel("ΔE Rayfine porté vs LR", heat_rf, f"plein {_fmt(rf_m.get('de_mean'))}  réduit {_fmt((rf_m.get('robust') or {}).get('de_mean'))}"),
+    ]
+    if rf_old is not None:
+        heat_old = de_heatmap_srgb(delta_e_map(rf_old, lr), DE_SCALE)
+        heat_panels.append(
             _panel(
-                f"ΔE LC 0→{DE_SCALE:.0f}  mean {_fmt((lc_m.get('robust') or {}).get('de_mean'))}",
-                heat_lc,
-                f"ΔE RF mean {_fmt((rf_m.get('robust') or {}).get('de_mean'))}",
-            ),
-        ]
-    )
-    heat_row = _stack_h(
-        [
-            _panel("ΔE LightCraft vs LR", heat_lc, f"plein {_fmt(lc_m.get('de_mean'))}  réduit {_fmt((lc_m.get('robust') or {}).get('de_mean'))}"),
-            _panel("ΔE Rayfine vs LR", heat_rf, f"plein {_fmt(rf_m.get('de_mean'))}  réduit {_fmt((rf_m.get('robust') or {}).get('de_mean'))}"),
-            _colorbar(heat_lc.shape[0] + 56),
-        ]
-    )
+                "ΔE Rayfine ancien vs LR",
+                heat_old,
+                f"plein {_fmt((rf_old_m or {}).get('de_mean'))}  réduit {_fmt(((rf_old_m or {}).get('robust') or {}).get('de_mean'))}",
+            )
+        )
+    heat_panels.append(_colorbar(heat_lc.shape[0] + 56))
+    heat_row = _stack_h(heat_panels)
     def _z(m: dict, key: str) -> str:
         return _fmt(((m.get("robust") or {}).get("zones") or {}).get(key))
 
@@ -283,33 +302,30 @@ def _mean(rows: list[dict], engine: str, *keys: str) -> float | None:
 
 def _table(rows: list[dict]) -> str:
     header = (
-        "| Split | Image | LC ΔE | RF ΔE | LC ciel | RF ciel | LC hor | RF hor | "
-        "LC mil | RF mil | LC omb | RF omb | LC ΔEV | RF ΔEV |\n"
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n"
+        "| Split | Image | LC ΔE | RF porté ΔE | RF ancien ΔE | LC ciel | RF ciel | "
+        "LC ΔEV | RF porté ΔEV | RF ancien ΔEV |\n"
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|\n"
     )
     lines = [header]
     for row in rows:
         lc = row["engines"]["lightcraft"]
         rf = row["engines"]["rayfine"]
+        old = row["engines"].get("rayfine_old") or {}
         lcz = (lc.get("robust") or {}).get("zones") or {}
         rfz = (rf.get("robust") or {}).get("zones") or {}
         lines.append(
-            "| {split} | `{ident}` | {lc} | {rf} | {lcs} | {rfs} | {lch} | {rfh} | "
-            "{lcm} | {rfm} | {lco} | {rfo} | {lce} | {rfe} |\n".format(
+            "| {split} | `{ident}` | {lc} | {rf} | {old} | {lcs} | {rfs} | "
+            "{lce} | {rfe} | {olde} |\n".format(
                 split=row["split"],
                 ident=row["id"],
                 lc=_fmt((lc.get("robust") or {}).get("de_mean")),
                 rf=_fmt((rf.get("robust") or {}).get("de_mean")),
+                old=_fmt((old.get("robust") or {}).get("de_mean")),
                 lcs=_fmt(lcz.get("sky")),
                 rfs=_fmt(rfz.get("sky")),
-                lch=_fmt(lcz.get("horizon")),
-                rfh=_fmt(rfz.get("horizon")),
-                lcm=_fmt(lcz.get("mids")),
-                rfm=_fmt(rfz.get("mids")),
-                lco=_fmt(lcz.get("shadows")),
-                rfo=_fmt(rfz.get("shadows")),
                 lce=_fmt(lc.get("ev_median"), 3),
                 rfe=_fmt(rf.get("ev_median"), 3),
+                olde=_fmt(old.get("ev_median"), 3),
             )
         )
     return "".join(lines)
@@ -359,29 +375,53 @@ def main() -> None:
             (work / "lightcraft_error.txt").write_text(str(exc) + "\n", encoding="utf-8")
             print(f"   LightCraft FAILED: {exc}")
             continue
-        rf_png = work / "adobe_hs.png"
+        rf_png = work / "rayfine_lc.png"
+        rf_old_png = work / "adobe_hs.png"
         if not (args.skip_rayfine_render and rf_png.exists()):
-            _render_rayfine(pair["raw"], mapped.adobe_json(), work, args.long_edge, args.dcp_dir, args.look_dir)
+            _render_rayfine(
+                pair["raw"], mapped.adobe_json(), work, args.long_edge, args.dcp_dir, args.look_dir, "lightcraft"
+            )
+        if not (args.skip_rayfine_render and rf_old_png.exists()):
+            _render_rayfine(
+                pair["raw"], mapped.adobe_json(), work, args.long_edge, args.dcp_dir, args.look_dir, "adobe"
+            )
         lr_full = _load_srgb(pair["reference"], args.long_edge, pair["reference_space"])
         lc_raw = _load_png_srgb(lc_jpg, None)
-        rf_raw = _load_png_srgb(rf_png, None)
+        rf_raw = _load_png_srgb(rf_png if rf_png.exists() else work / "lightcraft_hs.png", None)
+        rf_old_raw = _load_png_srgb(rf_old_png, None) if rf_old_png.exists() else None
         lc_img, lr_lc, lc_align = align_pair(lc_raw, lr_full)
         rf_img, lr_rf, rf_align = align_pair(rf_raw, lr_lc if lr_lc.shape == lr_full.shape else lr_full)
-        # Common crop so both engines share the same LR pixels.
+        rf_old_img = None
+        rf_old_align = None
+        lr_old = lr_rf
+        if rf_old_raw is not None:
+            rf_old_img, lr_old, rf_old_align = align_pair(rf_old_raw, lr_rf)
         h = min(lr_lc.shape[0], lr_rf.shape[0], lc_img.shape[0], rf_img.shape[0])
         w = min(lr_lc.shape[1], lr_rf.shape[1], lc_img.shape[1], rf_img.shape[1])
+        if rf_old_img is not None:
+            h = min(h, rf_old_img.shape[0], lr_old.shape[0])
+            w = min(w, rf_old_img.shape[1], lr_old.shape[1])
         lr = lr_lc[:h, :w]
         lc_img = lc_img[:h, :w]
         rf_img = rf_img[:h, :w]
+        if rf_old_img is not None:
+            rf_old_img = rf_old_img[:h, :w]
         lc_m = _score(lc_img, lr)
         rf_m = _score(rf_img, lr)
+        rf_old_m = _score(rf_old_img, lr) if rf_old_img is not None else None
         lc_m["align"] = lc_align.as_dict()
         rf_m["align"] = rf_align.as_dict()
+        if rf_old_m is not None and rf_old_align is not None:
+            rf_old_m["align"] = rf_old_align.as_dict()
         profile_name = "rawler"
         notes_path = work / "adobe_profile.json"
         if notes_path.exists():
             profile = json.loads(notes_path.read_text(encoding="utf-8"))
             profile_name = str(profile.get("profile_name") or profile.get("dcp_source") or profile_name)
+        tone_name = "Hdr"
+        lc_notes = work / "lightcraft_profile.json"
+        if lc_notes.exists():
+            tone_name = str(json.loads(lc_notes.read_text(encoding="utf-8")).get("tone") or tone_name)
         lc_line = (
             f"{lc_info['version']}  {lc_info['commit']}  process V2  "
             f"profil {lc_settings['profile']['id']}  "
@@ -392,14 +432,18 @@ def main() -> None:
             f"sRGB"
         )
         rf_line = (
-            f"Adobe path  {profile_name}  Look {mapped.look_name or '-'}  "
+            f"Rayfine porté LC  tone {tone_name}  "
             f"WB {mapped.white_balance}  E {mapped.raw_exposure():+.2f}  sRGB"
+        )
+        rf_old_line = (
+            f"Rayfine ancien Adobe  {profile_name}  Look {mapped.look_name or '-'}  "
+            f"E {mapped.raw_exposure():+.2f}  sRGB"
         )
         notes = (
             f"LC {lc_info['version']} commit {lc_info['commit']}  "
-            f"profil caméra JPEG-fit si présent, sinon matrices spectrales / rawler  "
+            f"Rayfine porte lightcraft-gpu/pipeline (WB, expo, base_tone/camera_tone, H/S, vib)  "
             f"export sRGB  align {lc_align.method}/{rf_align.method}  "
-            f"Adobe Landscape HSV LookTable non mappé dans LC"
+            f"DCP optionnel couleur seule (off sur le porté)"
         )
         _sheet(
             pair["id"],
@@ -413,6 +457,9 @@ def main() -> None:
             rf_m,
             args.out / "sheets" / f"{pair['id']}.png",
             notes,
+            rf_old=rf_old_img,
+            rf_old_m=rf_old_m,
+            rf_old_line=rf_old_line,
         )
         artifacts = Path("/opt/cursor/artifacts/lr-compare/lc-vs-lr/sheets")
         artifacts.mkdir(parents=True, exist_ok=True)
@@ -432,7 +479,11 @@ def main() -> None:
             "lightcraft_profile": lc_settings["profile"]["id"],
             "rayfine_profile": profile_name,
             "look_name": mapped.look_name,
-            "engines": {"lightcraft": lc_m, "rayfine": rf_m},
+            "engines": {
+                "lightcraft": lc_m,
+                "rayfine": rf_m,
+                "rayfine_old": rf_old_m,
+            },
             "sky": sky,
         }
         (work / "compare.json").write_text(json.dumps(row, indent=2) + "\n", encoding="utf-8")
@@ -458,10 +509,12 @@ def main() -> None:
         "ΔE2000 ~512 px + flou, zones ciel / horizon / milieux / ombres, ΔEV médian.\n\n"
         + _table(summary)
         + "\n### Moyennes (ΔE réduit)\n\n"
-        f"- Train LC / RF : {_fmt(_mean(train, 'lightcraft', 'robust', 'de_mean'))} / "
-        f"{_fmt(_mean(train, 'rayfine', 'robust', 'de_mean'))}\n"
-        f"- Val LC / RF : {_fmt(_mean(val, 'lightcraft', 'robust', 'de_mean'))} / "
-        f"{_fmt(_mean(val, 'rayfine', 'robust', 'de_mean'))}\n"
+        f"- Train LC / RF porté / RF ancien : {_fmt(_mean(train, 'lightcraft', 'robust', 'de_mean'))} / "
+        f"{_fmt(_mean(train, 'rayfine', 'robust', 'de_mean'))} / "
+        f"{_fmt(_mean(train, 'rayfine_old', 'robust', 'de_mean'))}\n"
+        f"- Val LC / RF porté / RF ancien : {_fmt(_mean(val, 'lightcraft', 'robust', 'de_mean'))} / "
+        f"{_fmt(_mean(val, 'rayfine', 'robust', 'de_mean'))} / "
+        f"{_fmt(_mean(val, 'rayfine_old', 'robust', 'de_mean'))}\n"
         f"- Train LC / RF ciel : {_fmt(_mean(train, 'lightcraft', 'robust', 'zones', 'sky'))} / "
         f"{_fmt(_mean(train, 'rayfine', 'robust', 'zones', 'sky'))}\n"
         f"- Train LC / RF horizon : {_fmt(_mean(train, 'lightcraft', 'robust', 'zones', 'horizon'))} / "

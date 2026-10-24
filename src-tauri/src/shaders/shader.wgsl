@@ -71,8 +71,8 @@ struct GlobalAdjustments {
     has_lut: u32,
     lut_intensity: f32,
     tonemapper_mode: u32,
-    _pad_lut2: f32,
-    _pad_lut3: f32,
+    develop_path: u32,
+    camera_tone: u32,
     _pad_lut4: f32,
     _pad_lut5: f32,
 
@@ -1933,7 +1933,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     locally_contrasted_rgb = apply_centre_local_contrast(locally_contrasted_rgb, adjustments.global.centre, absolute_coord_i, clarity_blurred, is_raw);
 
     locally_contrasted_rgb = reconstruct_highlights_linear(locally_contrasted_rgb, tonal_blurred, absolute_coord_i, is_raw);
-    var processed_rgb = apply_linear_exposure(locally_contrasted_rgb, t_exposure);
+    let lc_on = adjustments.global.develop_path == 0u;
+    var processed_rgb = locally_contrasted_rgb;
+    if (!lc_on) {
+        processed_rgb = apply_linear_exposure(locally_contrasted_rgb, t_exposure);
+    }
 
     if (t_glow > 0.0) {
         processed_rgb = apply_glow_bloom(
@@ -1970,10 +1974,32 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         composite_rgb_linear = apply_dehaze(processed_rgb,structure_blurred,is_raw,t_dehaze*select(1.0,3.5,is_raw==1u));
     }
     composite_rgb_linear = apply_centre_tonal_and_color(composite_rgb_linear, adjustments.global.centre, absolute_coord_i);
-    composite_rgb_linear = apply_white_balance(composite_rgb_linear, t_temperature, t_tint);
-    composite_rgb_linear = apply_filmic_exposure(composite_rgb_linear, t_brightness);
-    composite_rgb_linear = apply_scene_local_tone(composite_rgb_linear, absolute_coord_i, tonal_blurred, clarity_blurred, is_raw, t_highlights, t_shadows, t_whites, t_blacks);
-    composite_rgb_linear = apply_tonal_adjustments(composite_rgb_linear, tonal_blurred, is_raw, t_contrast, 0.0, 0.0, 0.0);
+    if (lc_on) {
+        var blur_lin = tonal_blurred;
+        if (is_raw != 1u) {
+            blur_lin = srgb_to_linear(tonal_blurred);
+        }
+        let mask = lc_lum2020(lc_srgb_to_rec(max(blur_lin, vec3<f32>(0.0))));
+        composite_rgb_linear = lc_develop_linear(
+            composite_rgb_linear,
+            mask,
+            t_exposure,
+            t_highlights * 120.0,
+            t_shadows * 120.0,
+            t_whites * 30.0,
+            t_blacks * 40.0,
+            t_contrast * 100.0,
+            t_vibrance * 100.0,
+            t_saturation * 100.0,
+            adjustments.global.agx_pipe_to_rendering_matrix,
+            adjustments.global.camera_tone
+        );
+    } else {
+        composite_rgb_linear = apply_white_balance(composite_rgb_linear, t_temperature, t_tint);
+        composite_rgb_linear = apply_filmic_exposure(composite_rgb_linear, t_brightness);
+        composite_rgb_linear = apply_scene_local_tone(composite_rgb_linear, absolute_coord_i, tonal_blurred, clarity_blurred, is_raw, t_highlights, t_shadows, t_whites, t_blacks);
+        composite_rgb_linear = apply_tonal_adjustments(composite_rgb_linear, tonal_blurred, is_raw, t_contrast, 0.0, 0.0, 0.0);
+    }
     composite_rgb_linear = apply_color_calibration(composite_rgb_linear, adjustments.global.color_calibration);
     // HSL panel is costly per pixel; skip it when every hue/sat/lum slider is at zero.
     let hsl_magnitude =
@@ -1987,9 +2013,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let monochrome_profile = adjustments.global._pad_color1 > 0.5;
     if (monochrome_profile) {
         composite_rgb_linear = apply_monochrome_profile(composite_rgb_linear, adjustments.global.gray_mixer);
-    } else {
+    } else if (!lc_on) {
         composite_rgb_linear = apply_hue_shift(composite_rgb_linear, t_hue);
         composite_rgb_linear = apply_creative_color(composite_rgb_linear, t_saturation, t_vibrance);
+    } else if (abs(t_hue) > 0.0001) {
+        composite_rgb_linear = apply_hue_shift(composite_rgb_linear, t_hue);
     }
 
     composite_rgb_linear = apply_color_grading(
@@ -2034,11 +2062,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 
     var base_srgb: vec3<f32>;
-    if (adjustments.global.tonemapper_mode == 1u) {
+    if (lc_on) {
+        base_srgb = lc_encode_srgb3(composite_rgb_linear);
+    } else if (adjustments.global.tonemapper_mode == 1u) {
         base_srgb = agx_full_transform(composite_rgb_linear);
     } else if (is_raw == 1u) {
-        // Empirical Basic RAW transfer, now with a soft shoulder so values
-        // above sensor white are not clipped before Highlights can recover them.
+        // Previous Rayfine Basic RAW transfer (compare flag).
         base_srgb = basic_raw_display(composite_rgb_linear);
     } else {
         base_srgb = linear_to_srgb_extended(soft_shoulder_rgb(composite_rgb_linear));
@@ -2051,7 +2080,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         base_srgb=linear_to_srgb_extended(prophoto_to_srgb(toned));
     }
 
-    if (is_raw == 1u && adjustments.global.tonemapper_mode == 0u && t_contrast != 0.0) {
+    if (!lc_on && is_raw == 1u && adjustments.global.tonemapper_mode == 0u && t_contrast != 0.0) {
         let working = srgb_to_prophoto(srgb_to_linear(base_srgb));
         base_srgb = linear_to_srgb_extended(prophoto_to_srgb(apply_raw_contrast(working, t_contrast)));
     }

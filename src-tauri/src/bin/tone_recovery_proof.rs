@@ -8,7 +8,8 @@
 
 use image::{Rgb, RgbImage};
 use rapidraw_lib::{
-    ToneSliders, develop_image, legacy_develop_pixel, lightcraft_like_pixel,
+    LcDevelop, LcSliders, ToneModel, ToneSliders, WbMode, develop_image,
+    develop_image_lc, legacy_develop_pixel,
 };
 use std::env;
 use std::path::{Path, PathBuf};
@@ -112,7 +113,15 @@ fn develop_buffer(pixels: &[[f32; 3]], w: u32, h: u32, sliders: ToneSliders, kin
                 legacy_develop_pixel(clamped, sliders)
             })
             .collect(),
-        PathKind::Lightcraft => pixels.iter().map(|p| lightcraft_like_pixel(*p, sliders)).collect(),
+        PathKind::Lightcraft => {
+            let dev = LcDevelop {
+                sliders: LcSliders::from_tone(sliders, 0.0, 0.0),
+                wb: WbMode::AsShot,
+                as_shot: (6500.0, 0.0),
+                tone: ToneModel::Hdr,
+            };
+            develop_image_lc(pixels, w as usize, h as usize, &dev)
+        }
     }
 }
 
