@@ -95,33 +95,89 @@ fn raw_is_sony(bytes: &[u8]) -> bool {
         || hay.windows(4).any(|w| w == b"ILCE" || w == b"ILCA" || w == b"ILME")
 }
 
-/// Largest embedded JPEG in a RAW container (preview, not the 160 px thumbnail).
+/// Largest *displayable* embedded JPEG in a RAW container (preview, not the
+/// 160 px thumbnail).
+///
+/// A naive first-`FF D9` scan is wrong on Panasonic RW2 (and some Sony ARW):
+/// EXIF thumbnails embed their own EOI, and the CFA payload is full of stray
+/// `FF D8 … FF D9` runs. LightCraft `preview.rs` `walk_jpeg` rejects those;
+/// g95-0273's largest naive slice is 2.4 MB of sensor data that does not
+/// decode, so CameraTone never fitted and the night scene stayed on Hdr.
 pub fn extract_embedded_jpeg(bytes: &[u8]) -> Option<Vec<u8>> {
     let mut best: Option<&[u8]> = None;
     let mut i = 0;
-    while i + 4 < bytes.len() {
+    while i + 3 < bytes.len() {
         if bytes[i] == 0xff && bytes[i + 1] == 0xd8 {
-            if let Some(end) = find_jpeg_eoi(&bytes[i..]) {
+            if let Some((end, w, h, components)) = jpeg_extent(&bytes[i..]) {
                 let slice = &bytes[i..i + end];
-                if slice.len() > best.map(|b| b.len()).unwrap_or(0) {
+                if components == 3
+                    && w.max(h) >= 200
+                    && slice.len() > best.map(|b| b.len()).unwrap_or(0)
+                {
                     best = Some(slice);
                 }
-                i += end;
+                i += end.max(2);
                 continue;
             }
         }
         i += 1;
     }
-    best.filter(|b| b.len() >= 8_000).map(|b| b.to_vec())
+    best.map(|b| b.to_vec())
 }
 
-fn find_jpeg_eoi(bytes: &[u8]) -> Option<usize> {
+/// End (exclusive) of the DCT JPEG at offset 0, plus SOF width / height /
+/// component count. Port of LightCraft `walk_jpeg`: baseline or progressive
+/// only, so a stray `FF D8` in CFA data is rejected.
+fn jpeg_extent(bytes: &[u8]) -> Option<(usize, u32, u32, u8)> {
+    if bytes.len() < 4 || bytes[0] != 0xff || bytes[1] != 0xd8 {
+        return None;
+    }
     let mut i = 2;
-    while i + 1 < bytes.len() {
-        if bytes[i] == 0xff && bytes[i + 1] == 0xd9 {
-            return Some(i + 2);
+    let mut frame: Option<(u32, u32, u8)> = None;
+    for _ in 0..4096 {
+        if *bytes.get(i)? != 0xff {
+            return None;
         }
+        while *bytes.get(i)? == 0xff {
+            i += 1;
+        }
+        let marker = *bytes.get(i)?;
         i += 1;
+        match marker {
+            0xd9 => {
+                let (w, h, c) = frame?;
+                return Some((i, w, h, c));
+            }
+            0x01 | 0xd0..=0xd8 => continue,
+            _ => {}
+        }
+        let len = u16::from_be_bytes([*bytes.get(i)?, *bytes.get(i + 1)?]) as usize;
+        if len < 2 {
+            return None;
+        }
+        match marker {
+            0xc0..=0xc2 => {
+                let h = u16::from_be_bytes([*bytes.get(i + 3)?, *bytes.get(i + 4)?]) as u32;
+                let w = u16::from_be_bytes([*bytes.get(i + 5)?, *bytes.get(i + 6)?]) as u32;
+                if h == 0 || w == 0 || frame.is_some() {
+                    return None;
+                }
+                frame = Some((w, h, *bytes.get(i + 7)?));
+            }
+            0xc3 | 0xc5..=0xc7 | 0xc9..=0xcb | 0xcd..=0xcf => return None,
+            _ => {}
+        }
+        i += len;
+        if marker == 0xda {
+            loop {
+                i += bytes.get(i..)?.iter().position(|&x| x == 0xff)?;
+                match *bytes.get(i + 1)? {
+                    0x00 | 0xd0..=0xd7 => i += 2,
+                    0xff => i += 1,
+                    _ => break,
+                }
+            }
+        }
     }
     None
 }
@@ -564,20 +620,97 @@ fn downsample_rgb32f(img: &image::Rgb32FImage, long: u32) -> (u32, u32, Vec<[f32
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::{ImageEncoder, ImageFormat, RgbImage};
+    use std::io::Cursor;
+    use std::path::Path;
+
+    fn encode_jpeg(width: u32, height: u32, rgb: [u8; 3]) -> Vec<u8> {
+        let img = RgbImage::from_pixel(width, height, image::Rgb(rgb));
+        let mut buf = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(Cursor::new(&mut buf), 80)
+            .write_image(
+                img.as_raw(),
+                width,
+                height,
+                image::ExtendedColorType::Rgb8,
+            )
+            .expect("jpeg");
+        buf
+    }
 
     #[test]
-    fn extract_jpeg_finds_largest_soi() {
+    fn extract_jpeg_finds_largest_displayable_soi() {
         let mut bytes = vec![0u8; 32];
-        // tiny JPEG stub: SOI + a few bytes + EOI
-        let small = [0xff, 0xd8, 0xff, 0xdb, 0x00, 0x00, 0xff, 0xd9];
-        bytes.extend_from_slice(&small);
-        assert!(extract_embedded_jpeg(&bytes).is_none());
-        let mut big = vec![0xff, 0xd8];
-        big.extend(std::iter::repeat(0x11).take(10_000));
-        big.extend_from_slice(&[0xff, 0xd9]);
-        bytes.extend_from_slice(&big);
+        let thumb = encode_jpeg(32, 24, [10, 10, 10]);
+        bytes.extend_from_slice(&thumb);
+        assert!(
+            extract_embedded_jpeg(&bytes).is_none(),
+            "sub-200 px thumbnail must be ignored"
+        );
+        let preview = encode_jpeg(320, 240, [40, 80, 120]);
+        bytes.extend_from_slice(&preview);
+        // Panasonic-style CFA junk: SOI, 20 kB of noise, first EOI. A first-EOI
+        // scan would pick this over the real 320×240 preview.
+        bytes.push(0xff);
+        bytes.push(0xd8);
+        bytes.extend(std::iter::repeat(0x11).take(20_000));
+        bytes.extend_from_slice(&[0xff, 0xd9]);
         let found = extract_embedded_jpeg(&bytes).expect("preview");
-        assert_eq!(found.len(), big.len());
+        assert_eq!(found, preview);
+    }
+
+    #[test]
+    fn extract_jpeg_skips_exif_thumbnail_eoi() {
+        let preview = encode_jpeg(200, 160, [200, 180, 40]);
+        // APP1 with a nested SOI/EOI (the classic "first FF D9 is the thumb").
+        let mut wrapped = vec![0xff, 0xd8, 0xff, 0xe1, 0x00, 12];
+        wrapped.extend_from_slice(&[0xff, 0xd8, 0xff, 0xd9, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        // Re-stamp the real JPEG after a prefix that a first-EOI scan would stop at.
+        let mut file = vec![0u8; 16];
+        file.extend_from_slice(&preview);
+        file.extend_from_slice(&wrapped);
+        let found = extract_embedded_jpeg(&file).expect("preview");
+        assert_eq!(found, preview);
+    }
+
+    #[test]
+    fn g95_0273_preview_is_the_1920_jpeg_not_cfa_junk() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../bench/lr-compare/datasets/ir/g95-0273/raw.rw2"
+        );
+        let Ok(bytes) = std::fs::read(path) else {
+            return;
+        };
+        let jpeg = extract_embedded_jpeg(&bytes).expect("g95-0273 preview");
+        let img = image::load_from_memory_with_format(&jpeg, ImageFormat::Jpeg).expect("decode");
+        assert_eq!(img.width(), 1920);
+        assert_eq!(img.height(), 1440);
+        assert!(
+            jpeg.len() < 1_500_000,
+            "must not pick the 2.4 MB CFA run: {}",
+            jpeg.len()
+        );
+    }
+
+    #[test]
+    fn a6600_0156_preview_is_not_the_8mb_cfa_run() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../bench/lr-compare/datasets/ir/a6600-0156/raw.arw"
+        );
+        if !Path::new(path).is_file() {
+            return;
+        }
+        let bytes = std::fs::read(path).expect("0156");
+        let jpeg = extract_embedded_jpeg(&bytes).expect("a6600-0156 preview");
+        let img = image::load_from_memory_with_format(&jpeg, ImageFormat::Jpeg).expect("decode");
+        assert_eq!((img.width(), img.height()), (1616, 1080));
+        assert!(
+            jpeg.len() < 2_000_000,
+            "must not pick the 8.5 MB CFA run: {}",
+            jpeg.len()
+        );
     }
 
     #[test]
