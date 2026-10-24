@@ -75,12 +75,21 @@ def _find_pairs(datasets: Path) -> list[dict]:
 
 
 def _load_srgb(path: Path, long_edge: int, space: str) -> np.ndarray:
-    img = Image.open(path)
-    if img.mode not in {"RGB", "RGBA", "I;16", "I;16B"}:
-        img = img.convert("RGB")
-    if img.mode == "RGBA":
-        img = img.convert("RGB")
-    arr = np.asarray(img)
+    arr = None
+    if path.suffix.lower() in {".tif", ".tiff"}:
+        try:
+            import tifffile
+
+            arr = tifffile.imread(path)
+        except Exception:
+            arr = None
+    if arr is None:
+        img = Image.open(path)
+        if img.mode not in {"RGB", "RGBA", "I;16", "I;16B"}:
+            img = img.convert("RGB")
+        if img.mode == "RGBA":
+            img = img.convert("RGB")
+        arr = np.asarray(img)
     if arr.dtype == np.uint16 or arr.max() > 255:
         arr_f = arr.astype(np.float64) / 65535.0
         if space == "prophoto16" or "prophoto" in space:

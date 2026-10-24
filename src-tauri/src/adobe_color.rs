@@ -119,7 +119,7 @@ impl Default for DngProfile {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct AdobeSettings {
     pub temperature_k: Option<f32>,
     pub tint: Option<f32>,
@@ -132,6 +132,29 @@ pub struct AdobeSettings {
     pub whites: f32,
     pub blacks: f32,
     pub tone_curve: NamedCurve,
+    /// False when XMP `CameraProfile` is ACR 4.x (ColorMatrix + CAT, no LookTable).
+    pub use_forward_matrix: bool,
+    pub apply_look: bool,
+}
+
+impl Default for AdobeSettings {
+    fn default() -> Self {
+        Self {
+            temperature_k: None,
+            tint: None,
+            use_as_shot: false,
+            exposure: 0.0,
+            brightness: 0.0,
+            contrast: 0.0,
+            highlights: 0.0,
+            shadows: 0.0,
+            whites: 0.0,
+            blacks: 0.0,
+            tone_curve: NamedCurve::Linear,
+            use_forward_matrix: true,
+            apply_look: true,
+        }
+    }
 }
 
 /// Adobe named tone curve. FiveK Expert C stores `Linear`.
@@ -189,6 +212,43 @@ pub fn invert3(m: [f32; 9]) -> Option<[f32; 9]> {
         (m[1] * m[6] - m[0] * m[7]) * i,
         (m[0] * m[4] - m[1] * m[3]) * i,
     ])
+}
+
+fn mul9(a: [f32; 9], b: [f32; 9]) -> [f32; 9] {
+    [
+        a[0] * b[0] + a[1] * b[3] + a[2] * b[6],
+        a[0] * b[1] + a[1] * b[4] + a[2] * b[7],
+        a[0] * b[2] + a[1] * b[5] + a[2] * b[8],
+        a[3] * b[0] + a[4] * b[3] + a[5] * b[6],
+        a[3] * b[1] + a[4] * b[4] + a[5] * b[7],
+        a[3] * b[2] + a[4] * b[5] + a[5] * b[8],
+        a[6] * b[0] + a[7] * b[3] + a[8] * b[6],
+        a[6] * b[1] + a[7] * b[4] + a[8] * b[7],
+        a[6] * b[2] + a[7] * b[5] + a[8] * b[8],
+    ]
+}
+
+/// Bradford CAT from `src_white` XYZ to D50.
+pub fn bradford_to_d50(src_white: [f32; 3]) -> [f32; 9] {
+    const BRADFORD: [f32; 9] = [
+        0.8951, 0.2664, -0.1614, -0.7502, 1.7135, 0.0367, 0.0389, -0.0685, 1.0296,
+    ];
+    const D50: [f32; 3] = [0.964_22, 1.0, 0.825_21];
+    let b_inv = invert3(BRADFORD).unwrap_or(identity3());
+    let src = mul3(BRADFORD, src_white);
+    let dst = mul3(BRADFORD, D50);
+    let scale = [
+        dst[0] / src[0].max(1e-8),
+        0.0,
+        0.0,
+        0.0,
+        dst[1] / src[1].max(1e-8),
+        0.0,
+        0.0,
+        0.0,
+        dst[2] / src[2].max(1e-8),
+    ];
+    mul9(b_inv, mul9(scale, BRADFORD))
 }
 
 fn lerp9(a: [f32; 9], b: [f32; 9], t: f32) -> [f32; 9] {
@@ -311,7 +371,7 @@ fn wb_and_forward(
     cam: [f32; 3],
     profile: &DngProfile,
     settings: AdobeSettings,
-) -> ([f32; 3], [f32; 9]) {
+) -> ([f32; 3], f32) {
     let temp = settings.temperature_k.unwrap_or(5500.0);
     let tint = settings.tint.unwrap_or(0.0);
     let neutral = if settings.use_as_shot {
@@ -321,20 +381,38 @@ fn wb_and_forward(
     };
     let cal = interpolated_cal(profile, temp);
     let prepared = prepared_camera(cam, neutral, cal, profile.analog_balance);
-    let fm = if profile.has_forward {
-        interpolated_forward(profile, temp)
-    } else if let Some(inv) = invert3(interpolated_color_matrix(profile, temp)) {
-        inv
-    } else {
-        identity3()
-    };
-    (prepared, fm)
+    (prepared, temp)
 }
 
+#[allow(dead_code)]
 pub fn camera_to_prophoto(wb_cam: [f32; 3], forward: [f32; 9]) -> [f32; 3] {
     let xyz_d50 = mul3(forward, wb_cam);
     let inv = invert3(PROPHOTO_TO_XYZ_D50).unwrap_or(identity3());
     mul3(inv, xyz_d50)
+}
+
+fn camera_to_prophoto_settings(
+    prepared: [f32; 3],
+    profile: &DngProfile,
+    settings: AdobeSettings,
+    temp: f32,
+) -> [f32; 3] {
+    let xyz_d50 = if settings.use_forward_matrix && profile.has_forward {
+        mul3(interpolated_forward(profile, temp), prepared)
+    } else if let Some(inv) = invert3(interpolated_color_matrix(profile, temp)) {
+        let xyz_illum = mul3(inv, prepared);
+        let cat = bradford_to_d50(xy_to_xyz(cct_to_xy(temp)));
+        mul3(cat, xyz_illum)
+    } else {
+        prepared
+    };
+    let inv = invert3(PROPHOTO_TO_XYZ_D50).unwrap_or(identity3());
+    let ppr = mul3(inv, xyz_d50);
+    if settings.apply_look {
+        apply_look_table(profile, ppr)
+    } else {
+        ppr
+    }
 }
 
 pub fn prophoto_to_srgb_linear(ppr: [f32; 3]) -> [f32; 3] {
@@ -503,12 +581,12 @@ pub fn apply_adobe_pixel(
     settings: AdobeSettings,
     stage: AdobeStage,
 ) -> [f32; 3] {
-    let (prepared, fm) = wb_and_forward(cam, profile, settings);
+    let (prepared, temp) = wb_and_forward(cam, profile, settings);
     if matches!(stage, AdobeStage::Wb) {
         // Honest “WB only”: white-balanced camera RGB shown as sRGB (no matrix).
         return encode_srgb(prepared);
     }
-    let mut ppr = apply_look_table(profile, camera_to_prophoto(prepared, fm));
+    let mut ppr = camera_to_prophoto_settings(prepared, profile, settings, temp);
     if matches!(stage, AdobeStage::Profile) {
         return to_display(ppr);
     }
@@ -555,8 +633,8 @@ pub fn develop_adobe_image(
     let mut ppr: Vec<[f32; 3]> = camera[..n]
         .par_iter()
         .map(|cam| {
-            let (prepared, fm) = wb_and_forward(*cam, profile, settings);
-            apply_look_table(profile, camera_to_prophoto(prepared, fm))
+            let (prepared, temp) = wb_and_forward(*cam, profile, settings);
+            camera_to_prophoto_settings(prepared, profile, settings, temp)
         })
         .collect();
     if matches!(stage, AdobeStage::Profile) {

@@ -288,6 +288,9 @@ def main() -> None:
         f"- Weak H/S curve / hs: {_mean(weak, 'curve')} / {_mean(weak, 'hs')}\n"
         f"- Val curve / hs: {_mean(val, 'curve')} / {_mean(val, 'hs')}  (not used to tune)\n\n"
         "## Gaps that stay open\n\n"
+        "- **CameraProfile ACR 4.4** is proprietary. ColorMatrix-only + CAT "
+        "was measured worse than ForwardMatrix+LookTable (a0045 profile ΔE 19→31). "
+        "The tables below use ForwardMatrix + LookTable.\n"
         "- **ProfileHueSatMap** is not a numeric table in these FiveK DNGs "
         "(tag 50937 missing). Only the embedded 36×8×16 `ProfileLookTable` is applied. "
         "Adobe Standard’s full HSB map is proprietary DCP data — residual chroma error is expected.\n"
@@ -295,8 +298,13 @@ def main() -> None:
         "Planckian table. Illuminant mix is inverse-CCT between A (2856 K) and D65 (6504 K).\n"
         "- FiveK Expert C TIFFs already include HighlightRecovery. The `curve` column is "
         "colour+light without our H/S; full-frame ΔE vs the TIFF is therefore inflated by that missing HR.\n"
+        "- Unmapped Expert C looks that stay in the TIFF: Vibrance "
+        "(a0045 +87, a0097 +70, a0077 +55), Saturation (a0077 +34), "
+        "parametric (a0041 Darks +38). These are not in the colour/light chain.\n"
         "- Target: mean ΔE2000 < 5 (aim < 3) on weak-H/S frames after colour+light. "
-        "If a number stays above that, it is reported, not fitted away.\n"
+        "**Not reached.** Best weak-H/S frame (a0045) is ΔE 23.2 after H/S; "
+        "legacy path was 31.9. The remaining ~20 ΔE is the proprietary ACR 4.4 "
+        "HSB / Vibrance gap, reported not fitted away.\n"
     )
     (args.out / "summary.md").write_text(body, encoding="utf-8")
     print(table)

@@ -58,6 +58,12 @@ folded into Exposure on this path.
 **HueSatMap is missing** on these FiveK DNGs (no tag 50937). Only the embedded
 LookTable is public. That gap is reported with the measured ΔE, not hidden.
 
+FiveK Expert C XMP stores `crs:CameraProfile = ACR 4.4` (proprietary 2008
+profile). A ColorMatrix-only + Bradford CAT path was measured and **raised**
+ΔE (a0045 profile 19 → 31). The compare therefore keeps DNG ForwardMatrix +
+LookTable as the best public stand-in. The missing ACR 4.4 HSB table, plus
+unmapped Vibrance / Saturation / parametric, is reported with the measured ΔE.
+
 ## Exposure baseline (legacy path only)
 
 `develop_raw_image` (legacy) normalizes sensor white to 1.0 **and** applies

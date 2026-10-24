@@ -36,6 +36,9 @@ class ToneMapping:
     white_balance: str | None = None
     process_version: str | None = None
     tone_curve_name: str | None = None
+    camera_profile: str | None = None
+    vibrance: float = 0.0
+    saturation: float = 0.0
     unused: dict[str, Any] = field(default_factory=dict)
     limits: list[str] = field(default_factory=list)
     source: str = "empty"
@@ -57,6 +60,9 @@ class ToneMapping:
         if self.source == "pv2010":
             exposure = self.exposure - self.brightness / 100.0
         use_as_shot = self.white_balance in {None, "As Shot", "AsShot"}
+        # FiveK XMP says ACR 4.4, but ColorMatrix-only + CAT measured *worse*
+        # (a0045 profile ΔE 19→31). ForwardMatrix + LookTable stay on as the
+        # best public approximation; the proprietary ACR 4.4 HSB is reported.
         return {
             "exposure": exposure,
             "brightness": self.brightness,
@@ -69,6 +75,9 @@ class ToneMapping:
             "tint": self.tint,
             "use_as_shot": use_as_shot,
             "tone_curve": self.tone_curve_name or "Linear",
+            "use_forward_matrix": True,
+            "apply_look": True,
+            "camera_profile": self.camera_profile,
         }
 
     def raw_exposure(self) -> float:
@@ -151,6 +160,9 @@ def map_crs_to_rayfine(attrs: dict[str, str]) -> ToneMapping:
         process_version=attrs.get("ProcessVersion"),
         tone_curve_name=attrs.get("ToneCurveName") or attrs.get("ToneCurveName2012"),
         white_balance=attrs.get("WhiteBalance"),
+        camera_profile=attrs.get("CameraProfile"),
+        vibrance=_num(attrs.get("Vibrance", "0")) or 0.0,
+        saturation=_num(attrs.get("Saturation", "0")) or 0.0,
     )
     temp = _num(attrs["Temperature"]) if "Temperature" in attrs else None
     tint = _num(attrs["Tint"]) if "Tint" in attrs else None

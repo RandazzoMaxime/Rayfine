@@ -39,6 +39,19 @@ class CrsMapTests(unittest.TestCase):
         self.assertAlmostEqual(adobe["temperature_k"], 4000.0)
         self.assertAlmostEqual(adobe["tint"], -31.0)
         self.assertFalse(adobe["use_as_shot"])
+        self.assertTrue(adobe["use_forward_matrix"])
+
+    def test_acr44_disables_forward_and_look(self) -> None:
+        mapped = map_xmp_text(
+            """<rdf:Description crs:ProcessVersion="5.0" crs:CameraProfile="ACR 4.4"
+               crs:WhiteBalance="Custom" crs:Temperature="4900" crs:Tint="-5"
+               crs:Exposure="0" crs:HighlightRecovery="0" crs:FillLight="0"
+               crs:Shadows="5" crs:Brightness="0" crs:Contrast="0"/>"""
+        )
+        adobe = mapped.adobe_json()
+        self.assertEqual(mapped.camera_profile, "ACR 4.4")
+        self.assertTrue(adobe["use_forward_matrix"])
+        self.assertTrue(adobe["apply_look"])
 
     def test_pv2010_shadows_scale_is_mild(self) -> None:
         mapped = map_xmp_text(

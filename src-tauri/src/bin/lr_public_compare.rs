@@ -40,6 +40,14 @@ struct SliderFile {
     use_as_shot: bool,
     #[serde(default)]
     tone_curve: Option<String>,
+    #[serde(default = "default_true")]
+    use_forward_matrix: bool,
+    #[serde(default = "default_true")]
+    apply_look: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn to_u8(v: f32) -> u8 {
@@ -144,6 +152,8 @@ fn adobe_settings(parsed: &SliderFile) -> AdobeSettings {
         whites: parsed.whites,
         blacks: parsed.blacks,
         tone_curve: NamedCurve::parse(parsed.tone_curve.as_deref().unwrap_or("Linear")),
+        use_forward_matrix: parsed.use_forward_matrix,
+        apply_look: parsed.apply_look,
     }
 }
 
@@ -164,6 +174,8 @@ fn write_profile_notes(out: &Path, profile: &rapidraw_lib::DngProfile, settings:
         "exposure": settings.exposure,
         "brightness": settings.brightness,
         "tone_curve": settings.tone_curve.label(),
+        "use_forward_matrix": settings.use_forward_matrix,
+        "apply_look": settings.apply_look,
         "notes": profile.notes,
     });
     fs::write(out.join("adobe_profile.json"), serde_json::to_string_pretty(&notes).unwrap())
