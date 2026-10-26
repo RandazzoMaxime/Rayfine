@@ -6,7 +6,7 @@
 > keep their original photos elsewhere and to use **File ▸ Back Up Library…**. See
 > `docs/web.md` in the source for details.
 
-`lightcraft-web-<version>.zip` (from the GitHub release, or `packaging/web/package.sh`) holds a
+`packaging/web/package.sh` writes `lightcraft-web-<version>.zip`, a local build that is not part of the GitHub release. It holds a
 static site in `lightcraft-web-<version>/`:
 
 | File | What it is |

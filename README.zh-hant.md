@@ -20,12 +20,12 @@
 
 <p align="center">
   <b>照片庫與 raw 顯影；以淨室（clean-room）方式、用純 Rust 重新實作的開源 Adobe Lightroom。</b><br>
-  在 macOS、Windows 與 Linux 上原生執行，也能透過 WebAssembly 在瀏覽器中使用，AI 代理也能透過 MCP 全程操作。
+  在 macOS Apple 晶片與 Windows x64 上原生執行，AI 代理也能透過 MCP 全程操作。
 </p>
 
 <p align="center">
   <img alt="Pure Rust" src="https://img.shields.io/badge/pure-Rust-f2a516?style=flat-square&logo=rust&logoColor=white">
-  <img alt="macOS, Windows, Linux and Web" src="https://img.shields.io/badge/macOS%20%C2%B7%20Windows%20%C2%B7%20Linux%20%C2%B7%20Web-8a5800?style=flat-square">
+  <img alt="macOS Apple silicon and Windows x64" src="https://img.shields.io/badge/macOS%20Apple%20silicon%20%C2%B7%20Windows%20x64-8a5800?style=flat-square">
   <img alt="MCP server included" src="https://img.shields.io/badge/MCP-ready-8a5800?style=flat-square">
   <img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-8a5800?style=flat-square">
   <a href="ROADMAP.md"><img alt="Status: young and moving fast" src="https://img.shields.io/badge/status-young%20%26%20moving%20fast-f2a516?style=flat-square"></a>
@@ -502,17 +502,13 @@ egui 前端是一個可替換的 crate；它之下沒有任何東西知道 UI �
 
 ## Downloads
 
-**第一次使用 LightCraft？** 從 [getartcraft.com 的 LightCraft 頁面](https://getartcraft.com/apps/lightcraft)下載。那是最簡單的安裝方式。
-
-**想要特定的建置版本或格式？** 在 GitHub 上，[最新發布版](https://github.com/storytold/lightcraft/releases/latest)包含下面列出的所有建置版本，[所有發布版](https://github.com/storytold/lightcraft/releases)則有更早的版本與其說明。檔名中的 `<ver>` 是版本號，`SHA256SUMS.txt` 列出了每個檔案的檢查碼。
+發布只包含 macOS Apple 晶片與 Windows x64。在 GitHub 上，[最新發布版](https://github.com/storytold/lightcraft/releases/latest)包含下面的檔案，[所有發布版](https://github.com/storytold/lightcraft/releases)則有更早的版本。檔名中的 `<ver>` 是版本號，`SHA256SUMS.txt` 列出了每個檔案的檢查碼。
 
 ### Windows
 
 | 建置版本 | 安裝程式 | 可攜版 |
 |---|---|---|
 | x64（64 位元 Intel/AMD） | `lightcraft-<ver>-windows-x64.msi` | `lightcraft-<ver>-windows-x64-portable.zip` |
-| arm64（Snapdragon 及其他 ARM PC） | `lightcraft-<ver>-windows-arm64.msi` | `lightcraft-<ver>-windows-arm64-portable.zip` |
-| x86（32 位元） | `lightcraft-<ver>-windows-x86.msi` | `lightcraft-<ver>-windows-x86-portable.zip` |
 
 安裝程式與執行檔都有程式碼簽章。安裝程式會詢問安裝位置（預設為
 `C:\Program Files\LightCraft`；升級時會留在你選擇的資料夾），結束時會有一頁確認 LightCraft 已安裝，
@@ -522,35 +518,8 @@ egui 前端是一個可替換的 crate；它之下沒有任何東西知道 UI �
 
 | 建置版本 | 檔案 | 備註 |
 |---|---|---|
-| 應用程式，通用版（Apple 晶片 + Intel） | `lightcraft-<ver>-macos-universal.dmg` | 已簽章並經過公證 |
-| 命令列工具，通用版 | `lightcraft-cli-<ver>-macos-universal.zip` | 已簽章並經過公證 |
-
-### Linux
-
-| 格式 | x86_64 | aarch64（ARM64） | 備註 |
-|---|---|---|---|
-| AppImage | `lightcraft-<ver>-linux-x86_64.AppImage` | `lightcraft-<ver>-linux-aarch64.AppImage` | 隨處可執行；用 [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate)（`.zsync` 檔案）自我更新 |
-| Flatpak | `lightcraft-<ver>-linux-x86_64.flatpak` | `lightcraft-<ver>-linux-aarch64.flatpak` | 沙箱化；`flatpak install --user <file>` |
-| Debian/Ubuntu | `lightcraft-<ver>-linux-x86_64.deb` | `lightcraft-<ver>-linux-aarch64.deb` | |
-| Fedora/RHEL/openSUSE | `lightcraft-<ver>-linux-x86_64.rpm` | `lightcraft-<ver>-linux-aarch64.rpm` | |
-| 壓縮檔 | `lightcraft-<ver>-linux-x86_64.tar.gz` | `lightcraft-<ver>-linux-aarch64.tar.gz` | 解壓到任意位置即可使用 |
-
-RISC-V（riscv64）：`lightcraft-<ver>-linux-riscv64.tar.gz`，僅提供壓縮檔（glibc 2.39 或更新版本，例如 Ubuntu 24.04+）。
-
-在 Wayland 桌面環境中，LightCraft 會在可用時透過 XWayland 執行，因為只有 X11 支援
-視窗的檔案拖放；設定 `LIGHTCRAFT_WAYLAND=1` 可改用原生 Wayland（更清晰的小數縮放，但無法拖放）。
-
-### FreeBSD
-
-| 建置版本 | 檔案 |
-|---|---|
-| x86_64 | `lightcraft-<ver>-freebsd-x86_64.tar.gz` |
-
-### Web (WebAssembly)
-
-| 建置版本 | 檔案 | 備註 |
-|---|---|---|
-| 靜態網站 | `lightcraft-web-<ver>.zip` | 可在現代瀏覽器中執行；可託管在任何靜態伺服器上 |
+| 應用程式，Apple 晶片 | `lightcraft-<ver>-macos-aarch64.dmg` | 已簽章並經過公證 |
+| 命令列工具，Apple 晶片 | `lightcraft-cli-<ver>-macos-aarch64.zip` | 已簽章並經過公證 |
 
 <br>
 

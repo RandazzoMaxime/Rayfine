@@ -24,12 +24,12 @@
 
 <p align="center">
   <b>Photo library and raw development; an open-source, non-destructive photo library and raw developer, built in pure Rust.</b><br>
-  Native on macOS, Windows and Linux. In the browser via WebAssembly. Drivable end to end by AI agents over MCP.
+  Native on macOS Apple silicon and Windows x64. Drivable end to end by AI agents over MCP.
 </p>
 
 <p align="center">
   <img alt="Pure Rust" src="https://img.shields.io/badge/pure-Rust-f2a516?style=flat-square&logo=rust&logoColor=white">
-  <img alt="macOS, Windows, Linux and Web" src="https://img.shields.io/badge/macOS%20%C2%B7%20Windows%20%C2%B7%20Linux%20%C2%B7%20Web-8a5800?style=flat-square">
+  <img alt="macOS Apple silicon and Windows x64" src="https://img.shields.io/badge/macOS%20Apple%20silicon%20%C2%B7%20Windows%20x64-8a5800?style=flat-square">
   <img alt="MCP server included" src="https://img.shields.io/badge/MCP-ready-8a5800?style=flat-square">
   <img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-8a5800?style=flat-square">
   <a href="ROADMAP.md"><img alt="Status: young and moving fast" src="https://img.shields.io/badge/status-young%20%26%20moving%20fast-f2a516?style=flat-square"></a>
@@ -551,17 +551,13 @@ Questions, ideas or a bug you'd like to talk through first? Bring them to [Disco
 
 ## Downloads
 
-**New to LightCraft?** Download it from the [LightCraft page on getartcraft.com](https://getartcraft.com/apps/lightcraft). That's the easiest way to install it.
-
-**Want a specific build or format?** On GitHub, the [latest release](https://github.com/storytold/lightcraft/releases/latest) has every build listed below, and [all releases](https://github.com/storytold/lightcraft/releases) has earlier versions and their notes. `<ver>` in the file names is the version number, and `SHA256SUMS.txt` lists a checksum for every file.
+Releases ship macOS Apple silicon and Windows x64. On GitHub, the [latest release](https://github.com/storytold/lightcraft/releases/latest) has the files below, and [all releases](https://github.com/storytold/lightcraft/releases) has earlier versions. `<ver>` in the file names is the version number, and `SHA256SUMS.txt` lists a checksum for every file.
 
 ### Windows
 
 | Build | Installer | Portable |
 |---|---|---|
 | x64 (64-bit Intel/AMD) | `lightcraft-<ver>-windows-x64.msi` | `lightcraft-<ver>-windows-x64-portable.zip` |
-| arm64 (Snapdragon and other ARM PCs) | `lightcraft-<ver>-windows-arm64.msi` | `lightcraft-<ver>-windows-arm64-portable.zip` |
-| x86 (32-bit) | `lightcraft-<ver>-windows-x86.msi` | `lightcraft-<ver>-windows-x86-portable.zip` |
 
 Installers and executables are code-signed. The installer asks where to install (`C:\Program Files\LightCraft` by
 default; upgrades stay in the folder you chose) and ends on a page confirming LightCraft was installed, with an
@@ -571,35 +567,8 @@ option to start it. For unattended installs: `msiexec /i lightcraft-<ver>-window
 
 | Build | File | Notes |
 |---|---|---|
-| App, universal (Apple silicon + Intel) | `lightcraft-<ver>-macos-universal.dmg` | Signed and notarized |
-| Command-line tool, universal | `lightcraft-cli-<ver>-macos-universal.zip` | Signed and notarized |
-
-### Linux
-
-| Format | x86_64 | aarch64 (ARM64) | Notes |
-|---|---|---|---|
-| AppImage | `lightcraft-<ver>-linux-x86_64.AppImage` | `lightcraft-<ver>-linux-aarch64.AppImage` | Portable; updates with [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate) (`.zsync` files) |
-| Flatpak | `lightcraft-<ver>-linux-x86_64.flatpak` | `lightcraft-<ver>-linux-aarch64.flatpak` | Sandboxed; `flatpak install --user <file>` |
-| Debian/Ubuntu | `lightcraft-<ver>-linux-x86_64.deb` | `lightcraft-<ver>-linux-aarch64.deb` | |
-| Fedora/RHEL/openSUSE | `lightcraft-<ver>-linux-x86_64.rpm` | `lightcraft-<ver>-linux-aarch64.rpm` | |
-| Tarball | `lightcraft-<ver>-linux-x86_64.tar.gz` | `lightcraft-<ver>-linux-aarch64.tar.gz` | Unpack anywhere |
-
-RISC-V (riscv64): `lightcraft-<ver>-linux-riscv64.tar.gz`, a tarball only (glibc 2.39 or newer, e.g. Ubuntu 24.04+).
-
-On a Wayland desktop LightCraft runs through XWayland when it is available, because only X11 gives
-windows file drag-and-drop; set `LIGHTCRAFT_WAYLAND=1` to use native Wayland (sharper fractional scaling, no drop).
-
-### FreeBSD
-
-| Build | File |
-|---|---|
-| x86_64 | `lightcraft-<ver>-freebsd-x86_64.tar.gz` |
-
-### Web (WebAssembly)
-
-| Build | File | Notes |
-|---|---|---|
-| Static site | `lightcraft-web-<ver>.zip` | Runs in a modern browser; host it on any static server |
+| App, Apple silicon | `lightcraft-<ver>-macos-aarch64.dmg` | Signed and notarized |
+| Command-line tool, Apple silicon | `lightcraft-cli-<ver>-macos-aarch64.zip` | Signed and notarized |
 
 <br>
 

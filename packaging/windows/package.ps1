@@ -170,7 +170,7 @@ Remove-Item -Force $Zip -ErrorAction SilentlyContinue
 Compress-Archive -Path $Portable -DestinationPath $Zip
 
 # Smoke-test the CLI when this machine can run it. An ARM64 build made on an x64 runner can't run
-# here; .github/workflows/windows-arm64.yml installs and runs it on ARM64 instead.
+# here, so that case is skipped.
 # Windows PowerShell 5.1 can expose OSArchitecture as null. Use Windows' environment
 # variables instead; PROCESSOR_ARCHITEW6432 identifies the OS when the shell is emulated.
 $nativeArchitecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }

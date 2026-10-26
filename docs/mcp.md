@@ -62,7 +62,7 @@ Or check a project-scoped `.mcp.json` into your repo:
 
 ### Codex
 
-The macOS release includes a separate `lightcraft-cli-<version>-macos-universal.zip`;
+The macOS release includes a separate `lightcraft-cli-<version>-macos-aarch64.zip`;
 unpack it alongside the desktop app if you do not want to build from source. Use the CLI
 and app from the same release. Verify both downloads against that release's `SHA256SUMS.txt`.
 

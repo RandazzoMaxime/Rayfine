@@ -20,12 +20,12 @@
 
 <p align="center">
   <b>照片图库与 raw 显影；开源、非破坏性的照片图库与 raw 显影工具，用纯 Rust 构建。</b><br>
-  在 macOS、Windows 和 Linux 上原生运行，也可通过 WebAssembly 在浏览器中使用，并能由 AI 智能体经 MCP 端到端驱动。
+  在 macOS Apple 芯片和 Windows x64 上原生运行，并能由 AI 智能体经 MCP 端到端驱动。
 </p>
 
 <p align="center">
   <img alt="Pure Rust" src="https://img.shields.io/badge/pure-Rust-f2a516?style=flat-square&logo=rust&logoColor=white">
-  <img alt="macOS, Windows, Linux and Web" src="https://img.shields.io/badge/macOS%20%C2%B7%20Windows%20%C2%B7%20Linux%20%C2%B7%20Web-8a5800?style=flat-square">
+  <img alt="macOS Apple silicon and Windows x64" src="https://img.shields.io/badge/macOS%20Apple%20silicon%20%C2%B7%20Windows%20x64-8a5800?style=flat-square">
   <img alt="MCP server included" src="https://img.shields.io/badge/MCP-ready-8a5800?style=flat-square">
   <img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-8a5800?style=flat-square">
   <a href="ROADMAP.md"><img alt="Status: young and moving fast" src="https://img.shields.io/badge/status-young%20%26%20moving%20fast-f2a516?style=flat-square"></a>
@@ -472,17 +472,13 @@ egui 前端是一个可替换的 crate；它下面没有任何东西知道 UI �
 
 ## Downloads
 
-**第一次用 LightCraft？** 从 [getartcraft.com 的 LightCraft 页面](https://getartcraft.com/apps/lightcraft)下载。那是最简单的安装方式。
-
-**想要特定的构建或格式？** 在 GitHub 上，[最新发布](https://github.com/storytold/lightcraft/releases/latest)包含下面列出的所有构建，[全部发布](https://github.com/storytold/lightcraft/releases)则有更早的版本及其说明。文件名中的 `<ver>` 是版本号，`SHA256SUMS.txt` 列出了每个文件的校验和。
+发布只包含 macOS Apple 芯片和 Windows x64。在 GitHub 上，[最新发布](https://github.com/storytold/lightcraft/releases/latest)包含下面的文件，[全部发布](https://github.com/storytold/lightcraft/releases)则有更早的版本。文件名中的 `<ver>` 是版本号，`SHA256SUMS.txt` 列出了每个文件的校验和。
 
 ### Windows
 
 | 构建 | 安装程序 | 便携版 |
 |---|---|---|
 | x64（64 位 Intel/AMD） | `lightcraft-<ver>-windows-x64.msi` | `lightcraft-<ver>-windows-x64-portable.zip` |
-| arm64（骁龙及其他 ARM PC） | `lightcraft-<ver>-windows-arm64.msi` | `lightcraft-<ver>-windows-arm64-portable.zip` |
-| x86（32 位） | `lightcraft-<ver>-windows-x86.msi` | `lightcraft-<ver>-windows-x86-portable.zip` |
 
 安装程序和可执行文件都有代码签名。安装程序会询问安装位置（默认
 `C:\Program Files\LightCraft`；升级会留在你选择的文件夹），结束时有一页确认 LightCraft 已安装，
@@ -492,30 +488,8 @@ egui 前端是一个可替换的 crate；它下面没有任何东西知道 UI �
 
 | 构建 | 文件 | 说明 |
 |---|---|---|
-| 应用，通用（Apple 芯片 + Intel） | `lightcraft-<ver>-macos-universal.dmg` | 已签名并公证 |
-| 命令行工具，通用 | `lightcraft-cli-<ver>-macos-universal.zip` | 已签名并公证 |
-
-### Linux
-
-| 格式 | x86_64 | aarch64 (ARM64) | 说明 |
-|---|---|---|---|
-| AppImage | `lightcraft-<ver>-linux-x86_64.AppImage` | `lightcraft-<ver>-linux-aarch64.AppImage` | 随处可运行；用 [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate)（`.zsync` 文件）自我更新 |
-| Flatpak | `lightcraft-<ver>-linux-x86_64.flatpak` | `lightcraft-<ver>-linux-aarch64.flatpak` | 沙箱化；`flatpak install --user <file>` |
-| Debian/Ubuntu | `lightcraft-<ver>-linux-x86_64.deb` | `lightcraft-<ver>-linux-aarch64.deb` | |
-| Fedora/RHEL/openSUSE | `lightcraft-<ver>-linux-x86_64.rpm` | `lightcraft-<ver>-linux-aarch64.rpm` | |
-| 压缩包 | `lightcraft-<ver>-linux-x86_64.tar.gz` | `lightcraft-<ver>-linux-aarch64.tar.gz` | 解压到任意位置 |
-
-### FreeBSD
-
-| 构建 | 文件 |
-|---|---|
-| x86_64 | `lightcraft-<ver>-freebsd-x86_64.tar.gz` |
-
-### 网页版（WebAssembly）
-
-| 构建 | 文件 | 说明 |
-|---|---|---|
-| 静态站点 | `lightcraft-web-<ver>.zip` | 在现代浏览器中运行；托管到任意静态服务器 |
+| 应用，Apple 芯片 | `lightcraft-<ver>-macos-aarch64.dmg` | 已签名并公证 |
+| 命令行工具，Apple 芯片 | `lightcraft-cli-<ver>-macos-aarch64.zip` | 已签名并公证 |
 
 <br>
 

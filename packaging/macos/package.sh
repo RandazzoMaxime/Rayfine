@@ -4,7 +4,7 @@
 #   $DIST/lightcraft-<version>-macos-<arch>.dmg          LightCraft.app on a drag-to-Applications DMG
 #   $DIST/lightcraft-cli-<version>-macos-<arch>.zip      the headless CLI
 #
-# Usage: packaging/macos/package.sh [--arch universal|aarch64|x86_64] [--skip-build]
+# Usage: packaging/macos/package.sh [--arch aarch64|x86_64|universal] [--skip-build]
 # Fonts: use CRAFT_FONTS_DIR or ../craft-fonts; download the pinned checkout if absent.
 #
 # Signing (env):
@@ -18,7 +18,7 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 HERE="$ROOT/packaging/macos"
 
-ARCH=universal
+ARCH=aarch64
 SKIP_BUILD=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -70,7 +70,11 @@ mkdir -p "$WORK/bin"
 for bin in lightcraft lightcraft-cli; do
   inputs=()
   for t in "${TARGETS[@]}"; do inputs+=("$CARGO_TARGET_DIR/$t/release/$bin"); done
-  lipo -create -output "$WORK/bin/$bin" "${inputs[@]}"
+  if [[ ${#inputs[@]} -eq 1 ]]; then
+    cp "${inputs[0]}" "$WORK/bin/$bin"
+  else
+    lipo -create -output "$WORK/bin/$bin" "${inputs[@]}"
+  fi
   lipo -info "$WORK/bin/$bin"
 done
 

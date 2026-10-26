@@ -136,8 +136,8 @@ of it. Full standard: `../craftrules/standards/never-crash.md`
 photos. `xtask` = tooling (`ci`, `layers`, `assets`, `parity`, `wasm`, `corpus`, `stats`); `testkit` = test helpers
 (dev-dependency only). `flake.nix` +
 `nix/package.nix` = the Nix package (`nix build` builds both binaries with the craft-fonts input, installs the
-desktop file/icons/AppStream metadata and runs `cargo test --workspace`; `nix develop` = dev shell). Community-maintained; CI only
-evaluates it (`.github/workflows/nix.yml`), so the build may lag behind the workspace; see README → Quick start.
+desktop file/icons/AppStream metadata and runs `cargo test --workspace`; `nix develop` = dev shell). Community-maintained
+and not built by CI.
 
 ## Contributor credits (About window)
 
