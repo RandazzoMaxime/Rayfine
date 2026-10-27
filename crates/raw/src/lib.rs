@@ -25,6 +25,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod backend;
 mod binned;
 pub mod color;
 pub mod demosaic;
@@ -365,9 +366,13 @@ fn other_tiff_reason(bytes: &[u8]) -> String {
     }
 }
 
-/// Decode a raw file.
+/// Decode a raw file (with the [`backend`] in use).
 pub fn decode(bytes: &[u8]) -> Result<RawImage> {
-    decode_with(bytes, Mode::Full)
+    match (backend::backend(), backend::external()) {
+        (backend::RawBackend::Flashraw, Some(x)) => (x.decode)(bytes),
+        (backend::RawBackend::Auto, Some(x)) => decode_with(bytes, Mode::Full).or_else(|ours| (x.decode)(bytes).map_err(|_| ours)),
+        _ => decode_with(bytes, Mode::Full),
+    }
 }
 
 /// [`decode`] at a smaller size, for a picture whose default crop needs a long edge of only `min_long` px: a DNG
@@ -395,7 +400,12 @@ pub fn decode_reduced(bytes: &[u8], min_long: usize) -> Result<Option<RawImage>>
 /// columns from, so a compressed NEF probes in a few milliseconds instead of decoding its whole
 /// Huffman stream (issue #708).
 pub fn probe_info(bytes: &[u8]) -> Result<RawInfo> {
-    decode_with(bytes, Mode::Header).map(RawImage::into_info)
+    let ours = || decode_with(bytes, Mode::Header).map(RawImage::into_info);
+    match (backend::backend(), backend::external()) {
+        (backend::RawBackend::Flashraw, Some(x)) => (x.probe)(bytes),
+        (backend::RawBackend::Auto, Some(x)) => ours().or_else(|e| (x.probe)(bytes).map_err(|_| e)),
+        _ => ours(),
+    }
 }
 
 /// How much of a file a decoder reads.

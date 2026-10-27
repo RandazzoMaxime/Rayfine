@@ -16,6 +16,8 @@ rawnind-model = ["denoise", "lightcraft-engine/rawnind-model"]
 # Open HEIC/HEIF photos (the optional lightcraft-heif crate). Not default so distributors choose
 # it (HEVC patents); build with `--features heif` to include it.
 heif = ["lightcraft-codecs/heif"]
+# FlashRaw as an optional raw backend (`--raw-backend flashraw|auto`); see docs/flashraw-backend.md.
+flashraw = ["lightcraft-engine/flashraw"]
 
 [dependencies]
 lightcraft-engine = { workspace = true, features = ["sam"] }

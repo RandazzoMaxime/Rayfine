@@ -37,3 +37,7 @@ dhat-heap = ["dep:dhat"]
 # Open HEIC/HEIF photos (the optional lightcraft-heif crate). Not default so distributors choose
 # it (HEVC patents); build with `--features heif` to include it.
 heif = ["lightcraft-codecs/heif"]
+
+# FlashRaw as an optional raw backend (`--raw-backend flashraw|auto`, LIGHTCRAFT_RAW_BACKEND). Not default:
+# it is under evaluation against our own decoders (docs/flashraw-backend.md).
+flashraw = ["lightcraft-engine/flashraw"]

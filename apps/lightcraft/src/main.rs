@@ -800,6 +800,8 @@ OPTIONS:
   --memory         throwaway in-memory session (alias --demo); nothing is saved
   --control PORT   serve the JSON-lines control channel on 127.0.0.1:PORT (env LIGHTCRAFT_CONTROL_PORT;
                    see docs/control-protocol.md)
+  --raw-backend B  native (default), flashraw or auto (ours first, FlashRaw for files ours refuses); the last two
+                   need a build with `--features flashraw` (env LIGHTCRAFT_RAW_BACKEND)
   --version, --help
 
 ENVIRONMENT:
@@ -879,15 +881,22 @@ fn main() -> eframe::Result {
     let mut seed_demo = true;
     let mut in_memory = false;
     let mut library_dir: Option<std::path::PathBuf> = None;
+    lightcraft_engine::raw_backend::init();
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--control" => control_port = control_port_from("--control", Some(args.next().unwrap_or_default())),
             "--library" => library_dir = args.next().map(std::path::PathBuf::from),
             "--no-demo" => seed_demo = false,
+            "--raw-backend" => {
+                if let Err(e) = lightcraft_engine::raw_backend::select(&args.next().unwrap_or_default()) {
+                    eprintln!("lightcraft: {e}");
+                    std::process::exit(2);
+                }
+            }
             "--memory" | "--demo" => in_memory = true,
             "--version" => {
-                println!("lightcraft {}", env!("CARGO_PKG_VERSION"));
+                println!("lightcraft {}\n{}", env!("CARGO_PKG_VERSION"), lightcraft_engine::raw_backend::describe());
                 return Ok(());
             }
             "-h" | "--help" => {

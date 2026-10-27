@@ -1,0 +1,22 @@
+[package]
+name = "lightcraft-flashraw"
+description = "Optional raw backend for LightCraft: the FlashRaw decoder and demosaic behind lightcraft-raw's backend switch"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lightcraft-raw = { workspace = true }
+lightcraft-meta = { workspace = true }
+# Pure Rust, MIT OR Apache-2.0. Pinned exactly: a young, single-owner crate that parses untrusted files (every
+# call runs under `catch_unwind`); moving the pin is a reviewed change (re-run `cargo xtask flashraw` and the
+# comparison in docs/flashraw-backend.md). No GPU, mmap or ICC features: they would add wgpu, memmap2 (unsafe)
+# and moxcms to the tree, and the backend decodes from bytes already in memory.
+flashraw = { version = "=0.1.1", default-features = false, features = ["rayon", "simd", "jpegxl"] }
+
+[dev-dependencies]
+lightcraft-codecs = { workspace = true }
+lightcraft-testkit = { workspace = true }
+
+[lints]
+workspace = true

@@ -155,7 +155,14 @@ fn main() -> ExitCode {
     // Warnings (a GPU render redone on the CPU, an unknown backend name) on stderr; LIGHTCRAFT_LOG
     // or RUST_LOG picks another level (#168).
     lightcraft_engine::logging::install("lightcraft-cli");
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    lightcraft_engine::raw_backend::init();
+    let args = match take_raw_backend(std::env::args().skip(1).collect()) {
+        Ok(args) => args,
+        Err(e) => {
+            eprintln!("lightcraft-cli: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     let r = match args.first().map(String::as_str) {
         Some("run") => run(&args[1..]),
         Some("mcp") => mcp(&args[1..]),
@@ -168,7 +175,7 @@ fn main() -> ExitCode {
         Some("denoise-serve") => denoise_serve(&args[1..]),
         Some("calibrate") => calibrate(&args[1..]),
         Some("--version" | "-V" | "version") => {
-            println!("lightcraft-cli {}", env!("CARGO_PKG_VERSION"));
+            println!("lightcraft-cli {}\n{}", env!("CARGO_PKG_VERSION"), lightcraft_engine::raw_backend::describe());
             Ok(())
         }
         Some("--help" | "-h" | "help") | None => {
@@ -184,6 +191,22 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Apply and remove the global `--raw-backend NAME` (or `--raw-backend=NAME`) option, wherever it stands.
+fn take_raw_backend(args: Vec<String>) -> Result<Vec<String>, String> {
+    let mut rest = Vec::with_capacity(args.len());
+    let mut it = args.into_iter();
+    while let Some(a) = it.next() {
+        if a == "--raw-backend" {
+            lightcraft_engine::raw_backend::select(&it.next().ok_or("--raw-backend needs a name (native, flashraw or auto)")?)?;
+        } else if let Some(name) = a.strip_prefix("--raw-backend=") {
+            lightcraft_engine::raw_backend::select(name)?;
+        } else {
+            rest.push(a);
+        }
+    }
+    Ok(rest)
 }
 
 /// Raw files below `path` (or `path` itself), skipping hidden and NAS metadata folders.

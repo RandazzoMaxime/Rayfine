@@ -43,6 +43,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("denoise", Class::Layer(1)),
     ("heif", Class::Layer(0)),
     ("raw", Class::Layer(1)),
+    ("flashraw", Class::Layer(1)),
     ("codecs", Class::Layer(1)),
     ("meta", Class::Layer(1)),
     ("develop", Class::Layer(1)),
@@ -82,6 +83,9 @@ pub const INTRA_LAYER_ORDER: &[&[&str]] = &[
     &["meta", "develop"],
     &["develop", "scenes"],
     &["codecs", "raw"],
+    &["meta", "flashraw"],
+    &["codecs", "flashraw"],
+    &["raw", "flashraw"],
 ];
 
 fn intra_layer_allowed(from: &str, to: &str) -> bool {

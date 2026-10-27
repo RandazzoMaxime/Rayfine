@@ -95,6 +95,12 @@ pub fn demosaic(n: &Normalized, method: Method) -> Rgb32f {
         },
         (None, _) => Rgb32f { width: w, height: h, data: n.data.iter().map(|&v| [v; 3]).collect() },
         (Some(cfa), _) => {
+            if crate::backend::backend() == crate::backend::RawBackend::Flashraw
+                && let Some(x) = crate::backend::external()
+                && let Some(rgb) = (x.demosaic)(n)
+            {
+                return rgb;
+            }
             let m = Mosaic { w, h, data: &n.data, cfa };
             if !cfa.is_bayer() {
                 return match method {

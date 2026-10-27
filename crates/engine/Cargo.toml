@@ -25,6 +25,7 @@ lightcraft-codecs = { workspace = true }
 lightcraft-raw = { workspace = true }
 lightcraft-denoise-core = { workspace = true }
 lightcraft-denoise = { workspace = true, optional = true }
+lightcraft-flashraw = { workspace = true, optional = true }
 lightcraft-meta = { workspace = true }
 lightcraft-lensdb = { workspace = true }
 lightcraft-faces = { workspace = true }
@@ -54,6 +55,8 @@ chrono = { workspace = true }
 sam = ["dep:lightcraft-segment"]
 denoise = ["dep:lightcraft-denoise", "lightcraft-denoise/runtime", "lightcraft-gpu/denoise"]
 rawnind-model = ["denoise", "lightcraft-denoise/rawnind-model", "lightcraft-denoise-core/rawnind-model"]
+# FlashRaw as an optional raw backend (`--raw-backend flashraw|auto`; see `raw_backend`). Off by default.
+flashraw = ["dep:lightcraft-flashraw"]
 
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)
