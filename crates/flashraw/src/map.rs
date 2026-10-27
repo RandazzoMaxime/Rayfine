@@ -1,10 +1,8 @@
 //! FlashRaw's descriptions of a raw file → ours.
 //!
-//! One rule decides what crosses over: only what the file states. FlashRaw fills what a non-DNG file leaves out
-//! (colour matrices, some levels) from its camera database, whose matrices are the dcraw / Adobe DNG Converter
-//! table; LightCraft's clean-room rules forbid those values, so [`color_data`] keeps a matrix only when FlashRaw
-//! says it came from the file. A non-DNG raw then takes the same colour fallbacks as with our own decoders
-//! ([`lightcraft_raw::spectral`], then the neutral model).
+//! What crosses over: what the file states, and the colour matrices FlashRaw takes from its camera database for
+//! the non-DNG files that carry none (maintainer decision, 2026-10-27: the dcraw-derived camera matrices are
+//! accepted for this backend, as other open-source raw tools do; the rest of the clean-room rules stand).
 
 use flashraw::{BlackLevel, CfaPattern, ColorMatrices, ColorMatrix, ColorSource, FrameInfo, Orientation, Rect, WhiteBalance, WhiteLevel};
 use lightcraft_raw::{Cfa, ColorData, Mat3, RawError, RawFormat, Result};
@@ -101,10 +99,10 @@ fn pair(ms: &[ColorMatrix]) -> ([u16; 2], [Option<Mat3>; 2]) {
     ([at(0).map_or(0, |m| m.illuminant.0), at(1).map_or(0, |m| m.illuminant.0)], [at(0).and_then(mat3), at(1).and_then(mat3)])
 }
 
-/// The DNG colour tags the file itself carries; nothing from FlashRaw's database.
+/// The colour tags FlashRaw has: the file's own, else its camera database's.
 pub(crate) fn color_data(m: &ColorMatrices, wb: Option<&WhiteBalance>, dng: bool) -> ColorData {
     let mut c = ColorData::default();
-    if m.source != ColorSource::File {
+    if m.source == ColorSource::None || m.color.is_empty() {
         return c;
     }
     (c.illuminant, c.color_matrix) = pair(&m.color);
@@ -143,15 +141,15 @@ mod tests {
     }
 
     #[test]
-    fn database_matrices_are_not_imported() {
+    fn database_matrices_cross_over() {
         let m = ColorMatrices {
             color: vec![ColorMatrix::new(flashraw::Illuminant::D65, 3, vec![1.0; 9]).unwrap()],
             source: ColorSource::CameraDb,
             ..Default::default()
         };
-        assert_eq!(color_data(&m, None, false), ColorData::default());
-        let from_file = ColorMatrices { source: ColorSource::File, ..m };
-        assert!(color_data(&from_file, None, true).color_matrix[0].is_some());
+        let c = color_data(&m, None, false);
+        assert_eq!((c.color_matrix[0].is_some(), c.illuminant[0]), (true, 21));
+        assert_eq!(color_data(&ColorMatrices::default(), None, false), ColorData::default());
     }
 
     #[test]

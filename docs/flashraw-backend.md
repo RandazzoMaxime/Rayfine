@@ -28,12 +28,12 @@ registers what the build includes; the new crate `lightcraft-flashraw` (L1) is t
 
 - **Crosses**: sensor samples, CFA, black/white levels, active area, default crop, orientation, as-shot white balance,
   the colour tags a DNG or maker note states, and EXIF metadata (read by `lightcraft-meta`, as for our decoders).
-- **Not imported: FlashRaw's camera database matrices.** For non-DNG files it fills colour matrices from its database,
-  and those values are the well-known dcraw / Adobe DNG Converter table (for example the Canon EOS 5D Mark IV entry
-  starts `6446, -366`). LightCraft's clean-room rules forbid those values, whatever FlashRaw's own licence says, so the
-  adapter keeps a matrix only when FlashRaw reports it came from the file (`ColorSource::File`). A non-DNG raw then
-  takes our own colour fallbacks (`spectral`, pooled profiles, neutral). **Do not make the database path the default
-  without a decision on this.**
+- **Camera database matrices cross too** (maintainer decision, 2026-10-27). For non-DNG files FlashRaw fills colour
+  matrices from its database, which is the well-known dcraw / Adobe DNG Converter table (the Canon EOS 5D Mark IV
+  entry starts `6446, -366`). The first version of the adapter left them out under the clean-room rule; that rule no
+  longer covers camera matrices, so a non-DNG raw under `flashraw` (and under `auto` for a file ours refuses) takes
+  them instead of our `spectral` / pooled / per-file fallbacks. The other clean-room rules (Adobe icons, DCP/LCP
+  profiles, fonts, GPL code) are unchanged.
 - **Not available through it**: DNG profile look tables, opcode lists (embedded lens corrections), lens-correction
   records, semantic masks. A DNG under `flashraw` develops without them; `auto` keeps ours for any file ours reads.
 - FlashRaw's demosaic clamps each channel to `[0, 1]`: highlights above white and negative noise are lost before our
@@ -96,4 +96,4 @@ cargo test -p lightcraft-flashraw
 As a **decoder** FlashRaw is a credible second opinion and faster on Canon, compressed Fuji and DNG; it agrees with us
 sample for sample where it can be checked, and `auto` would let it cover files ours refuses. As a **developer** it is
 a bilinear demosaic, not an upgrade. Before it becomes more than optional: settle the ARW difference, decide what to do
-about its database matrices (we cannot use them), and re-run the comparison against its GPU path.
+about the colour difference between its matrices and our fallbacks (below), and re-run the comparison against its GPU path.

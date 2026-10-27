@@ -24,6 +24,7 @@ fn main() {
         Some("decode") => decode_table(&a[1..]),
         Some("demosaic") if a.len() > 1 => demosaic_tables(&a[1], &a[2..]),
         Some("diff") if a.len() > 1 => diff(&a[1]),
+        Some("color") => color_table(&a[1..]),
         _ => eprintln!("usage: compare decode FILE... | compare demosaic OUT_DIR [FILE...]"),
     }
 }
@@ -93,6 +94,21 @@ fn same(n: &RawImage, x: &RawImage) -> [String; 4] {
         "size differs".to_string()
     };
     [geometry, levels, wb, samples]
+}
+
+/// The colour transform each backend gives a file: white balance, whether the matrix is a fallback, and the matrix.
+fn color_table(files: &[String]) {
+    println!("| file | backend | wb (R, G, B) | fallback matrix | camera → Rec.2020 matrix |\n|---|---|---|---|---|");
+    for f in files {
+        let Ok(bytes) = std::fs::read(f) else { continue };
+        let name = std::path::Path::new(f).file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        for b in [RawBackend::Native, RawBackend::Flashraw] {
+            let Ok(raw) = decode_with(b, &bytes).1 else { continue };
+            let t = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
+            let m = t.matrix.0.iter().map(|r| r.iter().map(|v| format!("{v:.3}")).collect::<Vec<_>>().join(" ")).collect::<Vec<_>>().join(" / ");
+            println!("| {name} | {} | {:.2} {:.2} {:.2} | {} | {m} |", b.name(), t.wb[0], t.wb[1], t.wb[2], t.matrix_is_fallback);
+        }
+    }
 }
 
 /// Where and by how much the two decoders' sensor samples differ.
