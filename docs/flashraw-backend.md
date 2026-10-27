@@ -59,9 +59,10 @@ uncompressed / compressed / lossless, Hasselblad 3FR, five DNGs): two independen
 
 Open differences:
 
-1. **Sony A7 III compressed ARW**: 28,086 of 24.3 M samples differ (0.12 %), by 21 + 32·k units (21 to 245 of 16383),
-   all in the top 512 rows. Their pattern suggests the ARW2 tone-curve step; **which decoder is right is not yet
-   established** (neither value fits its neighbours better). Low impact, but one of the two is wrong.
+1. **Sony A7 III compressed ARW** (resolved, no bug in either): 28,086 of 24.3 M samples differ, by 21 + 32·k units
+   (21 to 245 of 16383), all in the top rows. The ARW2 tone curve (file tag `0x7010`) climbs to 17,220; ours stops it at the
+   14-bit white level (16,383), FlashRaw lets it run. Every differing sample is a saturated one (ours is exactly at white,
+   theirs above it), so nothing visible changes. Locked by a test (`arw2_decoders_differ_only_on_saturated_samples`).
 2. **Canon M50 CR3 white level**: the file's data peaks at 11,428; ours reads 11,892 from the file, FlashRaw falls back to
    16,383 (14-bit nominal). With FlashRaw highlights near saturation would render ~27 % dimmer and clipping would not
    be detected.
@@ -75,6 +76,28 @@ methods are better on Bayer: Sony A7 III 30.32 dB (AHD) vs 29.27 dB; Canon 80D 3
 X-Trans-patterned mosaics our directional method wins by 0.6–1.2 dB on photographs and loses by 0.5 dB on the zone
 plate (extreme aliasing). In this integration FlashRaw's kernel is not faster (37 vs 12 ms for bilinear on 2.4 MP): its
 fused-pass advantage needs its own pipeline, which our develop path does not use.
+
+### Colour (`compare preview`: each full render against the camera's own JPEG, the raw's embedded preview)
+
+Mean ΔE76 over a 96×64 grid, then again with the render's mean luminance matched to the preview's so that it measures
+colour, not brightness. Seven corpus files, each rendered by the app with each backend (FlashRaw with its database
+matrices):
+
+| File | native ΔE | FlashRaw ΔE | native, brightness matched | FlashRaw, brightness matched |
+|---|---:|---:|---:|---:|
+| Canon 80D | 4.1 | 13.5 | 4.2 | 7.0 |
+| Sony A7 III | 2.8 | 17.2 | 2.7 | 4.1 |
+| Fuji X-T2 | 2.5 | 23.1 | 2.4 | 5.3 |
+| Canon M50 | 4.1 | 28.0 | 4.1 | 11.3 |
+| Fuji X-T4 | 3.4 | 13.1 | 2.9 | 10.8 |
+| Fuji X-T20 | 1.6 | 13.8 | 1.5 | 8.3 |
+| Nikon Z6 | 1.9 | 20.3 | 1.9 | 2.0 |
+
+**Read this with a caveat: our native path fits its colours to the camera JPEG file by file** (the "guarded per-file fit"
+in [raw-parity.md](raw-parity.md)), so this metric favours it by construction. It still shows that FlashRaw renders
+darker (no camera-style exposure or tone: ΔE 13–28 as rendered) and that its matrices are close on some bodies (Nikon Z6,
+Sony A7 III, X-T2 within 2–5 once brightness is matched) and far on others (Canon M50 11.3, Fuji X-T4 10.8; the M50 also
+has the wrong white level above).
 
 ### In the app (`lightcraft-cli render`, CPU, 24 MP)
 
@@ -95,5 +118,5 @@ cargo test -p lightcraft-flashraw
 
 As a **decoder** FlashRaw is a credible second opinion and faster on Canon, compressed Fuji and DNG; it agrees with us
 sample for sample where it can be checked, and `auto` would let it cover files ours refuses. As a **developer** it is
-a bilinear demosaic, not an upgrade. Before it becomes more than optional: settle the ARW difference, decide what to do
+a bilinear demosaic, not an upgrade. Before it becomes more than optional: decide what to do
 about the colour difference between its matrices and our fallbacks (below), and re-run the comparison against its GPU path.

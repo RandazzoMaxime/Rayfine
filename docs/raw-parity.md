@@ -296,7 +296,7 @@ Beyond decoding:
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-27 | minor | `lightcraft-flashraw`: FlashRaw as an optional raw backend (`--raw-backend native\|flashraw\|auto`, feature `flashraw`), with a comparison of its decoding and demosaic against ours (14 of 15 corpus files decode to identical samples; our AHD / PPG beat its bilinear on Bayer): [flashraw-backend.md](flashraw-backend.md) |
+| 2026-10-27 | minor | `lightcraft-flashraw`: FlashRaw as an optional raw backend (`--raw-backend native\|flashraw\|auto`, feature `flashraw`), with a comparison of its decoding and demosaic against ours (14 of 15 corpus files decode to identical samples, the 15th differs only on saturated pixels; our AHD / PPG beat its bilinear on Bayer): [flashraw-backend.md](flashraw-backend.md) |
 | 2026-10-18 | patch | X-T30, X-T30 II, X-Pro3, X100V, X-S10 and X-E4 take the X-T3's spectral matrices (same 26.1 MP X-Trans CMOS 4 sensor): an X-T30 raw with a black-and-white (Acros) camera JPEG no longer opens in the muted neutral fallback |
 | 2026-10-16 | minor | Kelvin white balance from Canon CR2 `ColorData` presets (PowerShot G1 X Mark III) |
 | 2026-10-15 | minor | DNGs with a look table and no tone curve (Lightroom-written, Adobe Standard) fit their tone to the embedded preview, also Lightroom's 1024 px one: two lossy ILCE-7CM2 DNGs no longer render 0.8 EV dark and flat |

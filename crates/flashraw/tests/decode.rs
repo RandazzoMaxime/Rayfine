@@ -100,3 +100,22 @@ fn corpus_files_decode_to_the_same_samples() {
         lightcraft_testkit::skip!(Corpus, "no corpus/raw files (cargo xtask corpus --download)");
     }
 }
+
+/// The Sony ARW2 tone curve climbs to 17,220; we stop it at the 14-bit white level (16,383), FlashRaw lets it run.
+/// Every sample the two decoders disagree on is a saturated one, above white in both.
+#[test]
+fn arw2_decoders_differ_only_on_saturated_samples() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/raw/arw-sony-a7m3-compressed.arw");
+    let Ok(bytes) = std::fs::read(path) else {
+        lightcraft_testkit::skip!(Corpus, "no corpus/raw/arw-sony-a7m3-compressed.arw (cargo xtask corpus --download)");
+        return;
+    };
+    let (ours, theirs) = (lightcraft_raw::decode(&bytes).unwrap(), lightcraft_flashraw::decode_bytes(&bytes).unwrap());
+    assert_eq!(ours.data.len(), theirs.data.len());
+    let white = ours.white_at(0);
+    let differing: Vec<usize> = (0..ours.data.len()).filter(|&i| ours.data.get(i) != theirs.data.get(i)).collect();
+    assert!(!differing.is_empty(), "the sample is expected to hold saturated pixels");
+    for i in differing {
+        assert!(ours.data.get(i) >= white && theirs.data.get(i) >= white, "sample {i}: {} vs {}", ours.data.get(i), theirs.data.get(i));
+    }
+}

@@ -3369,6 +3369,7 @@ dependencies = [
  "flashraw",
  "lightcraft-codecs",
  "lightcraft-meta",
+ "lightcraft-raster",
  "lightcraft-raw",
  "lightcraft-testkit",
 ]

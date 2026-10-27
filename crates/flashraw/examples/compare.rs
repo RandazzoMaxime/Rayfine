@@ -25,6 +25,7 @@ fn main() {
         Some("demosaic") if a.len() > 1 => demosaic_tables(&a[1], &a[2..]),
         Some("diff") if a.len() > 1 => diff(&a[1]),
         Some("color") => color_table(&a[1..]),
+        Some("preview") => preview_table(&a[1..]),
         _ => eprintln!("usage: compare decode FILE... | compare demosaic OUT_DIR [FILE...]"),
     }
 }
@@ -96,6 +97,49 @@ fn same(n: &RawImage, x: &RawImage) -> [String; 4] {
     [geometry, levels, wb, samples]
 }
 
+/// The picture as CIE Lab (D50) on a 96×64 grid, from linear light in the source's own primaries.
+fn lab_grid(jpeg: &[u8], gain: Option<f32>) -> Option<(Vec<[f32; 3]>, f32)> {
+    use lightcraft_codecs::{DecodeOptions, decode};
+    let d = decode(jpeg, DecodeOptions { max_size: Some((384, 256)), ..Default::default() }).ok()?;
+    let small = lightcraft_raster::resample::resize(&d.image, 96, 64, lightcraft_raster::resample::Filter::Box);
+    let m = d.space.to_xyz_d50.0;
+    let xyz = |p: [f32; 3]| [0, 1, 2].map(|r| (0..3).map(|c| m[r][c] as f32 * p[c]).sum::<f32>());
+    let mean_y = small.data.iter().map(|p| xyz(*p)[1]).sum::<f32>() / small.data.len() as f32;
+    let k = gain.map_or(1.0, |g| g / mean_y.max(1e-6));
+    let f = |t: f32| if t > 0.008_856 { t.cbrt() } else { 7.787 * t + 16.0 / 116.0 };
+    let lab = small.data.iter().map(|p| {
+        let [x, y, z] = xyz(p.map(|v| v * k));
+        let (fx, fy, fz) = (f(x / 0.9642), f(y), f(z / 0.8249));
+        [116.0 * fy - 16.0, 500.0 * (fx - fy), 200.0 * (fy - fz)]
+    });
+    Some((lab.collect(), mean_y))
+}
+
+/// How far each backend's full render is from the camera's own picture (the raw's embedded JPEG), as the mean ΔE76
+/// over a 96×64 grid: as rendered, and with the render's mean luminance matched to the preview's (so it measures colour,
+/// not brightness), plus the mean chroma (a, b) distance after that match. Args: RAW NATIVE.jpg FLASHRAW.jpg, repeated.
+fn preview_table(a: &[String]) {
+    println!("| file | backend | ΔE (as rendered) | ΔE (brightness matched) | chroma Δ(a,b) |\n|---|---|---:|---:|---:|");
+    for t in a.chunks_exact(3) {
+        let name = std::path::Path::new(&t[0]).file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        let Some((camera, y)) = std::fs::read(&t[0]).ok().and_then(|b| lightcraft_raw::embedded_preview(&b)).and_then(|j| lab_grid(&j, None)) else {
+            eprintln!("{name}: no embedded preview");
+            continue;
+        };
+        for (backend, file) in [("native", &t[1]), ("flashraw", &t[2])] {
+            let bytes = std::fs::read(file).expect("render");
+            let (raw, matched) = (lab_grid(&bytes, None), lab_grid(&bytes, Some(y)));
+            let (Some((raw, _)), Some((matched, _))) = (raw, matched) else { continue };
+            let n = camera.len() as f32;
+            let de = |g: &[[f32; 3]]| {
+                g.iter().zip(&camera).map(|(p, q)| ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2)).sqrt()).sum::<f32>() / n
+            };
+            let ab = matched.iter().zip(&camera).map(|(p, q)| ((p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2)).sqrt()).sum::<f32>() / n;
+            println!("| {name} | {backend} | {:.1} | {:.1} | {ab:.1} |", de(&raw), de(&matched));
+        }
+    }
+}
+
 /// The colour transform each backend gives a file: white balance, whether the matrix is a fallback, and the matrix.
 fn color_table(files: &[String]) {
     println!("| file | backend | wb (R, G, B) | fallback matrix | camera → Rec.2020 matrix |\n|---|---|---|---|---|");
@@ -146,6 +190,8 @@ fn diff(file: &str) {
         fit_native / n_checked.max(1) as f64,
         fit_flash / n_checked.max(1) as f64
     );
+    let saturated = (0..n.data.len()).filter(|&i| n.data.get(i) != x.data.get(i) && n.data.get(i) >= n.white_at(0)).count();
+    println!("of which our sample is at the white level ({}): {saturated}", n.white_at(0));
     println!("{count} differing of {} ({w}x{h})", n.data.len());
     let top = |m: &std::collections::BTreeMap<usize, usize>| {
         let mut v: Vec<_> = m.iter().collect();

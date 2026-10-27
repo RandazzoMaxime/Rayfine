@@ -16,6 +16,7 @@ flashraw = { version = "=0.1.1", default-features = false, features = ["rayon", 
 
 [dev-dependencies]
 lightcraft-codecs = { workspace = true }
+lightcraft-raster = { workspace = true }
 lightcraft-testkit = { workspace = true }
 
 [lints]
