@@ -1,6 +1,6 @@
 # RAW parity: cameras, formats, demosaic, colour and lens profiles
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-27 · **Change:** minor (optional FlashRaw raw backend, measured against ours: [flashraw-backend.md](flashraw-backend.md); Minolta MRW decoded, 6 bodies verified; lossy JPEG XL DNG tiles with a non-linear declared transfer curve decode; Canon ColorData Kelvin; X-Trans CMOS 4 bodies take the X-T3's spectral matrices) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6 (Camera Raw 18.7)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-27 · **Change:** minor (FlashRaw fallback for files our decoders refuse (compressed ORF), measured against ours: [flashraw-backend.md](flashraw-backend.md); Minolta MRW decoded, 6 bodies verified; lossy JPEG XL DNG tiles with a non-linear declared transfer curve decode; Canon ColorData Kelvin; X-Trans CMOS 4 bodies take the X-T3's spectral matrices) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6 (Camera Raw 18.7)
 
 Raw processing is the deepest single dimension of Lightroom parity: a photographer whose camera
 does not decode, or decodes with the wrong colour, cannot switch. This document measures it model by
@@ -156,7 +156,7 @@ checked (the per-model CC0 sweeps of October 2026); compressed ORF (OM / Olympus
 | RAF | uncompressed, lossless and lossy compressed; Bayer and X-Trans; GFX 14/16-bit | ✅ | 24 files from 13 bodies exact |
 | RAF | pre-X FinePix without a raw IFD | ⬜ | `raf.rs` refuses (26 Adobe models, estimated split) |
 | ORF | uncompressed 16-bit, 12-bit packed, two-field 12-bit, 12.8 bpp | ✅ | E-1, E-400, XZ-2 corpus; #651 |
-| ORF | **compressed** (every Olympus / OM body since ~2008) | ⬜ | `orf.rs` refuses; the E-M1 and E-M10 III corpus files are `KNOWN_UNSUPPORTED` |
+| ORF | **compressed** (every Olympus / OM body since ~2008) | 🟡 | `orf.rs` refuses (the E-M1 and E-M10 III corpus files are `KNOWN_UNSUPPORTED`); the default `auto` backend decodes them with the FlashRaw fallback ([flashraw-backend.md](flashraw-backend.md)), colour from its database matrices, unverified per model |
 | RW2 / RWL / RAW | formats 2, 4, 5, 6, 7, 8 and 16-bit words | ✅ | 118 bodies (#215) |
 | PEF | uncompressed, Huffman, packed 12-bit | ✅ | K10D, K-3, K-5 IIs; files without area tags lose their masked, empty and saturated border lines (#1271: KP, KF, K-3 Mark III, K-70, K-1, K-1 Mark II, K-S1, K-S2, 645Z) |
 | PEF / DNG | Pentax pixel shift | ⬜ | frames not combined |
@@ -296,7 +296,7 @@ Beyond decoding:
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-27 | minor | `lightcraft-flashraw`: FlashRaw as an optional raw backend (`--raw-backend native\|flashraw\|auto`, feature `flashraw`), with a comparison of its decoding and demosaic against ours (14 of 15 corpus files decode to identical samples, the 15th differs only on saturated pixels; our AHD / PPG beat its bilinear on Bayer): [flashraw-backend.md](flashraw-backend.md) |
+| 2026-10-27 | minor | `lightcraft-flashraw`: FlashRaw as the fallback for raw files our decoders refuse (default `auto` backend; compressed Olympus ORF now develops from the sensor; `--raw-backend native\|flashraw\|auto`, feature `flashraw` on by default), with a comparison of its decoding and demosaic against ours (14 of 15 corpus files decode to identical samples, the 15th differs only on saturated pixels; our AHD / PPG beat its bilinear on Bayer): [flashraw-backend.md](flashraw-backend.md) |
 | 2026-10-18 | patch | X-T30, X-T30 II, X-Pro3, X100V, X-S10 and X-E4 take the X-T3's spectral matrices (same 26.1 MP X-Trans CMOS 4 sensor): an X-T30 raw with a black-and-white (Acros) camera JPEG no longer opens in the muted neutral fallback |
 | 2026-10-16 | minor | Kelvin white balance from Canon CR2 `ColorData` presets (PowerShot G1 X Mark III) |
 | 2026-10-15 | minor | DNGs with a look table and no tone curve (Lightroom-written, Adobe Standard) fit their tone to the embedded preview, also Lightroom's 1024 px one: two lossy ILCE-7CM2 DNGs no longer render 0.8 EV dark and flat |

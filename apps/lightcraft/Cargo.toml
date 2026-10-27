@@ -10,13 +10,14 @@ default-run = "lightcraft"
 workspace = true
 
 [features]
-default = ["denoise"]
+default = ["denoise", "flashraw"]
 denoise = ["lightcraft-engine/denoise"]
 rawnind-model = ["denoise", "lightcraft-engine/rawnind-model"]
 # Open HEIC/HEIF photos (the optional lightcraft-heif crate). Not default so distributors choose
 # it (HEVC patents); build with `--features heif` to include it.
 heif = ["lightcraft-codecs/heif"]
-# FlashRaw as an optional raw backend (`--raw-backend flashraw|auto`); see docs/flashraw-backend.md.
+# FlashRaw as a safety net for raw files our decoders refuse (compressed Olympus ORF, …): on by default, used only
+# for those files (`--raw-backend native` turns it off); see docs/flashraw-backend.md.
 flashraw = ["lightcraft-engine/flashraw"]
 
 [dependencies]

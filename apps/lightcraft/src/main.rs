@@ -800,8 +800,8 @@ OPTIONS:
   --memory         throwaway in-memory session (alias --demo); nothing is saved
   --control PORT   serve the JSON-lines control channel on 127.0.0.1:PORT (env LIGHTCRAFT_CONTROL_PORT;
                    see docs/control-protocol.md)
-  --raw-backend B  native (default), flashraw or auto (ours first, FlashRaw for files ours refuses); the last two
-                   need a build with `--features flashraw` (env LIGHTCRAFT_RAW_BACKEND)
+  --raw-backend B  auto (default: our decoders, FlashRaw only for a file they refuse), native (ours only) or
+                   flashraw (FlashRaw for everything; to compare) (env LIGHTCRAFT_RAW_BACKEND)
   --version, --help
 
 ENVIRONMENT:

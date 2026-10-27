@@ -8,6 +8,7 @@ fn the_selected_backend_decides_who_decodes() {
     assert!(lightcraft_flashraw::install());
     assert!(!lightcraft_flashraw::install(), "the first registration stays");
     assert_eq!(backend::available(), RawBackend::ALL);
+    assert_eq!(backend::backend(), RawBackend::Auto, "FlashRaw is the default safety net once installed");
 
     let garbage = b"not a raw file at all, just some bytes".to_vec();
     for b in RawBackend::ALL {

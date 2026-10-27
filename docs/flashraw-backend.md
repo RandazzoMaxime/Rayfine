@@ -1,6 +1,6 @@
 # FlashRaw as an optional raw backend
 
-> **Last updated:** 2026-10-27 · **Status:** evaluation. Optional, off by default; nothing here changes the default build.
+> **Last updated:** 2026-10-27 · **Status:** a safety net. On by default, used only for raw files our own decoders refuse.
 
 [FlashRaw](https://github.com/ybouane/flashraw) (0.1.1, pure Rust, MIT OR Apache-2.0) is a raw decoder with a small
 built-in developer. `lightcraft-flashraw` plugs it into `lightcraft-raw` as a second backend so it can be measured
@@ -9,16 +9,25 @@ against our own decoders and demosaic on the same files, in the real app.
 ## Use it
 
 ```text
-cargo build --release -p lightcraft-cli --features flashraw     # or -p lightcraft
-lightcraft-cli --raw-backend flashraw render in.cr2 -o out.jpg
-lightcraft --raw-backend auto                                    # env: LIGHTCRAFT_RAW_BACKEND
+cargo build --release -p lightcraft-cli                          # the `flashraw` feature is on by default
+lightcraft-cli --raw-backend flashraw render in.cr2 -o out.jpg   # FlashRaw for everything, to compare
+lightcraft --raw-backend native                                   # ours only; env: LIGHTCRAFT_RAW_BACKEND
 ```
 
 | Backend | Decoder | Demosaic |
 |---|---|---|
-| `native` (default) | ours | ours (AHD, PPG, bilinear, X-Trans directional) |
-| `flashraw` | FlashRaw for every file (an unreadable file is an error) | FlashRaw's, for every mosaic |
-| `auto` | ours; FlashRaw only for a file ours refuses | ours |
+| `auto` (**default**) | ours; FlashRaw only for a file ours refuses | ours |
+| `native` | ours only (FlashRaw off) | ours (AHD, PPG, bilinear, X-Trans directional) |
+| `flashraw` | FlashRaw for every file (an unreadable file is an error): for comparisons | FlashRaw's, for every mosaic |
+
+The `flashraw` feature of the apps is on by default (`--no-default-features` or `--raw-backend native` turns it off).
+A file our decoders read never reaches FlashRaw, so nothing changes for it. What the safety net catches: a **compressed
+Olympus ORF** (every Olympus / OM body since ~2008; the E-M1 and E-M10 III corpus files), which `lightcraft-raw` refuses
+("unsupported raw variant: Olympus compressed ORF") and the app used to show as its embedded 3200×2400 preview. It now
+develops from the sensor at 4608×3456 (test: `tests/fallback.rs`). Other refusals listed in
+[raw-parity.md](raw-parity.md) (GoPro GPR, compressed SRW, CR3 variants, A100 ARW) are candidates, untested here.
+Limits of a fallback file: colour comes from FlashRaw's database matrices (flatter than our camera-look fits, see the
+colour table below), DNG-only features are absent, and the pipeline's per-file camera-look fit may not apply.
 
 It is a start-up choice. `lightcraft_raw::backend` holds the switch and the hook (`External`); `lightcraft_engine::raw_backend`
 registers what the build includes; the new crate `lightcraft-flashraw` (L1) is the adapter. A build without the
@@ -114,9 +123,10 @@ cargo run --release -p lightcraft-flashraw --example compare -- demosaic OUT_DIR
 cargo test -p lightcraft-flashraw
 ```
 
-## Verdict so far
+## Verdict
 
-As a **decoder** FlashRaw is a credible second opinion and faster on Canon, compressed Fuji and DNG; it agrees with us
-sample for sample where it can be checked, and `auto` would let it cover files ours refuses. As a **developer** it is
-a bilinear demosaic, not an upgrade. Before it becomes more than optional: decide what to do
-about the colour difference between its matrices and our fallbacks (below), and re-run the comparison against its GPU path.
+Decision (maintainer, 2026-10-27): FlashRaw is used only when our decoders refuse a file. As a **decoder** it is a credible
+second opinion (identical samples wherever it can be checked, faster on Canon, compressed Fuji and DNG) and it
+covers compressed ORF, which we do not. As a **developer** it is a bilinear demosaic with database colour matrices:
+behind ours on both, so it is never chosen for a file we can read. Open: the Canon CR3 white level (it falls back to the
+14-bit nominal), the matrices that are far from the camera's on some bodies (M50, X-T4), and its GPU path, untested.

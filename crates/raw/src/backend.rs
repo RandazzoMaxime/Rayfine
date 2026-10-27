@@ -4,10 +4,11 @@
 //! `lightcraft-flashraw`, behind the apps' `flashraw` feature). Nothing here depends on it, so a build without
 //! the feature has exactly one backend and [`set_backend`] refuses the others.
 //!
-//! - [`RawBackend::Native`] (default): our decoders and demosaic ([`crate::demosaic`]).
+//! - [`RawBackend::Native`]: our decoders and demosaic ([`crate::demosaic`]) only.
 //! - [`RawBackend::Flashraw`]: the external decoder for every file, and its demosaic for every mosaic.
 //!   A file it cannot decode is an error, so a comparison never silently falls back.
-//! - [`RawBackend::Auto`]: ours first; the external decoder only for a file ours refuses.
+//! - [`RawBackend::Auto`]: ours first; the external decoder only for a file ours refuses (for example a compressed
+//!   Olympus ORF). **The default when an external backend is installed**, native otherwise.
 //!
 //! The choice comes from [`set_backend`] (the apps' `--raw-backend` flag) or, when that was never called, from the
 //! `LIGHTCRAFT_RAW_BACKEND` environment variable (`native`, `flashraw`, `auto`).
@@ -86,11 +87,12 @@ pub fn set_backend(b: RawBackend) -> std::result::Result<(), String> {
     Ok(())
 }
 
-/// The backend in use: [`set_backend`]'s, else the environment's, else native. One that needs an external
-/// backend this build lacks reads as native.
+/// The backend in use: [`set_backend`]'s, else the environment's, else `auto` when an external backend is installed
+/// and native when not. One that needs an external backend this build lacks reads as native.
 pub fn backend() -> RawBackend {
+    let default = if is_installed() { RawBackend::Auto } else { RawBackend::Native };
     let chosen = match SELECTED.load(Ordering::Relaxed) {
-        0 => ENV.get_or_init(|| std::env::var("LIGHTCRAFT_RAW_BACKEND").ok().as_deref().and_then(RawBackend::parse)).unwrap_or_default(),
+        0 => ENV.get_or_init(|| std::env::var("LIGHTCRAFT_RAW_BACKEND").ok().as_deref().and_then(RawBackend::parse)).unwrap_or(default),
         n => RawBackend::ALL.get(usize::from(n) - 1).copied().unwrap_or_default(),
     };
     if chosen != RawBackend::Native && !is_installed() { RawBackend::Native } else { chosen }
