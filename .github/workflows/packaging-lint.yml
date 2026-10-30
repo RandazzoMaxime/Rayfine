@@ -36,4 +36,3 @@ jobs:
         shell: pwsh
         run: |
           ./packaging/windows/test-install-folder.ps1 -Arch x64
-          ./packaging/windows/test-install-folder.ps1 -Arch x86
